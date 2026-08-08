@@ -46,8 +46,15 @@ public final class DungeonGraphValidator {
             if (toFacing != fromFacing.opposite()) {
                 errors.add("Edge " + edge + " has non-opposite facings: " + fromFacing + " and " + toFacing);
             }
-            if (!toPosition.equals(fromPosition.add(fromFacing.vector()))) {
-                errors.add("Edge " + edge + " doors are not adjacent: " + fromPosition + " -> " + toPosition + " expected " + fromPosition.add(fromFacing.vector()));
+            if (!DoorGeometry.sameAperture(fromDoor, toDoor)) {
+                errors.add("Edge " + edge + " has mismatched door aperture sizes: " + fromDoor.width() + "x" + fromDoor.height() + " and " + toDoor.width() + "x" + toDoor.height());
+                continue;
+            }
+            var fromBounds = DoorGeometry.transformedBounds(fromDoor, from.transform());
+            var toBounds = DoorGeometry.transformedBounds(toDoor, to.transform());
+            var expectedToBounds = DoorGeometry.shifted(fromBounds, fromFacing.vector());
+            if (!toBounds.equals(expectedToBounds)) {
+                errors.add("Edge " + edge + " door rectangles are not aligned: expected " + expectedToBounds + " actual " + toBounds + " delta=" + DoorGeometry.delta(expectedToBounds, toBounds));
             }
         }
     }

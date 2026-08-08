@@ -1,19 +1,43 @@
 package com.dungeonarchitect.domain;
 
-public record RoomFeatureSlot(String id, String poolId, String featureName, IntVector3 position, Direction3 facing) {
-    public RoomFeatureSlot(String id, String poolId, IntVector3 position, Direction3 facing) {
-        this(id, poolId, poolId, position, facing);
-    }
+import java.util.List;
 
+public record RoomFeatureSlot(
+    String id,
+    IntVector3 position,
+    IntVector3 size,
+    Direction3 facing,
+    List<FeatureSlotEntry> entries
+) {
     public RoomFeatureSlot {
         if (id == null || id.isBlank()) {
             throw new IllegalArgumentException("Feature slot id is required");
         }
-        if (poolId == null || poolId.isBlank()) {
-            poolId = "default";
+        if (size.x() <= 0 || size.y() <= 0 || size.z() <= 0) {
+            throw new IllegalArgumentException("Feature slot size must be positive");
         }
-        if (featureName == null || featureName.isBlank()) {
-            featureName = poolId;
+        if (entries == null || entries.isEmpty()) {
+            entries = List.of(new FeatureSlotEntry(FeatureSlotEntry.EMPTY, 1));
+        } else if (entries.stream().noneMatch(entry -> entry.featureId().equals(FeatureSlotEntry.EMPTY))) {
+            entries = java.util.stream.Stream.concat(entries.stream(), java.util.stream.Stream.of(new FeatureSlotEntry(FeatureSlotEntry.EMPTY, 1))).toList();
+        } else {
+            entries = List.copyOf(entries);
         }
+    }
+
+    public RoomFeatureSlot(String id, IntVector3 position, IntVector3 size, Direction3 facing) {
+        this(id, position, size, facing, List.of(new FeatureSlotEntry(FeatureSlotEntry.EMPTY, 1)));
+    }
+
+    public RoomFeatureSlot(String id, String ignoredPool, IntVector3 position, Direction3 facing) {
+        this(id, position, new IntVector3(1, 1, 1), facing);
+    }
+
+    public RoomFeatureSlot(String id, String ignoredPool, String ignoredFeature, IntVector3 position, Direction3 facing) {
+        this(id, position, new IntVector3(1, 1, 1), facing);
+    }
+
+    public RoomFeatureSlot withEntries(List<FeatureSlotEntry> entries) {
+        return new RoomFeatureSlot(id, position, size, facing, entries);
     }
 }

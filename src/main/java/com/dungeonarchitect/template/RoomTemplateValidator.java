@@ -2,9 +2,12 @@ package com.dungeonarchitect.template;
 
 import com.dungeonarchitect.domain.BoundingBox3i;
 import com.dungeonarchitect.domain.DoorSocket;
+import com.dungeonarchitect.domain.FeatureSlotEntry;
 import com.dungeonarchitect.domain.RoomFeatureSlot;
 import com.dungeonarchitect.domain.RoomMarker;
 import com.dungeonarchitect.domain.RoomTemplate;
+import com.dungeonarchitect.feature.FeatureMatcher;
+import com.dungeonarchitect.feature.FeatureTemplateRegistry;
 
 import java.nio.file.Files;
 import java.util.HashSet;
@@ -12,13 +15,19 @@ import java.util.Set;
 
 public final class RoomTemplateValidator {
     private final RoomStructureService structureService;
+    private final FeatureTemplateRegistry featureRegistry;
 
     public RoomTemplateValidator() {
-        this(null);
+        this(null, null);
     }
 
     public RoomTemplateValidator(RoomStructureService structureService) {
+        this(structureService, null);
+    }
+
+    public RoomTemplateValidator(RoomStructureService structureService, FeatureTemplateRegistry featureRegistry) {
         this.structureService = structureService;
+        this.featureRegistry = featureRegistry;
     }
 
     public TemplateValidationResult validate(RoomTemplate template) {
@@ -53,7 +62,7 @@ public final class RoomTemplateValidator {
                 result.add(template.id() + ": duplicate door id " + door.id());
             }
             if (!bounds.contains(door.position())) {
-                result.add(template.id() + ": door " + door.id() + " is outside room bounds");
+                result.add(template.id() + ": door " + door.id() + " is outside room bounds", door.position());
             }
         }
     }
@@ -61,7 +70,7 @@ public final class RoomTemplateValidator {
     private void validateMarkers(RoomTemplate template, BoundingBox3i bounds, TemplateValidationResult result) {
         for (RoomMarker marker : template.markers()) {
             if (!bounds.contains(marker.position())) {
-                result.add(template.id() + ": marker " + marker.name() + " is outside room bounds");
+                result.add(template.id() + ": marker " + marker.name() + " is outside room bounds", marker.position());
             }
         }
     }
@@ -72,8 +81,26 @@ public final class RoomTemplateValidator {
             if (!ids.add(slot.id())) {
                 result.add(template.id() + ": duplicate feature slot id " + slot.id());
             }
-            if (!bounds.contains(slot.position())) {
-                result.add(template.id() + ": feature slot " + slot.id() + " is outside room bounds");
+            boolean minInside = bounds.contains(slot.position());
+            if (!minInside) {
+                result.add(template.id() + ": feature slot " + slot.id() + " is outside room bounds", slot.position());
+            }
+            if (minInside && !bounds.contains(slot.position().add(slot.size()).subtract(new com.dungeonarchitect.domain.IntVector3(1, 1, 1)))) {
+                result.add(template.id() + ": feature slot " + slot.id() + " extends outside room bounds", slot.position());
+            }
+            for (FeatureSlotEntry entry : slot.entries()) {
+                if (entry.featureId().equals(FeatureSlotEntry.EMPTY)) {
+                    continue;
+                }
+                if (featureRegistry == null) {
+                    continue;
+                }
+                var feature = featureRegistry.get(entry.featureId());
+                if (feature.isEmpty()) {
+                    result.add(template.id() + ": feature slot " + slot.id() + " references unknown feature " + entry.featureId(), slot.position());
+                } else if (!FeatureMatcher.matches(slot, feature.get())) {
+                    result.add(template.id() + ": feature slot " + slot.id() + " does not match feature " + entry.featureId() + " size " + feature.get().size(), slot.position());
+                }
             }
         }
     }

@@ -68,6 +68,7 @@ final class DeterministicDungeonGeneratorTest {
 
             assertEquals(fromFacing.opposite(), toFacing);
             assertEquals(fromPosition.add(fromFacing.vector()), toPosition);
+            assertEquals(DoorGeometry.shifted(DoorGeometry.transformedBounds(fromDoor, from.transform()), fromFacing.vector()), DoorGeometry.transformedBounds(toDoor, to.transform()));
         }
 
         for (int i = 0; i < result.graph().nodes().size(); i++) {
@@ -90,7 +91,77 @@ final class DeterministicDungeonGeneratorTest {
         var errors = new DungeonGraphValidator().validate(graph, List.of(startRoom(), combatRoom("combat_a", 1)));
 
         assertFalse(errors.isEmpty());
-        assertTrue(errors.stream().anyMatch(error -> error.contains("not adjacent")));
+        assertTrue(errors.stream().anyMatch(error -> error.contains("door rectangles are not aligned")));
+    }
+
+    @Test
+    void alignsThreeWideDoorRectanglesWithoutLateralOffset() {
+        DeterministicDungeonGenerator generator = new DeterministicDungeonGenerator(100, 80);
+        List<RoomTemplate> templates = List.of(
+            largeRoom("start", RoomCategory.START, new DoorSocket("north", new IntVector3(9, 3, 0), Direction3.NORTH, SocketType.STANDARD, 3, 4)),
+            largeRoom("combat", RoomCategory.COMBAT, new DoorSocket("north", new IntVector3(9, 3, 0), Direction3.NORTH, SocketType.STANDARD, 3, 4))
+        );
+
+        var result = generator.generate(templates, new DungeonGenerationRequest(2, 1L));
+
+        assertTrue(result.successful(), result.errors().toString());
+        DungeonEdge edge = result.graph().edges().getFirst();
+        DungeonNode from = result.graph().nodes().get(edge.fromNode());
+        DungeonNode to = result.graph().nodes().get(edge.toNode());
+        DoorSocket fromDoor = templates.getFirst().doors().getFirst();
+        DoorSocket toDoor = templates.get(1).doors().getFirst();
+        var fromFacing = from.transform().transformFacing(fromDoor.facing());
+        assertEquals(DoorGeometry.shifted(DoorGeometry.transformedBounds(fromDoor, from.transform()), fromFacing.vector()), DoorGeometry.transformedBounds(toDoor, to.transform()));
+    }
+
+    @Test
+    void alignsEastWestDoorRectanglesUsingZWidth() {
+        DeterministicDungeonGenerator generator = new DeterministicDungeonGenerator(100, 80);
+        List<RoomTemplate> templates = List.of(
+            largeRoom("start", RoomCategory.START, new DoorSocket("east", new IntVector3(20, 3, 9), Direction3.EAST, SocketType.STANDARD, 3, 4)),
+            largeRoom("combat", RoomCategory.COMBAT, new DoorSocket("west", new IntVector3(0, 3, 9), Direction3.WEST, SocketType.STANDARD, 3, 4))
+        );
+
+        var result = generator.generate(templates, new DungeonGenerationRequest(2, 2L));
+
+        assertTrue(result.successful(), result.errors().toString());
+        DungeonEdge edge = result.graph().edges().getFirst();
+        DungeonNode from = result.graph().nodes().get(edge.fromNode());
+        DungeonNode to = result.graph().nodes().get(edge.toNode());
+        DoorSocket fromDoor = templates.getFirst().doors().getFirst();
+        DoorSocket toDoor = templates.get(1).doors().getFirst();
+        var fromFacing = from.transform().transformFacing(fromDoor.facing());
+        assertEquals(DoorGeometry.shifted(DoorGeometry.transformedBounds(fromDoor, from.transform()), fromFacing.vector()), DoorGeometry.transformedBounds(toDoor, to.transform()));
+    }
+
+    @Test
+    void mismatchedDoorWidthsDoNotConnect() {
+        DeterministicDungeonGenerator generator = new DeterministicDungeonGenerator(50, 80);
+        List<RoomTemplate> templates = List.of(
+            largeRoom("start", RoomCategory.START, new DoorSocket("north", new IntVector3(9, 3, 0), Direction3.NORTH, SocketType.STANDARD, 3, 4)),
+            largeRoom("hall", RoomCategory.COMBAT, new DoorSocket("south", new IntVector3(8, 3, 20), Direction3.SOUTH, SocketType.STANDARD, 5, 4))
+        );
+
+        var result = generator.generate(templates, new DungeonGenerationRequest(2, 3L));
+
+        assertFalse(result.successful());
+    }
+
+    @Test
+    void graphValidatorRejectsSinglePointAdjacentButRectangleOffset() {
+        RoomTemplate start = largeRoom("start", RoomCategory.START, new DoorSocket("north", new IntVector3(9, 3, 0), Direction3.NORTH, SocketType.STANDARD, 3, 4));
+        RoomTemplate combat = largeRoom("combat", RoomCategory.COMBAT, new DoorSocket("north", new IntVector3(9, 3, 0), Direction3.NORTH, SocketType.STANDARD, 3, 4));
+        var graph = new com.dungeonarchitect.domain.DungeonGraph(
+            List.of(
+                new DungeonNode(0, "start", RoomCategory.START, 0, new RoomTransform(new IntVector3(0, 80, 0), Rotation.NONE, new IntVector3(21, 10, 21))),
+                new DungeonNode(1, "combat", RoomCategory.COMBAT, 1, new RoomTransform(new IntVector3(-2, 80, -21), Rotation.CLOCKWISE_180, new IntVector3(21, 10, 21)))
+            ),
+            List.of(new DungeonEdge(0, "north", 1, "north"))
+        );
+
+        var errors = new DungeonGraphValidator().validate(graph, List.of(start, combat));
+
+        assertTrue(errors.stream().anyMatch(error -> error.contains("door rectangles are not aligned") && error.contains("delta=")), errors.toString());
     }
 
     private RoomTemplate startRoom() {
@@ -120,6 +191,21 @@ final class DeterministicDungeonGeneratorTest {
                 new DoorSocket("north", new IntVector3(2, 1, 0), Direction3.NORTH, SocketType.STANDARD, 1, 2),
                 new DoorSocket("south", new IntVector3(2, 1, 4), Direction3.SOUTH, SocketType.STANDARD, 1, 2)
             ),
+            List.of(),
+            List.of(),
+            Path.of(id + ".nbt")
+        );
+    }
+
+    private RoomTemplate largeRoom(String id, RoomCategory category, DoorSocket door) {
+        return new RoomTemplate(
+            id,
+            category,
+            1,
+            Set.of(),
+            new IntVector3(21, 10, 21),
+            category == RoomCategory.START ? new IntVector3(10, 1, 10) : null,
+            List.of(door),
             List.of(),
             List.of(),
             Path.of(id + ".nbt")

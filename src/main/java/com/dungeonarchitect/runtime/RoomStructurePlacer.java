@@ -1,12 +1,15 @@
 package com.dungeonarchitect.runtime;
 
+import com.dungeonarchitect.domain.BoundingBox3i;
 import com.dungeonarchitect.domain.IntVector3;
 import com.dungeonarchitect.domain.Rotation;
 import com.dungeonarchitect.domain.RoomTemplate;
 import com.dungeonarchitect.domain.RoomTransform;
 import com.dungeonarchitect.feature.FeatureService;
+import com.dungeonarchitect.generation.DoorGeometry;
 import com.dungeonarchitect.template.RoomStructureService;
 import org.bukkit.Location;
+import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.block.structure.Mirror;
 import org.bukkit.block.structure.StructureRotation;
@@ -41,7 +44,9 @@ public final class RoomStructurePlacer {
             STRUCTURE_INTEGRITY,
             new Random(dungeonSeed ^ nodeIndex)
         );
+        clearDoorApertures(world, template, transform);
         featureService.placeFeatures(world, template, transform, dungeonSeed, nodeIndex);
+        clearDoorApertures(world, template, transform);
     }
 
     public static IntVector3 pasteOrigin(RoomTransform transform) {
@@ -63,5 +68,18 @@ public final class RoomStructurePlacer {
             case CLOCKWISE_180 -> StructureRotation.CLOCKWISE_180;
             case COUNTERCLOCKWISE_90 -> StructureRotation.COUNTERCLOCKWISE_90;
         };
+    }
+
+    private void clearDoorApertures(World world, RoomTemplate template, RoomTransform transform) {
+        for (var door : template.doors()) {
+            BoundingBox3i bounds = DoorGeometry.transformedBounds(door, transform);
+            for (int x = bounds.min().x(); x <= bounds.max().x(); x++) {
+                for (int y = bounds.min().y(); y <= bounds.max().y(); y++) {
+                    for (int z = bounds.min().z(); z <= bounds.max().z(); z++) {
+                        world.getBlockAt(x, y, z).setType(Material.AIR, false);
+                    }
+                }
+            }
+        }
     }
 }

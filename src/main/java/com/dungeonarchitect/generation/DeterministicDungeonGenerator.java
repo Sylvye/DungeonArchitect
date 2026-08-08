@@ -104,6 +104,9 @@ public final class DeterministicDungeonGenerator {
                 if (!candidateDoor.compatibleWith(existing.door)) {
                     continue;
                 }
+                if (!DoorGeometry.sameAperture(existing.door, candidateDoor)) {
+                    continue;
+                }
                 List<Rotation> rotations = new ArrayList<>(List.of(Rotation.values()));
                 while (!rotations.isEmpty()) {
                     Rotation rotation = rotations.remove(random.nextInt(rotations.size()));
@@ -111,9 +114,10 @@ public final class DeterministicDungeonGenerator {
                     if (candidateDoor.facing().rotateY(rotation) != existingFacing.opposite()) {
                         continue;
                     }
-                    IntVector3 targetDoorWorld = existing.transform.transformLocal(existing.door.position()).add(existingFacing.vector());
-                    IntVector3 rotatedDoor = rotation.rotate(candidateDoor.position(), template.size());
-                    RoomTransform transform = new RoomTransform(targetDoorWorld.subtract(rotatedDoor), rotation, template.size());
+                    BoundingBox3i existingDoorBounds = DoorGeometry.transformedBounds(existing.door, existing.transform);
+                    BoundingBox3i targetDoorBounds = DoorGeometry.shifted(existingDoorBounds, existingFacing.vector());
+                    BoundingBox3i candidateRelativeBounds = DoorGeometry.relativeBounds(candidateDoor, rotation, template.size());
+                    RoomTransform transform = new RoomTransform(targetDoorBounds.min().subtract(candidateRelativeBounds.min()), rotation, template.size());
                     BoundingBox3i bounds = transform.transformedBounds();
                     boolean collides = nodes.stream()
                         .map(node -> node.transform().transformedBounds())

@@ -1,6 +1,7 @@
 package com.dungeonarchitect.template;
 
 import com.dungeonarchitect.domain.RoomTemplate;
+import com.dungeonarchitect.feature.FeatureTemplateRegistry;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -22,8 +23,12 @@ public final class RoomTemplateRegistry {
     }
 
     public RoomTemplateRegistry(Path roomsDirectory, RoomStructureService structureService) {
+        this(roomsDirectory, structureService, null);
+    }
+
+    public RoomTemplateRegistry(Path roomsDirectory, RoomStructureService structureService, FeatureTemplateRegistry featureRegistry) {
         this.roomsDirectory = roomsDirectory;
-        this.validator = new RoomTemplateValidator(structureService);
+        this.validator = new RoomTemplateValidator(structureService, featureRegistry);
     }
 
     public TemplateValidationResult reload() {

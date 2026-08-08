@@ -21,6 +21,11 @@ public final class AuthoringListener implements Listener {
         if (!event.getPlayer().hasPermission("dungeonarchitect.admin")) {
             return;
         }
+        if (!authoringManager.isInEditWorld(event.getPlayer())) {
+            event.getPlayer().sendActionBar(net.kyori.adventure.text.Component.text("Architect's Wand only works in da_edit."));
+            event.setCancelled(true);
+            return;
+        }
         if (event.getAction() == Action.LEFT_CLICK_BLOCK) {
             authoringManager.setSelection(event.getPlayer(), 1, event.getClickedBlock().getLocation());
             authoringManager.currentSelection(event.getPlayer())

@@ -17,15 +17,21 @@ public final class DungeonWorldManager {
     private final Plugin plugin;
     private final String prefix;
     private final boolean deleteOnDestroy;
+    private final String sharedWorldName;
 
     public DungeonWorldManager(Plugin plugin, String prefix, boolean deleteOnDestroy) {
         this.plugin = plugin;
         this.prefix = prefix;
         this.deleteOnDestroy = deleteOnDestroy;
+        this.sharedWorldName = prefix + "instances";
     }
 
     public World createWorld(UUID dungeonId) {
-        String name = prefix + dungeonId.toString().replace("-", "");
+        String name = sharedWorldName;
+        World existing = Bukkit.getWorld(name);
+        if (existing != null) {
+            return existing;
+        }
         World world = WorldCreator.name(name)
             .environment(World.Environment.NORMAL)
             .generator(new VoidChunkGenerator())
@@ -35,6 +41,7 @@ public final class DungeonWorldManager {
             throw new IllegalStateException("Failed to create dungeon world " + name);
         }
         world.setAutoSave(false);
+        world.setKeepSpawnInMemory(false);
         world.setDifficulty(Difficulty.PEACEFUL);
         world.setGameRule(GameRule.DO_MOB_SPAWNING, false);
         world.setGameRule(GameRule.DO_WEATHER_CYCLE, false);
@@ -44,7 +51,14 @@ public final class DungeonWorldManager {
         return world;
     }
 
+    public void warmupWorld() {
+        createWorld(new UUID(0L, 0L));
+    }
+
     public void destroyWorld(String worldName) throws IOException {
+        if (worldName.equals(sharedWorldName)) {
+            return;
+        }
         World world = Bukkit.getWorld(worldName);
         Path folder = plugin.getServer().getWorldContainer().toPath().resolve(worldName);
         if (world != null) {

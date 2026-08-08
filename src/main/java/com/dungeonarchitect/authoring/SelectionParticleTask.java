@@ -17,7 +17,7 @@ public final class SelectionParticleTask implements Runnable {
         for (Player player : org.bukkit.Bukkit.getOnlinePlayers()) {
             boolean holdingWand = authoringManager.isWand(player.getInventory().getItemInMainHand())
                 || authoringManager.isWand(player.getInventory().getItemInOffHand());
-            if (!player.hasPermission("dungeonarchitect.admin") || !holdingWand) {
+            if (!player.hasPermission("dungeonarchitect.admin") || !holdingWand || !authoringManager.isInEditWorld(player)) {
                 continue;
             }
             authoringManager.currentSelection(player).ifPresent(bounds -> draw(player, bounds, Particle.WAX_OFF));

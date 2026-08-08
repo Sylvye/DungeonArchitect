@@ -2,6 +2,7 @@ package com.dungeonarchitect.template;
 
 import com.dungeonarchitect.domain.Direction3;
 import com.dungeonarchitect.domain.DoorSocket;
+import com.dungeonarchitect.domain.FeatureSlotEntry;
 import com.dungeonarchitect.domain.IntVector3;
 import com.dungeonarchitect.domain.RoomCategory;
 import com.dungeonarchitect.domain.RoomFeatureSlot;
@@ -60,12 +61,16 @@ public final class RoomTemplateIO {
 
         List<RoomFeatureSlot> featureSlots = new ArrayList<>();
         for (ConfigurationSection section : sections(yaml, "featureSlots")) {
+            List<FeatureSlotEntry> entries = new ArrayList<>();
+            for (ConfigurationSection entry : sections(section, "entries")) {
+                entries.add(new FeatureSlotEntry(entry.getString("feature", FeatureSlotEntry.EMPTY), entry.getInt("weight", 1)));
+            }
             featureSlots.add(new RoomFeatureSlot(
                 section.getString("id"),
-                section.getString("pool", "default"),
-                section.getString("feature", section.getString("pool", "default")),
                 vector(section.getIntegerList("position")),
-                enumValue(Direction3.class, section.getString("facing", "NORTH"))
+                section.isList("size") ? vector(section.getIntegerList("size")) : new IntVector3(1, 1, 1),
+                enumValue(Direction3.class, section.getString("facing", "NORTH")),
+                entries
             ));
         }
 
@@ -109,10 +114,17 @@ public final class RoomTemplateIO {
         for (RoomFeatureSlot slot : template.featureSlots()) {
             Map<String, Object> item = new LinkedHashMap<>();
             item.put("id", slot.id());
-            item.put("pool", slot.poolId());
-            item.put("feature", slot.featureName());
             item.put("position", list(slot.position()));
+            item.put("size", list(slot.size()));
             item.put("facing", slot.facing().name());
+            List<Map<String, Object>> entries = new ArrayList<>();
+            for (FeatureSlotEntry entry : slot.entries()) {
+                Map<String, Object> entryMap = new LinkedHashMap<>();
+                entryMap.put("feature", entry.featureId());
+                entryMap.put("weight", entry.weight());
+                entries.add(entryMap);
+            }
+            item.put("entries", entries);
             slots.add(item);
         }
         yaml.set("featureSlots", slots);
@@ -120,6 +132,10 @@ public final class RoomTemplateIO {
     }
 
     private static List<ConfigurationSection> sections(YamlConfiguration yaml, String path) {
+        return sections((ConfigurationSection) yaml, path);
+    }
+
+    private static List<ConfigurationSection> sections(ConfigurationSection yaml, String path) {
         List<ConfigurationSection> sections = new ArrayList<>();
         if (yaml.isList(path)) {
             for (Object item : yaml.getList(path, List.of())) {

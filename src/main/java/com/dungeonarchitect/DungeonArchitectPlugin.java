@@ -7,8 +7,8 @@ import com.dungeonarchitect.authoring.AuthoringManager;
 import com.dungeonarchitect.authoring.SelectionParticleTask;
 import com.dungeonarchitect.command.DungeonArchitectCommand;
 import com.dungeonarchitect.domain.RoomCategory;
-import com.dungeonarchitect.feature.FeaturePoolRegistry;
 import com.dungeonarchitect.feature.FeatureService;
+import com.dungeonarchitect.feature.FeatureTemplateRegistry;
 import com.dungeonarchitect.gui.ChatPromptManager;
 import com.dungeonarchitect.gui.MenuManager;
 import com.dungeonarchitect.generation.DeterministicDungeonGenerator;
@@ -30,31 +30,29 @@ import java.util.Locale;
 public final class DungeonArchitectPlugin extends JavaPlugin {
     private DungeonManager dungeonManager;
     private RoomTemplateRegistry roomTemplateRegistry;
-    private FeaturePoolRegistry featurePoolRegistry;
+    private FeatureTemplateRegistry featureTemplateRegistry;
     private DungeonArchitectAPI api;
 
     @Override
     public void onEnable() {
         saveDefaultConfig();
-        saveResource("feature-pools.yml", false);
 
         Path dataPath = getDataFolder().toPath();
         RoomStructureService structureService = new RoomStructureService(getServer());
-        roomTemplateRegistry = new RoomTemplateRegistry(dataPath.resolve("rooms"), structureService);
+        featureTemplateRegistry = new FeatureTemplateRegistry(dataPath.resolve("features"), structureService);
+        featureTemplateRegistry.reload().errors().forEach(error -> getLogger().warning(error));
+        roomTemplateRegistry = new RoomTemplateRegistry(dataPath.resolve("rooms"), structureService, featureTemplateRegistry);
         var validation = roomTemplateRegistry.reload();
         if (!validation.valid()) {
             validation.errors().forEach(error -> getLogger().warning(error));
         }
-
-        featurePoolRegistry = new FeaturePoolRegistry(dataPath.resolve("feature-pools.yml").toFile());
-        featurePoolRegistry.reload().forEach(error -> getLogger().warning(error));
 
         int maxAttempts = getConfig().getInt("generation.max-placement-attempts", 250);
         int spawnY = getConfig().getInt("worlds.spawn-y", 80);
         String worldPrefix = getConfig().getString("worlds.name-prefix", "da_");
         boolean deleteOnDestroy = getConfig().getBoolean("worlds.delete-on-destroy", true);
 
-        FeatureService featureService = new FeatureService(featurePoolRegistry);
+        FeatureService featureService = new FeatureService(featureTemplateRegistry, structureService);
         RoomStructurePlacer structurePlacer = new RoomStructurePlacer(structureService, featureService);
         DungeonWorldManager worldManager = new DungeonWorldManager(this, worldPrefix, deleteOnDestroy);
         dungeonManager = new DungeonManager(
@@ -74,6 +72,7 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
         AuthoringManager authoringManager = new AuthoringManager(
             getServer(),
             roomTemplateRegistry.roomsDirectory(),
+            featureTemplateRegistry.featuresDirectory(),
             new NamespacedKey(this, "authoring_wand"),
             wandMaterial,
             defaultCategory,
@@ -83,13 +82,17 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
         getServer().getPluginManager().registerEvents(new AuthoringListener(authoringManager), this);
         getServer().getPluginManager().registerEvents(new PlayerRoomListener(dungeonManager), this);
         getServer().getScheduler().runTaskTimer(this, new SelectionParticleTask(authoringManager), 10L, 10L);
+        getServer().getScheduler().runTaskLater(this, () -> {
+            worldManager.warmupWorld();
+            authoringManager.prepareEditWorld();
+        }, 20L);
 
         ChatPromptManager chatPromptManager = new ChatPromptManager(this);
-        MenuManager menuManager = new MenuManager(this, roomTemplateRegistry, dungeonManager, chatPromptManager, this::reloadContent);
+        MenuManager menuManager = new MenuManager(this, authoringManager, roomTemplateRegistry, featureTemplateRegistry, dungeonManager, chatPromptManager, this::reloadContent);
         getServer().getPluginManager().registerEvents(chatPromptManager, this);
         getServer().getPluginManager().registerEvents(menuManager, this);
 
-        DungeonArchitectCommand command = new DungeonArchitectCommand(getPluginMeta().getVersion(), authoringManager, roomTemplateRegistry, dungeonManager, featurePoolRegistry::reload, featurePoolRegistry::poolIds, menuManager, structureService);
+        DungeonArchitectCommand command = new DungeonArchitectCommand(getPluginMeta().getVersion(), authoringManager, roomTemplateRegistry, featureTemplateRegistry, dungeonManager, menuManager, structureService);
         PluginCommand da = getCommand("da");
         if (da == null) {
             throw new IllegalStateException("Missing /da command registration");
@@ -118,7 +121,7 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
 
     private void reloadContent() {
         reloadConfig();
+        featureTemplateRegistry.reload();
         roomTemplateRegistry.reload();
-        featurePoolRegistry.reload();
     }
 }

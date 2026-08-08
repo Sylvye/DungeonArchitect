@@ -5,11 +5,14 @@ import com.dungeonarchitect.api.event.DungeonDestroyedEvent;
 import com.dungeonarchitect.api.event.DungeonReadyEvent;
 import com.dungeonarchitect.api.event.RoomEnteredEvent;
 import com.dungeonarchitect.api.event.RoomStateChangeEvent;
+import com.dungeonarchitect.domain.BoundingBox3i;
 import com.dungeonarchitect.domain.DungeonNode;
 import com.dungeonarchitect.domain.DungeonState;
 import com.dungeonarchitect.domain.IntVector3;
 import com.dungeonarchitect.domain.RoomState;
 import com.dungeonarchitect.domain.RoomTemplate;
+import com.dungeonarchitect.domain.DungeonGraph;
+import com.dungeonarchitect.domain.RoomTransform;
 import com.dungeonarchitect.generation.DeterministicDungeonGenerator;
 import com.dungeonarchitect.generation.DungeonGenerationRequest;
 import com.dungeonarchitect.generation.DungeonGenerationResult;
@@ -28,8 +31,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 public final class DungeonManager {
+    private static final int DUNGEON_REGION_SPACING = 2048;
     private final Plugin plugin;
     private final RoomTemplateRegistry templateRegistry;
     private final DeterministicDungeonGenerator generator;
@@ -40,6 +45,7 @@ public final class DungeonManager {
     private final Map<UUID, Integer> playerRooms = new HashMap<>();
     private final Map<Integer, UUID> aliases = new HashMap<>();
     private int nextAlias = 1;
+    private int nextRegion = 0;
 
     public DungeonManager(Plugin plugin, RoomTemplateRegistry templateRegistry, DeterministicDungeonGenerator generator, DungeonWorldManager worldManager, RoomStructurePlacer structurePlacer) {
         this.plugin = plugin;
@@ -55,13 +61,14 @@ public final class DungeonManager {
         if (!result.successful()) {
             throw new IllegalStateException(String.join("; ", result.errors()));
         }
+        DungeonGraph graph = translateGraph(result.graph(), reserveDungeonOffset());
         World world = worldManager.createWorld(id);
-        DungeonInstance preparing = new DungeonInstance(id, request.seed(), result.graph(), world.getName(), request.playerIds(), List.of(), DungeonState.GENERATING);
+        DungeonInstance preparing = new DungeonInstance(id, request.seed(), graph, world.getName(), request.playerIds(), List.of(), DungeonState.GENERATING);
         Bukkit.getPluginManager().callEvent(new DungeonCreatedEvent(preparing));
 
         List<RoomInstance> rooms = new ArrayList<>();
         try {
-            for (DungeonNode node : result.graph().nodes()) {
+            for (DungeonNode node : graph.nodes()) {
                 RoomTemplate template = templateRegistry.get(node.templateId())
                     .orElseThrow(() -> new IllegalStateException("Template disappeared during generation: " + node.templateId()));
                 plugin.getLogger().info("Placing dungeon " + id + " node=" + node.index()
@@ -78,7 +85,7 @@ public final class DungeonManager {
             throw new IllegalStateException("Failed to place dungeon structures: " + ex.getMessage(), ex);
         }
 
-        DungeonInstance instance = new DungeonInstance(id, request.seed(), result.graph(), world.getName(), request.playerIds(), rooms, DungeonState.READY);
+        DungeonInstance instance = new DungeonInstance(id, request.seed(), graph, world.getName(), request.playerIds(), rooms, DungeonState.READY);
         instances.put(id, instance);
         aliases.put(nextAlias++, id);
         for (UUID playerId : request.playerIds()) {
@@ -88,6 +95,81 @@ public final class DungeonManager {
         teleportPlayersToStart(instance);
         instance.state(DungeonState.ACTIVE);
         return instance;
+    }
+
+    public CompletableFuture<DungeonInstance> createDungeonAsync(DungeonRequest request) {
+        UUID id = UUID.randomUUID();
+        CompletableFuture<DungeonInstance> future = new CompletableFuture<>();
+        List<RoomTemplate> templates = List.copyOf(templateRegistry.all());
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            try {
+                DungeonGenerationResult result = generator.generate(templates, new DungeonGenerationRequest(request.roomCount(), request.seed()));
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    if (!result.successful()) {
+                        future.completeExceptionally(new IllegalStateException(String.join("; ", result.errors())));
+                        return;
+                    }
+                    beginAsyncPlacement(id, request, translateGraph(result.graph(), reserveDungeonOffset()), future);
+                });
+            } catch (Exception ex) {
+                Bukkit.getScheduler().runTask(plugin, () -> future.completeExceptionally(ex));
+            }
+        });
+        return future;
+    }
+
+    private void beginAsyncPlacement(UUID id, DungeonRequest request, DungeonGraph graph, CompletableFuture<DungeonInstance> future) {
+        World world;
+        try {
+            world = worldManager.createWorld(id);
+        } catch (RuntimeException ex) {
+            future.completeExceptionally(ex);
+            return;
+        }
+        DungeonInstance preparing = new DungeonInstance(id, request.seed(), graph, world.getName(), request.playerIds(), List.of(), DungeonState.GENERATING);
+        Bukkit.getPluginManager().callEvent(new DungeonCreatedEvent(preparing));
+        placeAsyncRoom(id, request, graph, world, new ArrayList<>(), 0, future);
+    }
+
+    private void placeAsyncRoom(UUID id, DungeonRequest request, DungeonGraph graph, World world, List<RoomInstance> rooms, int index, CompletableFuture<DungeonInstance> future) {
+        if (index >= graph.nodes().size()) {
+            DungeonInstance instance = new DungeonInstance(id, request.seed(), graph, world.getName(), request.playerIds(), rooms, DungeonState.READY);
+            instances.put(id, instance);
+            aliases.put(nextAlias++, id);
+            for (UUID playerId : request.playerIds()) {
+                playerInstances.put(playerId, id);
+            }
+            Bukkit.getPluginManager().callEvent(new DungeonReadyEvent(instance));
+            teleportPlayersToStart(instance);
+            instance.state(DungeonState.ACTIVE);
+            future.complete(instance);
+            return;
+        }
+        DungeonNode node = graph.nodes().get(index);
+        preloadRoomChunks(world, node.transform().transformedBounds()).whenComplete((unused, preloadError) ->
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (preloadError != null) {
+                    future.completeExceptionally(new IllegalStateException("Failed to preload chunks for dungeon room " + node.index() + ": " + preloadError.getMessage(), preloadError));
+                    return;
+                }
+                try {
+                    RoomTemplate template = templateRegistry.get(node.templateId())
+                        .orElseThrow(() -> new IllegalStateException("Template disappeared during generation: " + node.templateId()));
+                    plugin.getLogger().info("Placing dungeon " + id + " node=" + node.index()
+                        + " template=" + template.id()
+                        + " origin=" + node.transform().origin()
+                        + " pasteOrigin=" + RoomStructurePlacer.pasteOrigin(node.transform())
+                        + " rotation=" + node.transform().rotation()
+                        + " metadataSize=" + template.size()
+                        + " bounds=" + node.transform().transformedBounds());
+                    structurePlacer.place(world, template, node.transform(), request.seed(), node.index());
+                    rooms.add(new RoomInstance(node, template));
+                    Bukkit.getScheduler().runTaskLater(plugin, () -> placeAsyncRoom(id, request, graph, world, rooms, index + 1, future), 1L);
+                } catch (Exception ex) {
+                    future.completeExceptionally(new IllegalStateException("Failed to place dungeon room " + node.index() + ": " + ex.getMessage(), ex));
+                }
+            })
+        );
     }
 
     public void destroyDungeon(UUID id) {
@@ -106,6 +188,7 @@ public final class DungeonManager {
             }
         }
         try {
+            clearDungeonBlocks(instance);
             worldManager.destroyWorld(instance.worldName());
         } catch (IOException ex) {
             plugin.getLogger().warning("Failed to delete dungeon world " + instance.worldName() + ": " + ex.getMessage());
@@ -225,5 +308,53 @@ public final class DungeonManager {
                 updatePlayerRoom(player);
             }
         }
+    }
+
+    private synchronized IntVector3 reserveDungeonOffset() {
+        return new IntVector3(nextRegion++ * DUNGEON_REGION_SPACING, 0, 0);
+    }
+
+    private DungeonGraph translateGraph(DungeonGraph graph, IntVector3 offset) {
+        List<DungeonNode> nodes = graph.nodes().stream()
+            .map(node -> new DungeonNode(
+                node.index(),
+                node.templateId(),
+                node.category(),
+                node.depth(),
+                new RoomTransform(node.transform().origin().add(offset), node.transform().rotation(), node.transform().templateSize())
+            ))
+            .toList();
+        return new DungeonGraph(nodes, graph.edges());
+    }
+
+    private void clearDungeonBlocks(DungeonInstance instance) {
+        World world = Bukkit.getWorld(instance.worldName());
+        if (world == null) {
+            return;
+        }
+        for (RoomInstance room : instance.rooms()) {
+            var bounds = room.bounds();
+            for (int x = bounds.min().x(); x <= bounds.max().x(); x++) {
+                for (int y = bounds.min().y(); y <= bounds.max().y(); y++) {
+                    for (int z = bounds.min().z(); z <= bounds.max().z(); z++) {
+                        world.getBlockAt(x, y, z).setType(org.bukkit.Material.AIR, false);
+                    }
+                }
+            }
+        }
+    }
+
+    private CompletableFuture<Void> preloadRoomChunks(World world, BoundingBox3i bounds) {
+        List<CompletableFuture<?>> futures = new ArrayList<>();
+        int minChunkX = Math.floorDiv(bounds.min().x(), 16);
+        int maxChunkX = Math.floorDiv(bounds.max().x(), 16);
+        int minChunkZ = Math.floorDiv(bounds.min().z(), 16);
+        int maxChunkZ = Math.floorDiv(bounds.max().z(), 16);
+        for (int chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
+            for (int chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ++) {
+                futures.add(world.getChunkAtAsync(chunkX, chunkZ));
+            }
+        }
+        return CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new));
     }
 }

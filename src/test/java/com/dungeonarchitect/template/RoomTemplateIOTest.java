@@ -2,6 +2,7 @@ package com.dungeonarchitect.template;
 
 import com.dungeonarchitect.domain.Direction3;
 import com.dungeonarchitect.domain.DoorSocket;
+import com.dungeonarchitect.domain.FeatureSlotEntry;
 import com.dungeonarchitect.domain.IntVector3;
 import com.dungeonarchitect.domain.RoomCategory;
 import com.dungeonarchitect.domain.RoomFeatureSlot;
@@ -36,7 +37,13 @@ final class RoomTemplateIOTest {
             new IntVector3(4, 1, 4),
             List.of(new DoorSocket("door_1", new IntVector3(4, 1, 0), Direction3.NORTH, SocketType.STANDARD, 3, 3)),
             List.of(new RoomMarker("reward", "generic", new IntVector3(4, 1, 4))),
-            List.of(new RoomFeatureSlot("slot_1", "default", new IntVector3(2, 1, 2), Direction3.SOUTH)),
+            List.of(new RoomFeatureSlot(
+                "slot_1",
+                new IntVector3(2, 1, 2),
+                new IntVector3(2, 3, 4),
+                Direction3.SOUTH,
+                List.of(new FeatureSlotEntry("empty", 1), new FeatureSlotEntry("chest_pile", 3))
+            )),
             roomDir.resolve("room.nbt")
         );
 

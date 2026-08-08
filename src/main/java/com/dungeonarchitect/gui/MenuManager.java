@@ -1,11 +1,22 @@
 package com.dungeonarchitect.gui;
 
+import com.dungeonarchitect.authoring.AuthoringManager;
+import com.dungeonarchitect.authoring.AuthoringSession;
+import com.dungeonarchitect.domain.DoorSocket;
+import com.dungeonarchitect.domain.FeatureSlotEntry;
+import com.dungeonarchitect.domain.FeatureTemplate;
 import com.dungeonarchitect.domain.IntVector3;
 import com.dungeonarchitect.domain.RoomCategory;
+import com.dungeonarchitect.domain.RoomFeatureSlot;
+import com.dungeonarchitect.domain.RoomMarker;
 import com.dungeonarchitect.domain.RoomTemplate;
-import com.dungeonarchitect.gui.GuiItems;
+import com.dungeonarchitect.domain.Rotation;
+import com.dungeonarchitect.feature.FeatureMatcher;
+import com.dungeonarchitect.feature.FeatureTemplateIO;
+import com.dungeonarchitect.feature.FeatureTemplateRegistry;
 import com.dungeonarchitect.runtime.DungeonInstance;
 import com.dungeonarchitect.runtime.DungeonManager;
+import com.dungeonarchitect.template.TemplateValidationResult;
 import com.dungeonarchitect.template.RoomTemplateIO;
 import com.dungeonarchitect.template.RoomTemplateRegistry;
 import com.dungeonarchitect.template.RoomTemplateValidator;
@@ -19,6 +30,7 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
+import org.bukkit.event.inventory.ClickType;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.plugin.Plugin;
@@ -37,16 +49,20 @@ import java.util.UUID;
 
 public final class MenuManager implements Listener {
     private final Plugin plugin;
+    private final AuthoringManager authoringManager;
     private final RoomTemplateRegistry templateRegistry;
+    private final FeatureTemplateRegistry featureRegistry;
     private final DungeonManager dungeonManager;
     private final ChatPromptManager prompts;
     private final Runnable reloadAll;
-    private final Map<UUID, Map<Integer, MenuAction>> actions = new HashMap<>();
+    private final Map<UUID, PlayerMenuActions> actions = new HashMap<>();
     private final RoomTemplateValidator validator = new RoomTemplateValidator();
 
-    public MenuManager(Plugin plugin, RoomTemplateRegistry templateRegistry, DungeonManager dungeonManager, ChatPromptManager prompts, Runnable reloadAll) {
+    public MenuManager(Plugin plugin, AuthoringManager authoringManager, RoomTemplateRegistry templateRegistry, FeatureTemplateRegistry featureRegistry, DungeonManager dungeonManager, ChatPromptManager prompts, Runnable reloadAll) {
         this.plugin = plugin;
+        this.authoringManager = authoringManager;
         this.templateRegistry = templateRegistry;
+        this.featureRegistry = featureRegistry;
         this.dungeonManager = dungeonManager;
         this.prompts = prompts;
         this.reloadAll = reloadAll;
@@ -55,7 +71,8 @@ public final class MenuManager implements Listener {
     public void openMain(Player player) {
         Menu menu = menu("da:main", 27, "DungeonArchitect");
         button(menu, 10, Material.BOOKSHELF, "Rooms", List.of("Edit room metadata and validate templates."), this::openRooms);
-        button(menu, 13, Material.COMPARATOR, "Config", List.of("Edit config.yml and feature-pools.yml."), this::openConfig);
+        button(menu, 12, Material.STRUCTURE_BLOCK, "Features", List.of("Edit reusable feature templates."), this::openFeatures);
+        button(menu, 14, Material.COMPARATOR, "Config", List.of("Edit config.yml."), this::openConfig);
         button(menu, 16, Material.ENDER_PEARL, "Dungeons", List.of("Manage active dungeon instances."), this::openDungeons);
         open(player, menu);
     }
@@ -79,12 +96,20 @@ public final class MenuManager implements Listener {
             .orElseThrow(() -> new IllegalArgumentException("Unknown room " + roomId));
         Menu menu = menu("da:room:" + roomId, 54, "Room: " + roomId);
         var validation = validator.validate(template);
+        AuthoringSession activeEdit = authoringManager.editingSession(player, roomId).orElse(null);
+        var doors = activeEdit == null ? template.doors() : activeEdit.doors();
+        var markers = activeEdit == null ? template.markers() : activeEdit.markers();
+        var features = activeEdit == null ? template.featureSlots() : activeEdit.featureSlots();
         button(menu, 4, validation.valid() ? Material.LIME_CONCRETE : Material.RED_CONCRETE, validation.valid() ? "Validation OK" : "Validation Errors", validation.errors(), p -> openRoom(p, roomId));
-        button(menu, 10, Material.NAME_TAG, "Category: " + template.category(), enumNames(RoomCategory.class), p -> prompts.prompt(p, "Enter room category", value -> {
-            saveRoom(new RoomTemplate(template.id(), RoomCategory.valueOf(value.toUpperCase(Locale.ROOT)), template.weight(), template.tags(), template.size(), template.spawn(), template.doors(), template.markers(), template.featureSlots(), template.structureFile()));
-            p.sendMessage(Component.text("Room category updated."));
+        button(menu, 10, Material.NAME_TAG, "Category: " + template.category(), enumNames(RoomCategory.class), p -> {
+            RoomCategory next = nextCategory(template.category());
+            if (activeEdit != null) {
+                activeEdit.category(next);
+            }
+            saveRoom(new RoomTemplate(template.id(), next, template.weight(), template.tags(), template.size(), template.spawn(), template.doors(), template.markers(), template.featureSlots(), template.structureFile()));
+            p.sendMessage(Component.text("Room category changed to " + next + "."));
             openRoom(p, roomId);
-        }));
+        });
         button(menu, 12, Material.GOLD_NUGGET, "Weight: " + template.weight(), List.of("Click to edit generation weight."), p -> prompts.prompt(p, "Enter positive integer weight", value -> {
             saveRoom(new RoomTemplate(template.id(), template.category(), Integer.parseInt(value), template.tags(), template.size(), template.spawn(), template.doors(), template.markers(), template.featureSlots(), template.structureFile()));
             p.sendMessage(Component.text("Room weight updated."));
@@ -107,11 +132,217 @@ public final class MenuManager implements Listener {
             p.sendMessage(Component.text("Room tags updated."));
             openRoom(p, roomId);
         }));
-        button(menu, 28, Material.IRON_DOOR, "Doors: " + template.doors().size(), template.doors().stream().map(door -> door.id() + " " + door.socketType() + " " + door.facing()).toList(), p -> openRoom(p, roomId));
-        button(menu, 30, Material.REDSTONE_TORCH, "Markers: " + template.markers().size(), template.markers().stream().map(marker -> marker.name() + " " + marker.type()).toList(), p -> openRoom(p, roomId));
-        button(menu, 32, Material.CHEST, "Features: " + template.featureSlots().size(), template.featureSlots().stream().map(slot -> slot.featureName() + " at " + slot.position()).toList(), p -> openRoom(p, roomId));
+        button(menu, 22, Material.STRUCTURE_BLOCK, "Edit In World", List.of("Paste this room into the edit world."), p -> {
+            try {
+                authoringManager.editSession(p, template);
+                p.closeInventory();
+                p.sendMessage(Component.text("Pasted " + template.id() + " into the edit world."));
+            } catch (IOException ex) {
+                p.sendMessage(Component.text("Edit paste failed: " + ex.getMessage()));
+                openRoom(p, roomId);
+            }
+        });
+        button(menu, 23, authoringManager.isEditingRoom(player, roomId) ? Material.EMERALD_BLOCK : Material.GRAY_CONCRETE, "Save Edit", List.of("Overwrite this room from the edit world."), p -> {
+            if (!authoringManager.isEditingRoom(p, roomId)) {
+                p.sendMessage(Component.text("Paste this room for editing first."));
+                openRoom(p, roomId);
+                return;
+            }
+            try {
+                TemplateValidationResult result = authoringManager.save(p, roomId);
+                sendValidation(p, result);
+                if (!result.valid()) {
+                    authoringManager.highlightInvalid(p, result);
+                }
+                templateRegistry.reload();
+                openRoom(p, roomId);
+            } catch (Exception ex) {
+                p.sendMessage(Component.text("Save failed: " + ex.getMessage()));
+                openRoom(p, roomId);
+            }
+        });
+        button(menu, 24, Material.BARRIER, "Cancel Edit", List.of("Clear the pasted edit copy."), p -> {
+            authoringManager.cancelEdit(p);
+            p.sendMessage(Component.text("Room edit session cancelled."));
+            openRoom(p, roomId);
+        });
+        button(menu, 28, Material.IRON_DOOR, "Doors: " + doors.size(), doors.stream().map(door -> door.id() + " " + door.socketType() + " " + door.facing()).toList(), p -> openComponents(p, roomId, "door"));
+        button(menu, 30, Material.REDSTONE_TORCH, "Markers: " + markers.size(), markers.stream().map(marker -> marker.name() + " " + marker.type()).toList(), p -> openComponents(p, roomId, "marker"));
+        button(menu, 32, Material.CHEST, "Feature Slots: " + features.size(), features.stream().map(slot -> slot.id() + " size=" + slot.size()).toList(), p -> openComponents(p, roomId, "feature"));
         button(menu, 40, Material.RED_CONCRETE, "Delete Room", List.of("Permanently delete this room template."), p -> openDeleteRoomConfirm(p, template.id()));
         button(menu, 49, Material.ARROW, "Back", List.of(), this::openRooms);
+        open(player, menu);
+    }
+
+    private void openComponents(Player player, String roomId, String type) {
+        RoomTemplate template = templateRegistry.get(roomId)
+            .orElseThrow(() -> new IllegalArgumentException("Unknown room " + roomId));
+        AuthoringSession activeEdit = authoringManager.editingSession(player, roomId).orElse(null);
+        Menu menu = menu("da:components:" + roomId + ":" + type, 54, titleCase(type) + "s: " + roomId);
+        int slot = 0;
+        if (type.equals("door")) {
+            var doors = activeEdit == null ? template.doors() : activeEdit.doors();
+            for (var door : doors) {
+                button(menu, slot++, Material.IRON_DOOR, door.id(), List.of("Position: " + door.position(), "Facing: " + door.facing(), "Right click to select in edit world.", "Shift-right to delete."), p -> openComponents(p, roomId, type), p -> selectComponent(p, roomId, type, door.id()), null, p -> openDeleteComponentConfirm(p, roomId, type, door.id()));
+                if (slot >= 45) {
+                    break;
+                }
+            }
+        } else if (type.equals("marker")) {
+            var markers = activeEdit == null ? template.markers() : activeEdit.markers();
+            for (var marker : markers) {
+                button(menu, slot++, Material.REDSTONE_TORCH, marker.name(), List.of("Type: " + marker.type(), "Position: " + marker.position(), "Right click to select in edit world.", "Shift-right to delete."), p -> openComponents(p, roomId, type), p -> selectComponent(p, roomId, type, marker.name()), null, p -> openDeleteComponentConfirm(p, roomId, type, marker.name()));
+                if (slot >= 45) {
+                    break;
+                }
+            }
+        } else if (type.equals("feature")) {
+            var features = activeEdit == null ? template.featureSlots() : activeEdit.featureSlots();
+            for (var feature : features) {
+                button(menu, slot++, Material.CHEST, feature.id(), List.of("Position: " + feature.position(), "Size: " + feature.size(), "Left click to edit entries.", "Right click to select in edit world.", "Shift-right to delete."), p -> openFeatureSlot(p, roomId, feature.id()), p -> selectComponent(p, roomId, type, feature.id()), null, p -> openDeleteComponentConfirm(p, roomId, type, feature.id()));
+                if (slot >= 45) {
+                    break;
+                }
+            }
+        }
+        button(menu, 49, Material.ARROW, "Back", List.of(), p -> openRoom(p, roomId));
+        open(player, menu);
+    }
+
+    private void openFeatureSlot(Player player, String roomId, String slotId) {
+        RoomTemplate template = templateRegistry.get(roomId)
+            .orElseThrow(() -> new IllegalArgumentException("Unknown room " + roomId));
+        AuthoringSession activeEdit = authoringManager.editingSession(player, roomId).orElse(null);
+        List<RoomFeatureSlot> featureSlots = activeEdit == null ? template.featureSlots() : activeEdit.featureSlots();
+        RoomFeatureSlot featureSlot = featureSlots.stream()
+            .filter(slot -> slot.id().equalsIgnoreCase(slotId))
+            .findFirst()
+            .orElseThrow(() -> new IllegalArgumentException("Unknown feature slot " + slotId));
+        Menu menu = menu("da:feature-slot:" + roomId + ":" + slotId, 54, "Feature Slot: " + slotId);
+        button(menu, 4, Material.HOPPER, "Slot " + slotId, List.of("Size: " + featureSlot.size(), "Position: " + featureSlot.position()), p -> openFeatureSlot(p, roomId, slotId));
+        int slot = 9;
+        button(menu, slot++, Material.BARRIER, "empty", entryLore(featureSlot, FeatureSlotEntry.EMPTY, "Always available."), p -> toggleFeatureEntry(p, template, featureSlot, FeatureSlotEntry.EMPTY, 1), null, p -> promptFeatureWeight(p, template, featureSlot, FeatureSlotEntry.EMPTY));
+        for (FeatureTemplate feature : featureRegistry.all()) {
+            if (!FeatureMatcher.matches(featureSlot, feature)) {
+                continue;
+            }
+            Rotation rotation = FeatureMatcher.rotationFor(featureSlot.size(), feature.size());
+            IntVector3 rotatedSize = rotation.rotateSize(feature.size());
+            button(menu, slot++, Material.STRUCTURE_BLOCK, feature.id(), entryLore(featureSlot, feature.id(), "Size: " + feature.size(), "Paste size: " + rotatedSize, "Offset: " + FeatureMatcher.placementOffset(featureSlot.size(), rotatedSize), "Rotation: " + rotation), p -> toggleFeatureEntry(p, template, featureSlot, feature.id(), 1), null, p -> promptFeatureWeight(p, template, featureSlot, feature.id()));
+            if (slot >= 45) {
+                break;
+            }
+        }
+        button(menu, 49, Material.ARROW, "Back", List.of(), p -> openComponents(p, roomId, "feature"));
+        open(player, menu);
+    }
+
+    private List<String> entryLore(RoomFeatureSlot slot, String featureId, String... extra) {
+        List<String> lore = new ArrayList<>();
+        slot.entries().stream()
+            .filter(entry -> entry.featureId().equalsIgnoreCase(featureId))
+            .findFirst()
+            .ifPresentOrElse(entry -> lore.add("Selected weight: " + entry.weight()), () -> lore.add("Not selected"));
+        lore.addAll(List.of(extra));
+        lore.add(featureId.equals(FeatureSlotEntry.EMPTY) ? "Left click keeps empty enabled." : "Left click toggles weight 1.");
+        lore.add("Shift-left edits weight.");
+        return lore;
+    }
+
+    private void toggleFeatureEntry(Player player, RoomTemplate template, RoomFeatureSlot slot, String featureId, int defaultWeight) {
+        List<FeatureSlotEntry> entries = new ArrayList<>(slot.entries());
+        if (featureId.equals(FeatureSlotEntry.EMPTY)) {
+            if (entries.stream().noneMatch(entry -> entry.featureId().equalsIgnoreCase(FeatureSlotEntry.EMPTY))) {
+                entries.add(new FeatureSlotEntry(FeatureSlotEntry.EMPTY, defaultWeight));
+                saveFeatureSlot(player, template, slot.withEntries(entries));
+                return;
+            }
+            player.sendMessage(Component.text("empty is always available. Shift-left edits its weight."));
+            openFeatureSlot(player, template.id(), slot.id());
+            return;
+        }
+        boolean removed = entries.removeIf(entry -> entry.featureId().equalsIgnoreCase(featureId));
+        if (!removed) {
+            entries.add(new FeatureSlotEntry(featureId, defaultWeight));
+        }
+        if (entries.isEmpty()) {
+            entries.add(new FeatureSlotEntry(FeatureSlotEntry.EMPTY, 1));
+        }
+        saveFeatureSlot(player, template, slot.withEntries(entries));
+    }
+
+    private void promptFeatureWeight(Player player, RoomTemplate template, RoomFeatureSlot slot, String featureId) {
+        prompts.prompt(player, "Enter weight for " + featureId, value -> {
+            int weight = Integer.parseInt(value);
+            List<FeatureSlotEntry> entries = new ArrayList<>(slot.entries());
+            entries.removeIf(entry -> entry.featureId().equalsIgnoreCase(featureId));
+            entries.add(new FeatureSlotEntry(featureId, weight));
+            saveFeatureSlot(player, template, slot.withEntries(entries));
+        });
+    }
+
+    private void saveFeatureSlot(Player player, RoomTemplate template, RoomFeatureSlot updatedSlot) {
+        AuthoringSession activeEdit = authoringManager.editingSession(player, template.id()).orElse(null);
+        if (activeEdit != null) {
+            activeEdit.removeFeature(updatedSlot.id());
+            activeEdit.addFeatureSlot(updatedSlot);
+            player.sendMessage(Component.text("Feature slot updated in the active edit session."));
+            openFeatureSlot(player, template.id(), updatedSlot.id());
+            return;
+        }
+        List<RoomFeatureSlot> slots = new ArrayList<>(template.featureSlots());
+        slots.replaceAll(slot -> slot.id().equalsIgnoreCase(updatedSlot.id()) ? updatedSlot : slot);
+        saveRoom(new RoomTemplate(template.id(), template.category(), template.weight(), template.tags(), template.size(), template.spawn(), template.doors(), template.markers(), slots, template.structureFile()));
+        player.sendMessage(Component.text("Feature slot updated."));
+        openFeatureSlot(player, template.id(), updatedSlot.id());
+    }
+
+    private RoomTemplate removeComponent(RoomTemplate template, String type, String id) {
+        List<DoorSocket> doors = new ArrayList<>(template.doors());
+        List<RoomMarker> markers = new ArrayList<>(template.markers());
+        List<RoomFeatureSlot> features = new ArrayList<>(template.featureSlots());
+        boolean removed = switch (type) {
+            case "door" -> doors.removeIf(door -> door.id().equalsIgnoreCase(id));
+            case "marker" -> markers.removeIf(marker -> marker.name().equalsIgnoreCase(id));
+            case "feature" -> features.removeIf(slot -> slot.id().equalsIgnoreCase(id));
+            default -> throw new IllegalArgumentException("Unknown component type " + type);
+        };
+        if (!removed) {
+            return template;
+        }
+        return new RoomTemplate(template.id(), template.category(), template.weight(), template.tags(), template.size(), template.spawn(), doors, markers, features, template.structureFile());
+    }
+
+    private void selectComponent(Player player, String roomId, String type, String id) {
+        if (!authoringManager.isEditingRoom(player, roomId)) {
+            player.sendMessage(Component.text("Paste this room for editing before inspecting components."));
+            openRoom(player, roomId);
+            return;
+        }
+        var selection = authoringManager.selectComponent(player, type, id);
+        player.closeInventory();
+        player.sendMessage(Component.text("Selected " + type + " " + id + ": " + selection.worldBounds().describe()));
+    }
+
+    private void openDeleteComponentConfirm(Player player, String roomId, String type, String id) {
+        Menu menu = menu("da:delete-component:" + roomId + ":" + type + ":" + id, 27, "Delete Component?");
+        button(menu, 11, Material.RED_CONCRETE, "Confirm Delete", List.of("Deletes " + type + " " + id), p -> {
+            boolean removed;
+            if (authoringManager.isEditingRoom(p, roomId)) {
+                removed = authoringManager.removeComponent(p, type, id);
+            } else {
+                RoomTemplate template = templateRegistry.get(roomId)
+                    .orElseThrow(() -> new IllegalArgumentException("Unknown room " + roomId));
+                RoomTemplate updated = removeComponent(template, type, id);
+                removed = updated != template;
+                if (removed) {
+                    saveRoom(updated);
+                }
+            }
+            p.sendMessage(Component.text(removed ? "Deleted " + type + " " + id + "." : "No matching " + type + " named " + id + "."));
+            openComponents(p, roomId, type);
+        });
+        button(menu, 15, Material.GRAY_CONCRETE, "Cancel", List.of(), p -> openComponents(p, roomId, type));
         open(player, menu);
     }
 
@@ -131,111 +362,96 @@ public final class MenuManager implements Listener {
         open(player, menu);
     }
 
+    public void openFeatures(Player player) {
+        Menu menu = menu("da:features", 54, "DungeonArchitect Features");
+        int slot = 0;
+        for (FeatureTemplate template : featureRegistry.all()) {
+            button(menu, slot++, Material.STRUCTURE_BLOCK, template.id(), List.of("Size: " + template.size(), "Tags: " + String.join(",", template.tags()), "Click to edit."), p -> openFeature(p, template.id()));
+            if (slot >= 45) {
+                break;
+            }
+        }
+        button(menu, 49, Material.ARROW, "Back", List.of(), this::openMain);
+        open(player, menu);
+    }
+
+    public void openFeature(Player player, String featureId) {
+        FeatureTemplate template = featureRegistry.get(featureId)
+            .orElseThrow(() -> new IllegalArgumentException("Unknown feature " + featureId));
+        Menu menu = menu("da:feature-template:" + featureId, 54, "Feature: " + featureId);
+        button(menu, 4, Material.LIME_CONCRETE, "Size: " + template.size(), List.of("Captured feature footprint."), p -> openFeature(p, featureId));
+        button(menu, 12, Material.OAK_SIGN, "Tags: " + String.join(",", template.tags()), List.of("Comma separated tags."), p -> prompts.prompt(p, "Enter comma-separated tags", value -> {
+            Set<String> tags = new LinkedHashSet<>();
+            for (String tag : value.split(",")) {
+                if (!tag.isBlank()) {
+                    tags.add(tag.trim());
+                }
+            }
+            saveFeatureTemplate(new FeatureTemplate(template.id(), template.size(), tags, template.structureFile()));
+            p.sendMessage(Component.text("Feature tags updated."));
+            openFeature(p, featureId);
+        }));
+        button(menu, 20, Material.STRUCTURE_BLOCK, "Edit In World", List.of("Paste this feature into the edit world."), p -> {
+            try {
+                authoringManager.editFeatureSession(p, template);
+                p.closeInventory();
+                p.sendMessage(Component.text("Pasted feature " + template.id() + " into the edit world."));
+            } catch (IOException ex) {
+                p.sendMessage(Component.text("Edit paste failed: " + ex.getMessage()));
+                openFeature(p, featureId);
+            }
+        });
+        button(menu, 22, authoringManager.activeFeatureId(player).filter(id -> id.equalsIgnoreCase(featureId)).isPresent() ? Material.EMERALD_BLOCK : Material.GRAY_CONCRETE, "Save Edit", List.of("Overwrite this feature from the edit world."), p -> {
+            try {
+                TemplateValidationResult result = authoringManager.saveFeature(p, featureId);
+                sendValidation(p, result);
+                featureRegistry.reload();
+                templateRegistry.reload();
+                openFeature(p, featureId);
+            } catch (Exception ex) {
+                p.sendMessage(Component.text("Save failed: " + ex.getMessage()));
+                openFeature(p, featureId);
+            }
+        });
+        button(menu, 24, Material.BARRIER, "Cancel Edit", List.of("Clear the pasted edit copy."), p -> {
+            authoringManager.cancelEdit(p);
+            p.sendMessage(Component.text("Feature edit session cancelled."));
+            openFeature(p, featureId);
+        });
+        button(menu, 40, Material.RED_CONCRETE, "Delete Feature", List.of("Permanently delete this feature template."), p -> openDeleteFeatureConfirm(p, template.id()));
+        button(menu, 49, Material.ARROW, "Back", List.of(), this::openFeatures);
+        open(player, menu);
+    }
+
+    private void openDeleteFeatureConfirm(Player player, String featureId) {
+        Menu menu = menu("da:delete-feature:" + featureId, 27, "Delete Feature?");
+        button(menu, 11, Material.RED_CONCRETE, "Confirm Delete", List.of("Permanently deletes " + featureId), p -> {
+            try {
+                featureRegistry.deleteFeature(featureId);
+                templateRegistry.reload();
+                p.sendMessage(Component.text("Deleted feature " + featureId));
+                openFeatures(p);
+            } catch (IOException ex) {
+                p.sendMessage(Component.text("Delete failed: " + ex.getMessage()));
+                openFeature(p, featureId);
+            }
+        });
+        button(menu, 15, Material.GRAY_CONCRETE, "Cancel", List.of(), p -> openFeature(p, featureId));
+        open(player, menu);
+    }
+
     public void openConfig(Player player) {
         Menu menu = menu("da:config", 54, "DungeonArchitect Config");
         YamlConfiguration config = YamlConfiguration.loadConfiguration(new File(plugin.getDataFolder(), "config.yml"));
         int slot = fillConfig(menu, config, new File(plugin.getDataFolder(), "config.yml"), "", 0);
-        button(menu, Math.min(slot, 45), Material.CHEST, "Feature Pools", List.of("Edit feature-pools.yml entries."), this::openFeaturePools);
-        button(menu, 49, Material.EMERALD, "Reload", List.of("Reload config, rooms, and feature pools."), p -> {
+        button(menu, Math.min(slot, 45), Material.CHEST, "Features", List.of("Open captured feature templates."), this::openFeatures);
+        button(menu, 49, Material.EMERALD, "Reload", List.of("Reload config, rooms, and features."), p -> {
             reloadAll.run();
             p.sendMessage(Component.text("DungeonArchitect reloaded."));
             openConfig(p);
         });
         button(menu, 53, Material.ARROW, "Back", List.of(), this::openMain);
         open(player, menu);
-    }
-
-    public void openFeaturePools(Player player) {
-        Menu menu = menu("da:features", 54, "Feature Pools");
-        File file = new File(plugin.getDataFolder(), "feature-pools.yml");
-        YamlConfiguration yaml = YamlConfiguration.loadConfiguration(file);
-        ConfigurationSection pools = yaml.getConfigurationSection("pools");
-        int slot = 0;
-        if (pools != null) {
-            for (String poolId : pools.getKeys(false)) {
-                button(menu, slot++, Material.CHEST, poolId, List.of("Click to edit entries."), p -> openFeaturePool(p, poolId));
-                if (slot >= 45) {
-                    break;
-                }
-            }
-        }
-        button(menu, 49, Material.ARROW, "Back", List.of(), this::openConfig);
-        open(player, menu);
-    }
-
-    public void openFeaturePool(Player player, String poolId) {
-        Menu menu = menu("da:feature:" + poolId, 54, "Feature Pool: " + poolId);
-        File file = new File(plugin.getDataFolder(), "feature-pools.yml");
-        YamlConfiguration yaml = YamlConfiguration.loadConfiguration(file);
-        List<Map<String, Object>> entries = featureEntries(yaml, poolId);
-        int slot = 0;
-        for (int i = 0; i < entries.size() && slot < 45; i++) {
-            int index = i;
-            Map<String, Object> entry = entries.get(i);
-            button(menu, slot++, Material.PAPER, String.valueOf(entry.getOrDefault("id", "entry_" + i)), List.of("type=" + entry.getOrDefault("type", "EMPTY"), "weight=" + entry.getOrDefault("weight", 1), "material=" + entry.getOrDefault("material", "")), p -> openFeatureEntry(p, poolId, index));
-        }
-        button(menu, 48, Material.EMERALD, "Add Empty Entry", List.of("Creates a new weighted EMPTY entry."), p -> {
-            entries.add(new java.util.LinkedHashMap<>(Map.of("id", "entry_" + (entries.size() + 1), "weight", 1, "type", "EMPTY")));
-            yaml.set("pools." + poolId, entries);
-            saveYaml(yaml, file);
-            reloadAll.run();
-            openFeaturePool(p, poolId);
-        });
-        button(menu, 49, Material.ARROW, "Back", List.of(), this::openFeaturePools);
-        open(player, menu);
-    }
-
-    public void openFeatureEntry(Player player, String poolId, int index) {
-        Menu menu = menu("da:feature-entry:" + poolId + ":" + index, 27, "Feature Entry");
-        File file = new File(plugin.getDataFolder(), "feature-pools.yml");
-        YamlConfiguration yaml = YamlConfiguration.loadConfiguration(file);
-        List<Map<String, Object>> entries = featureEntries(yaml, poolId);
-        if (index < 0 || index >= entries.size()) {
-            openFeaturePool(player, poolId);
-            return;
-        }
-        Map<String, Object> entry = entries.get(index);
-        button(menu, 10, Material.NAME_TAG, "ID: " + entry.getOrDefault("id", ""), List.of("Click to edit."), p -> editFeatureEntry(p, yaml, file, poolId, entries, index, "id"));
-        button(menu, 12, Material.GOLD_NUGGET, "Weight: " + entry.getOrDefault("weight", 1), List.of("Click to edit."), p -> editFeatureEntry(p, yaml, file, poolId, entries, index, "weight"));
-        button(menu, 14, Material.COMPARATOR, "Type: " + entry.getOrDefault("type", "EMPTY"), List.of("EMPTY or BLOCK"), p -> editFeatureEntry(p, yaml, file, poolId, entries, index, "type"));
-        button(menu, 16, Material.STONE, "Material: " + entry.getOrDefault("material", ""), List.of("Only used for BLOCK entries."), p -> editFeatureEntry(p, yaml, file, poolId, entries, index, "material"));
-        button(menu, 22, Material.ARROW, "Back", List.of(), p -> openFeaturePool(p, poolId));
-        open(player, menu);
-    }
-
-    private void editFeatureEntry(Player player, YamlConfiguration yaml, File file, String poolId, List<Map<String, Object>> entries, int index, String key) {
-        prompts.prompt(player, "Enter value for " + key, value -> {
-            Object parsed = key.equals("weight") ? Integer.parseInt(value) : value.toUpperCase(Locale.ROOT);
-            if (key.equals("id")) {
-                parsed = value;
-            }
-            entries.get(index).put(key, parsed);
-            yaml.set("pools." + poolId, entries);
-            saveYaml(yaml, file);
-            reloadAll.run();
-            player.sendMessage(Component.text("Feature entry updated."));
-            openFeatureEntry(player, poolId, index);
-        });
-    }
-
-    private List<Map<String, Object>> featureEntries(YamlConfiguration yaml, String poolId) {
-        List<Map<String, Object>> entries = new ArrayList<>();
-        for (Object item : yaml.getList("pools." + poolId, List.of())) {
-            if (item instanceof Map<?, ?> map) {
-                Map<String, Object> copy = new java.util.LinkedHashMap<>();
-                for (Map.Entry<?, ?> entry : map.entrySet()) {
-                    copy.put(String.valueOf(entry.getKey()), entry.getValue());
-                }
-                entries.add(copy);
-            } else if (item instanceof ConfigurationSection section) {
-                Map<String, Object> copy = new java.util.LinkedHashMap<>();
-                for (String key : section.getKeys(false)) {
-                    copy.put(key, section.get(key));
-                }
-                entries.add(copy);
-            }
-        }
-        return entries;
     }
 
     public void openDungeons(Player player) {
@@ -341,6 +557,17 @@ public final class MenuManager implements Listener {
         }
     }
 
+    private void saveFeatureTemplate(FeatureTemplate template) {
+        Path featureDir = template.structureFile().getParent();
+        try {
+            FeatureTemplateIO.save(template, featureDir);
+            featureRegistry.reload();
+            templateRegistry.reload();
+        } catch (IOException ex) {
+            throw new IllegalArgumentException(ex.getMessage(), ex);
+        }
+    }
+
     private Object parseScalar(String input) {
         if (input.equalsIgnoreCase("true") || input.equalsIgnoreCase("false")) {
             return Boolean.parseBoolean(input);
@@ -368,6 +595,29 @@ public final class MenuManager implements Listener {
         return names;
     }
 
+    private RoomCategory nextCategory(RoomCategory current) {
+        RoomCategory[] values = RoomCategory.values();
+        return values[(current.ordinal() + 1) % values.length];
+    }
+
+    private String titleCase(String value) {
+        if (value.isBlank()) {
+            return value;
+        }
+        return value.substring(0, 1).toUpperCase(Locale.ROOT) + value.substring(1).toLowerCase(Locale.ROOT);
+    }
+
+    private void sendValidation(Player player, TemplateValidationResult result) {
+        if (result.valid()) {
+            player.sendMessage(Component.text("Validation OK."));
+            return;
+        }
+        player.sendMessage(Component.text("Validation errors:"));
+        for (String error : result.errors()) {
+            player.sendMessage(Component.text("- " + error));
+        }
+    }
+
     private void saveYaml(YamlConfiguration yaml, File file) {
         try {
             yaml.save(file);
@@ -378,17 +628,38 @@ public final class MenuManager implements Listener {
 
     private Menu menu(String id, int size, String title) {
         Inventory inventory = Bukkit.createInventory(new MenuHolder(id), size, Component.text(title));
-        return new Menu(inventory, new HashMap<>());
+        return new Menu(inventory, new HashMap<>(), new HashMap<>(), new HashMap<>(), new HashMap<>());
     }
 
     private void button(Menu menu, int slot, Material material, String name, List<String> lore, MenuAction action) {
+        button(menu, slot, material, name, lore, action, null);
+    }
+
+    private void button(Menu menu, int slot, Material material, String name, List<String> lore, MenuAction action, MenuAction rightClickAction) {
+        button(menu, slot, material, name, lore, action, rightClickAction, null);
+    }
+
+    private void button(Menu menu, int slot, Material material, String name, List<String> lore, MenuAction action, MenuAction rightClickAction, MenuAction shiftLeftAction) {
+        button(menu, slot, material, name, lore, action, rightClickAction, shiftLeftAction, null);
+    }
+
+    private void button(Menu menu, int slot, Material material, String name, List<String> lore, MenuAction action, MenuAction rightClickAction, MenuAction shiftLeftAction, MenuAction shiftRightAction) {
         ItemStack item = GuiItems.item(material, name, lore);
         menu.inventory.setItem(slot, item);
         menu.actions.put(slot, action);
+        if (rightClickAction != null) {
+            menu.rightClickActions.put(slot, rightClickAction);
+        }
+        if (shiftLeftAction != null) {
+            menu.shiftLeftActions.put(slot, shiftLeftAction);
+        }
+        if (shiftRightAction != null) {
+            menu.shiftRightActions.put(slot, shiftRightAction);
+        }
     }
 
     private void open(Player player, Menu menu) {
-        actions.put(player.getUniqueId(), menu.actions);
+        actions.put(player.getUniqueId(), new PlayerMenuActions(menu.actions, menu.rightClickActions, menu.shiftLeftActions, menu.shiftRightActions));
         player.openInventory(menu.inventory);
     }
 
@@ -398,7 +669,22 @@ public final class MenuManager implements Listener {
             return;
         }
         event.setCancelled(true);
-        MenuAction action = actions.getOrDefault(player.getUniqueId(), Map.of()).get(event.getRawSlot());
+        PlayerMenuActions playerActions = actions.getOrDefault(player.getUniqueId(), new PlayerMenuActions(Map.of(), Map.of(), Map.of(), Map.of()));
+        MenuAction action = null;
+        if (event.getClick() == ClickType.SHIFT_RIGHT) {
+            action = playerActions.shiftRightActions().get(event.getRawSlot());
+        }
+        if (action == null && event.getClick() == ClickType.SHIFT_LEFT) {
+            action = playerActions.shiftLeftActions().get(event.getRawSlot());
+        }
+        if (action == null) {
+            action = event.getClick() == ClickType.RIGHT || event.getClick() == ClickType.SHIFT_RIGHT
+                ? playerActions.rightClickActions().get(event.getRawSlot())
+                : playerActions.actions().get(event.getRawSlot());
+        }
+        if (action == null) {
+            action = playerActions.actions().get(event.getRawSlot());
+        }
         if (action != null) {
             action.click(player);
         }
@@ -416,6 +702,9 @@ public final class MenuManager implements Listener {
         }
     }
 
-    private record Menu(Inventory inventory, Map<Integer, MenuAction> actions) {
+    private record Menu(Inventory inventory, Map<Integer, MenuAction> actions, Map<Integer, MenuAction> rightClickActions, Map<Integer, MenuAction> shiftLeftActions, Map<Integer, MenuAction> shiftRightActions) {
+    }
+
+    private record PlayerMenuActions(Map<Integer, MenuAction> actions, Map<Integer, MenuAction> rightClickActions, Map<Integer, MenuAction> shiftLeftActions, Map<Integer, MenuAction> shiftRightActions) {
     }
 }
