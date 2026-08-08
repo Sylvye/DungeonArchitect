@@ -1,0 +1,15 @@
+name: DungeonArchitect
+main: com.dungeonarchitect.DungeonArchitectPlugin
+version: ${version}
+api-version: '1.21'
+author: DungeonArchitect
+description: Developer-authored procedural dungeon foundation for Paper.
+commands:
+  da:
+    description: DungeonArchitect commands
+    usage: /da
+    permission: dungeonarchitect.admin
+permissions:
+  dungeonarchitect.admin:
+    description: Allows authoring, generation, debugging, and instance management.
+    default: op

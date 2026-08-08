@@ -1,0 +1,13 @@
+generation:
+  default-room-count: 6
+  max-placement-attempts: 250
+
+worlds:
+  name-prefix: "da_"
+  spawn-y: 80
+  delete-on-destroy: true
+
+authoring:
+  wand-material: "BLAZE_ROD"
+  default-category: "GENERIC"
+  default-weight: 10
