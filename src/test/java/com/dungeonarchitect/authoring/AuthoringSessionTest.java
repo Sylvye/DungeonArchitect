@@ -16,7 +16,6 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Set;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class AuthoringSessionTest {
@@ -50,34 +49,46 @@ final class AuthoringSessionTest {
     }
 
     @Test
-    void componentSelectionRecordsTypeAndId() {
+    void componentSelectionRecordsTypeAndIdWithoutChangingCurrentSelection() {
         AuthoringSession session = new AuthoringSession("room");
-        SelectionBounds componentBounds = SelectionBounds.between(new IntVector3(4, 5, 6), new IntVector3(4, 7, 8));
+        SelectionBounds current = SelectionBounds.between(new IntVector3(1, 2, 3), new IntVector3(2, 3, 4));
+        session.selectCurrentBounds(current);
 
-        session.selectComponentBounds("door", "door_a", componentBounds);
+        session.selectComponent("door", "door_a");
 
-        assertEquals(componentBounds, session.currentSelection().orElseThrow());
+        assertEquals(current, session.currentSelection().orElseThrow());
         assertEquals(new AuthoringSession.SelectedComponent("door", "door_a"), session.selectedComponent().orElseThrow());
     }
 
     @Test
-    void manualSelectionClearsSelectedComponent() {
+    void manualSelectionKeepsSelectedComponentForBoundsEditing() {
         AuthoringSession session = new AuthoringSession("room");
-        session.selectComponentBounds("feature", "feature_a", SelectionBounds.between(new IntVector3(4, 5, 6), new IntVector3(4, 7, 8)));
+        session.selectComponent("feature", "feature_a");
 
         session.setPosition(1, new org.bukkit.Location(fakeWorld(), 1, 2, 3));
 
-        assertFalse(session.selectedComponent().isPresent());
+        assertEquals(new AuthoringSession.SelectedComponent("feature", "feature_a"), session.selectedComponent().orElseThrow());
     }
 
     @Test
-    void arbitraryBoundsClearSelectedComponent() {
+    void arbitraryBoundsKeepSelectedComponentForBoundsEditing() {
         AuthoringSession session = new AuthoringSession("room");
-        session.selectComponentBounds("marker", "spawn", SelectionBounds.between(new IntVector3(4, 5, 6), new IntVector3(4, 5, 6)));
+        session.selectComponent("marker", "spawn");
 
         session.selectCurrentBounds(SelectionBounds.between(new IntVector3(1, 2, 3), new IntVector3(3, 4, 5)));
 
-        assertFalse(session.selectedComponent().isPresent());
+        assertEquals(new AuthoringSession.SelectedComponent("marker", "spawn"), session.selectedComponent().orElseThrow());
+    }
+
+    @Test
+    void deletingSelectedComponentClearsSelection() {
+        AuthoringSession session = new AuthoringSession("room");
+        session.addDoor("door_a", new IntVector3(1, 1, 0), Direction3.NORTH, SocketType.STANDARD, 1, 2);
+        session.selectComponent("door", "door_a");
+
+        assertTrue(session.removeDoor("door_a"));
+
+        assertTrue(session.selectedComponent().isEmpty());
     }
 
     @Test
@@ -96,6 +107,31 @@ final class AuthoringSessionTest {
         assertEquals("marker_c", session.markers().getFirst().name());
         assertEquals("slot_c", session.featureSlots().getFirst().id());
         org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class, () -> session.renameDoor("door_c", "door_b"));
+    }
+
+    @Test
+    void updatesComponentBoundsAndPreservesMetadata() {
+        AuthoringSession session = new AuthoringSession("room");
+        session.addDoor("door_a", new IntVector3(1, 1, 0), Direction3.NORTH, SocketType.STANDARD, 1, 2);
+        session.addMarker("marker_a", "spawn", new IntVector3(1, 1, 1));
+        session.addFeatureSlot(new RoomFeatureSlot("slot_a", new IntVector3(1, 1, 1), new IntVector3(1, 1, 1), Direction3.SOUTH));
+
+        assertTrue(session.updateDoorBounds("door_a", SelectionBounds.between(new IntVector3(2, 3, 0), new IntVector3(4, 6, 0))));
+        assertTrue(session.updateMarkerPosition("marker_a", new IntVector3(5, 6, 7)));
+        assertTrue(session.updateFeatureSlotBounds("slot_a", SelectionBounds.between(new IntVector3(8, 1, 8), new IntVector3(10, 2, 11))));
+
+        DoorSocket door = session.doors().getFirst();
+        assertEquals(new IntVector3(2, 3, 0), door.position());
+        assertEquals(Direction3.NORTH, door.facing());
+        assertEquals(SocketType.STANDARD, door.socketType());
+        assertEquals(3, door.width());
+        assertEquals(4, door.height());
+        assertEquals(new IntVector3(5, 6, 7), session.markers().getFirst().position());
+        RoomFeatureSlot slot = session.featureSlots().getFirst();
+        assertEquals(new IntVector3(8, 1, 8), slot.position());
+        assertEquals(new IntVector3(3, 2, 4), slot.size());
+        assertEquals(Direction3.SOUTH, slot.facing());
+        assertEquals(1, slot.entries().size());
     }
 
     @Test

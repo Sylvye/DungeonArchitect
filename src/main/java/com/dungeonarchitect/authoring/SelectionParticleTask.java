@@ -29,21 +29,41 @@ public final class SelectionParticleTask implements Runnable {
             if (!player.hasPermission("dungeonarchitect.admin") || (!holdingWand && !holdingSelector) || !authoringManager.isInEditWorld(player)) {
                 continue;
             }
-            List<StyledOutline> outlines = new ArrayList<>();
-            if (holdingWand) {
-                authoringManager.currentSelection(player).ifPresent(bounds -> authoringManager.selectedComponent(player)
-                    .ifPresentOrElse(
-                        component -> outlines.add(StyledOutline.dust("selected:" + component.type() + ":" + component.id(), bounds, dust(component.type()))),
-                        () -> outlines.add(StyledOutline.particle("current", bounds, Particle.WAX_OFF))
-                    ));
-            }
-            if (holdingSelector) {
-                authoringManager.componentSelections(player)
-                    .forEach(selection -> outlines.add(StyledOutline.dust("component:" + selection.type() + ":" + selection.id(), selection.worldBounds(), dust(selection.type()))));
-            }
-            authoringManager.roomBounds(player).ifPresent(bounds -> outlines.add(StyledOutline.particle("bounds", bounds, Particle.WAX_ON)));
+            List<StyledOutline> outlines = buildOutlines(
+                holdingWand,
+                holdingSelector,
+                authoringManager.currentSelection(player),
+                authoringManager.selectedComponentSelection(player),
+                authoringManager.componentSelections(player),
+                authoringManager.roomBounds(player)
+            );
             drawOutlines(player, outlines);
         }
+    }
+
+    static List<StyledOutline> buildOutlines(boolean holdingWand, boolean holdingSelector, java.util.Optional<SelectionBounds> currentSelection, java.util.Optional<AuthoringManager.ComponentSelection> selected, List<AuthoringManager.ComponentSelection> components, java.util.Optional<SelectionBounds> roomBounds) {
+        List<StyledOutline> outlines = new ArrayList<>();
+        if (holdingWand) {
+            currentSelection.ifPresent(bounds -> outlines.add(StyledOutline.particle("current", bounds, Particle.WAX_OFF)));
+        }
+        if (holdingWand || holdingSelector) {
+            selected.ifPresent(selection -> outlines.add(componentOutline("selected", selection)));
+        }
+        if (holdingSelector) {
+            components.stream()
+                .filter(selection -> selected.isEmpty() || !sameComponent(selection, selected.get()))
+                .forEach(selection -> outlines.add(componentOutline("component", selection)));
+        }
+        roomBounds.ifPresent(bounds -> outlines.add(StyledOutline.particle("bounds", bounds, Particle.WAX_ON)));
+        return List.copyOf(outlines);
+    }
+
+    private static StyledOutline componentOutline(String prefix, AuthoringManager.ComponentSelection selection) {
+        return StyledOutline.dust(prefix + ":" + selection.type() + ":" + selection.id(), selection.worldBounds(), dust(selection.type()));
+    }
+
+    private static boolean sameComponent(AuthoringManager.ComponentSelection first, AuthoringManager.ComponentSelection second) {
+        return first.type().equals(second.type()) && first.id().equalsIgnoreCase(second.id());
     }
 
     private void drawOutlines(Player player, List<StyledOutline> outlines) {
@@ -67,7 +87,7 @@ public final class SelectionParticleTask implements Runnable {
         }
     }
 
-    private Particle.DustOptions dust(String type) {
+    private static Particle.DustOptions dust(String type) {
         return switch (type) {
             case "door" -> DOOR_DUST;
             case "marker" -> MARKER_DUST;
@@ -76,7 +96,7 @@ public final class SelectionParticleTask implements Runnable {
         };
     }
 
-    private record StyledOutline(String key, SelectionBounds bounds, Particle particle, Particle.DustOptions dust) {
+    record StyledOutline(String key, SelectionBounds bounds, Particle particle, Particle.DustOptions dust) {
         private static StyledOutline particle(String key, SelectionBounds bounds, Particle particle) {
             return new StyledOutline(key, bounds, particle, null);
         }

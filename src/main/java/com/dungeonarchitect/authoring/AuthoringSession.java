@@ -60,7 +60,6 @@ public final class AuthoringSession {
         } else {
             pos2 = vector;
         }
-        selectedComponent = null;
     }
 
     public Optional<World> world() {
@@ -138,17 +137,18 @@ public final class AuthoringSession {
     public void selectCurrentBounds(SelectionBounds bounds) {
         pos1 = bounds.min();
         pos2 = bounds.max();
-        selectedComponent = null;
     }
 
-    public void selectComponentBounds(String type, String id, SelectionBounds bounds) {
-        pos1 = bounds.min();
-        pos2 = bounds.max();
+    public void selectComponent(String type, String id) {
         selectedComponent = new SelectedComponent(type, id);
     }
 
     public Optional<SelectedComponent> selectedComponent() {
         return Optional.ofNullable(selectedComponent);
+    }
+
+    public void clearSelectedComponent() {
+        selectedComponent = null;
     }
 
     public void loadTemplateForEdit(RoomTemplate template, World world, IntVector3 origin) {
@@ -205,7 +205,9 @@ public final class AuthoringSession {
     }
 
     public boolean removeDoor(String id) {
-        return doors.removeIf(door -> door.id().equalsIgnoreCase(id));
+        boolean removed = doors.removeIf(door -> door.id().equalsIgnoreCase(id));
+        clearSelectedComponent("door", id, removed);
+        return removed;
     }
 
     public boolean renameDoor(String oldId, String newId) {
@@ -223,8 +225,24 @@ public final class AuthoringSession {
         return false;
     }
 
+    public boolean updateDoorBounds(String id, SelectionBounds localBounds) {
+        IntVector3 size = localBounds.size();
+        int width = Math.max(size.x(), size.z());
+        int height = size.y();
+        for (int i = 0; i < doors.size(); i++) {
+            DoorSocket door = doors.get(i);
+            if (door.id().equalsIgnoreCase(id)) {
+                doors.set(i, new DoorSocket(door.id(), localBounds.min(), door.facing(), door.socketType(), width, height));
+                return true;
+            }
+        }
+        return false;
+    }
+
     public boolean removeMarker(String id) {
-        return markers.removeIf(marker -> marker.name().equalsIgnoreCase(id));
+        boolean removed = markers.removeIf(marker -> marker.name().equalsIgnoreCase(id));
+        clearSelectedComponent("marker", id, removed);
+        return removed;
     }
 
     public boolean renameMarker(String oldId, String newId) {
@@ -242,8 +260,21 @@ public final class AuthoringSession {
         return false;
     }
 
+    public boolean updateMarkerPosition(String id, IntVector3 localPosition) {
+        for (int i = 0; i < markers.size(); i++) {
+            RoomMarker marker = markers.get(i);
+            if (marker.name().equalsIgnoreCase(id)) {
+                markers.set(i, new RoomMarker(marker.name(), marker.type(), localPosition));
+                return true;
+            }
+        }
+        return false;
+    }
+
     public boolean removeFeature(String id) {
-        return featureSlots.removeIf(slot -> slot.id().equalsIgnoreCase(id));
+        boolean removed = featureSlots.removeIf(slot -> slot.id().equalsIgnoreCase(id));
+        clearSelectedComponent("feature", id, removed);
+        return removed;
     }
 
     public boolean renameFeatureSlot(String oldId, String newId) {
@@ -255,6 +286,17 @@ public final class AuthoringSession {
             if (slot.id().equalsIgnoreCase(oldId)) {
                 featureSlots.set(i, new RoomFeatureSlot(newId, slot.position(), slot.size(), slot.facing(), slot.entries()));
                 selectedComponent = null;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public boolean updateFeatureSlotBounds(String id, SelectionBounds localBounds) {
+        for (int i = 0; i < featureSlots.size(); i++) {
+            RoomFeatureSlot slot = featureSlots.get(i);
+            if (slot.id().equalsIgnoreCase(id)) {
+                featureSlots.set(i, new RoomFeatureSlot(slot.id(), localBounds.min(), localBounds.size(), slot.facing(), slot.entries()));
                 return true;
             }
         }
@@ -281,6 +323,15 @@ public final class AuthoringSession {
 
     public List<RoomFeatureSlot> featureSlots() {
         return List.copyOf(featureSlots);
+    }
+
+    private void clearSelectedComponent(String type, String id, boolean changed) {
+        if (!changed || selectedComponent == null) {
+            return;
+        }
+        if (selectedComponent.type().equalsIgnoreCase(type) && selectedComponent.id().equalsIgnoreCase(id)) {
+            selectedComponent = null;
+        }
     }
 
     public record Bounds(IntVector3 min, IntVector3 max, IntVector3 size) {

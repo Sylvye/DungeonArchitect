@@ -100,7 +100,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
         sender.sendMessage(Component.text("/da room create <id> | edit <id> | cancel | bounds | door [id] [socket] [facing]"));
         sender.sendMessage(Component.text("/da room marker add <name> [type] | feature [slotName]"));
         sender.sendMessage(Component.text("/da feature create <id> | bounds | save [id] | edit <id> | inspect <id> | validate <id|all> | delete <id>"));
-        sender.sendMessage(Component.text("/da room component select <door|marker|feature> <id> | remove <door|marker|feature> <id>"));
+        sender.sendMessage(Component.text("/da room component <select|remove|bounds|rename> [door|marker|feature] [id] [newId]"));
         sender.sendMessage(Component.text("/da room save [id] | inspect <id> | validate <id|all> | delete <id>"));
         sender.sendMessage(Component.text("/da reload | generate <roomCount> [seed] | list | debug instance [id|#n] | debug room"));
         sender.sendMessage(Component.text("/da teleport [instance|#n] <roomIndex> | destroy [instance|#n] | exit"));
@@ -288,24 +288,42 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
     }
 
     private void component(Player player, String[] args) {
-        requireArgs(args, 5, "/da room component <select|remove> <door|marker|feature> <id>");
+        requireArgs(args, 3, "/da room component <select|remove|bounds|rename> [door|marker|feature] [id] [newId]");
         String action = args[2].toLowerCase(Locale.ROOT);
-        String type = args[3].toLowerCase(Locale.ROOT);
-        String id = args[4];
-        if (!List.of("door", "marker", "feature").contains(type)) {
-            throw new IllegalArgumentException("Component type must be door, marker, or feature");
+        if (!List.of("select", "remove", "bounds", "rename").contains(action)) {
+            throw new IllegalArgumentException("Usage: /da room component <select|remove|bounds|rename> [door|marker|feature] [id] [newId]");
         }
+        ComponentCommandTarget target = ComponentCommandTarget.resolve(args, 3, authoringManager.selectedComponent(player));
         if (action.equals("select")) {
-            var selection = authoringManager.selectComponent(player, type, id);
-            player.sendMessage(Component.text("Selected " + type + " " + id + ": " + selection.worldBounds().describe()));
+            var selection = authoringManager.selectComponent(player, target.type(), target.id());
+            player.sendMessage(Component.text("Selected " + target.type() + " " + target.id() + ": " + selection.worldBounds().describe()));
             return;
         }
         if (action.equals("remove")) {
-            boolean removed = authoringManager.removeComponent(player, type, id);
-            player.sendMessage(Component.text(removed ? "Removed " + type + " " + id + "." : "No matching " + type + " named " + id + "."));
+            boolean removed = authoringManager.removeComponent(player, target.type(), target.id());
+            player.sendMessage(Component.text(removed ? "Removed " + target.type() + " " + target.id() + "." : "No matching " + target.type() + " named " + target.id() + "."));
             return;
         }
-        throw new IllegalArgumentException("Usage: /da room component <select|remove> <door|marker|feature> <id>");
+        if (action.equals("bounds")) {
+            var selection = authoringManager.updateComponentBounds(player, target.type(), target.id());
+            player.sendMessage(Component.text("Updated " + target.type() + " " + target.id() + " bounds: " + selection.worldBounds().describe()));
+            return;
+        }
+        if (action.equals("rename")) {
+            ComponentCommandTarget.renameValue(args, 3)
+                .ifPresentOrElse(
+                    newId -> renameComponent(player, target, newId),
+                    () -> menuManager.prompt(player, "Enter new " + target.type() + " id", value -> renameComponent(player, target, value.trim()))
+                );
+        }
+    }
+
+    private void renameComponent(Player player, ComponentCommandTarget target, String newId) {
+        if (newId.isBlank()) {
+            throw new IllegalArgumentException("New component id is required");
+        }
+        boolean renamed = authoringManager.renameComponent(player, target.type(), target.id(), newId);
+        player.sendMessage(Component.text(renamed ? "Renamed " + target.type() + " " + target.id() + " to " + newId + "." : "No matching " + target.type() + " named " + target.id() + "."));
     }
 
     private void save(Player player, String[] args) {
@@ -660,13 +678,16 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
         }
         if (args[0].equalsIgnoreCase("room") && args[1].equalsIgnoreCase("component")) {
             if (args.length == 3) {
-                return prefix(args[2], List.of("select", "remove"));
+                return prefix(args[2], List.of("select", "remove", "bounds", "rename"));
             }
             if (args.length == 4) {
-                return prefix(args[3], List.of("door", "marker", "feature"));
+                return prefix(args[3], ComponentCommandTarget.types());
             }
             if (args.length == 5 && sender instanceof Player player) {
                 return prefix(args[4], authoringManager.componentIds(player, args[3]));
+            }
+            if (args.length == 6 && args[2].equalsIgnoreCase("rename")) {
+                return prefix(args[5], List.of("new_id"));
             }
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("generate")) {

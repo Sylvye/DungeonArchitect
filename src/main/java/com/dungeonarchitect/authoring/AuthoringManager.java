@@ -282,7 +282,30 @@ public final class AuthoringManager {
 
     public Optional<AuthoringSession.SelectedComponent> selectedComponent(Player player) {
         AuthoringSession session = sessions.get(player.getUniqueId());
-        return session == null ? Optional.empty() : session.selectedComponent();
+        if (!isRoomComponentSession(session)) {
+            return Optional.empty();
+        }
+        return selectedComponentSelection(player)
+            .map(selection -> new AuthoringSession.SelectedComponent(selection.type(), selection.id()));
+    }
+
+    public Optional<ComponentSelection> selectedComponentSelection(Player player) {
+        AuthoringSession session = sessions.get(player.getUniqueId());
+        if (!isRoomComponentSession(session)) {
+            return Optional.empty();
+        }
+        Optional<AuthoringSession.SelectedComponent> selected = session.selectedComponent();
+        if (selected.isEmpty()) {
+            return Optional.empty();
+        }
+        AuthoringSession.SelectedComponent component = selected.get();
+        Optional<ComponentSelection> selection = componentSelections(session).stream()
+            .filter(candidate -> candidate.type().equals(component.type()) && candidate.id().equalsIgnoreCase(component.id()))
+            .findFirst();
+        if (selection.isEmpty()) {
+            session.clearSelectedComponent();
+        }
+        return selection;
     }
 
     public Optional<ComponentSelection> raycastComponent(Player player, double maxDistance) {
@@ -439,7 +462,7 @@ public final class AuthoringManager {
             .filter(component -> component.type().equals(normalizedType) && component.id().equalsIgnoreCase(id))
             .findFirst()
             .orElseThrow(() -> new IllegalArgumentException("Unknown " + normalizedType + " " + id));
-        session.selectComponentBounds(selection.type(), selection.id(), selection.worldBounds());
+        session.selectComponent(selection.type(), selection.id());
         return selection;
     }
 
@@ -473,12 +496,37 @@ public final class AuthoringManager {
         if (!isRoomComponentSession(session)) {
             throw new IllegalStateException("Save room bounds first with /da room bounds");
         }
-        return switch (type.toLowerCase(java.util.Locale.ROOT)) {
+        boolean renamed = switch (type.toLowerCase(java.util.Locale.ROOT)) {
             case "door" -> session.renameDoor(oldId, newId);
             case "marker" -> session.renameMarker(oldId, newId);
             case "feature" -> session.renameFeatureSlot(oldId, newId);
             default -> throw new IllegalArgumentException("Unknown component type " + type);
         };
+        if (renamed) {
+            selectComponent(player, type, newId);
+        }
+        return renamed;
+    }
+
+    public ComponentSelection updateComponentBounds(Player player, String type, String id) {
+        AuthoringSession session = session(player);
+        if (!isRoomComponentSession(session)) {
+            throw new IllegalStateException("Save room bounds first with /da room bounds");
+        }
+        SelectionBounds roomBounds = session.roomBounds().orElseThrow();
+        SelectionBounds current = session.currentSelection()
+            .orElseThrow(() -> new IllegalStateException("Select the new component bounds with the wand first"));
+        SelectionBounds local = current.toLocal(roomBounds);
+        boolean updated = switch (type.toLowerCase(java.util.Locale.ROOT)) {
+            case "door" -> session.updateDoorBounds(id, local);
+            case "marker" -> session.updateMarkerPosition(id, local.min());
+            case "feature" -> session.updateFeatureSlotBounds(id, local);
+            default -> throw new IllegalArgumentException("Unknown component type " + type);
+        };
+        if (!updated) {
+            throw new IllegalArgumentException("No matching " + type + " named " + id + ".");
+        }
+        return selectComponent(player, type, id);
     }
 
     public void cancelEdit(Player player) {

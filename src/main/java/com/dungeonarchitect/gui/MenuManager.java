@@ -47,6 +47,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletionException;
+import java.util.function.Consumer;
 
 public final class MenuManager implements Listener {
     private final Plugin plugin;
@@ -76,6 +77,10 @@ public final class MenuManager implements Listener {
         button(menu, 14, Material.COMPARATOR, "Config", List.of("Edit config.yml."), this::openConfig);
         button(menu, 16, Material.ENDER_PEARL, "Dungeons", List.of("Manage active dungeon instances."), this::openDungeons);
         open(player, menu);
+    }
+
+    public void prompt(Player player, String message, Consumer<String> handler) {
+        prompts.prompt(player, message, handler);
     }
 
     public void openRooms(Player player) {
