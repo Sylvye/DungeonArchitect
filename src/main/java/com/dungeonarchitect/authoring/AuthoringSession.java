@@ -33,6 +33,7 @@ public final class AuthoringSession {
     private boolean editingExistingRoom;
     private boolean featureSession;
     private boolean editingExistingFeature;
+    private SelectedComponent selectedComponent;
     private final List<DoorSocket> doors = new ArrayList<>();
     private final List<RoomMarker> markers = new ArrayList<>();
     private final List<RoomFeatureSlot> featureSlots = new ArrayList<>();
@@ -59,6 +60,7 @@ public final class AuthoringSession {
         } else {
             pos2 = vector;
         }
+        selectedComponent = null;
     }
 
     public Optional<World> world() {
@@ -136,6 +138,17 @@ public final class AuthoringSession {
     public void selectCurrentBounds(SelectionBounds bounds) {
         pos1 = bounds.min();
         pos2 = bounds.max();
+        selectedComponent = null;
+    }
+
+    public void selectComponentBounds(String type, String id, SelectionBounds bounds) {
+        pos1 = bounds.min();
+        pos2 = bounds.max();
+        selectedComponent = new SelectedComponent(type, id);
+    }
+
+    public Optional<SelectedComponent> selectedComponent() {
+        return Optional.ofNullable(selectedComponent);
     }
 
     public void loadTemplateForEdit(RoomTemplate template, World world, IntVector3 origin) {
@@ -195,12 +208,57 @@ public final class AuthoringSession {
         return doors.removeIf(door -> door.id().equalsIgnoreCase(id));
     }
 
+    public boolean renameDoor(String oldId, String newId) {
+        if (doors.stream().anyMatch(door -> door.id().equalsIgnoreCase(newId))) {
+            throw new IllegalArgumentException("Door already exists: " + newId);
+        }
+        for (int i = 0; i < doors.size(); i++) {
+            DoorSocket door = doors.get(i);
+            if (door.id().equalsIgnoreCase(oldId)) {
+                doors.set(i, new DoorSocket(newId, door.position(), door.facing(), door.socketType(), door.width(), door.height()));
+                selectedComponent = null;
+                return true;
+            }
+        }
+        return false;
+    }
+
     public boolean removeMarker(String id) {
         return markers.removeIf(marker -> marker.name().equalsIgnoreCase(id));
     }
 
+    public boolean renameMarker(String oldId, String newId) {
+        if (markers.stream().anyMatch(marker -> marker.name().equalsIgnoreCase(newId))) {
+            throw new IllegalArgumentException("Marker already exists: " + newId);
+        }
+        for (int i = 0; i < markers.size(); i++) {
+            RoomMarker marker = markers.get(i);
+            if (marker.name().equalsIgnoreCase(oldId)) {
+                markers.set(i, new RoomMarker(newId, marker.type(), marker.position()));
+                selectedComponent = null;
+                return true;
+            }
+        }
+        return false;
+    }
+
     public boolean removeFeature(String id) {
         return featureSlots.removeIf(slot -> slot.id().equalsIgnoreCase(id));
+    }
+
+    public boolean renameFeatureSlot(String oldId, String newId) {
+        if (featureSlots.stream().anyMatch(slot -> slot.id().equalsIgnoreCase(newId))) {
+            throw new IllegalArgumentException("Feature slot already exists: " + newId);
+        }
+        for (int i = 0; i < featureSlots.size(); i++) {
+            RoomFeatureSlot slot = featureSlots.get(i);
+            if (slot.id().equalsIgnoreCase(oldId)) {
+                featureSlots.set(i, new RoomFeatureSlot(newId, slot.position(), slot.size(), slot.facing(), slot.entries()));
+                selectedComponent = null;
+                return true;
+            }
+        }
+        return false;
     }
 
     public void addFeatureSlot(String id, String poolId, IntVector3 localPosition, Direction3 facing) {
@@ -235,5 +293,8 @@ public final class AuthoringSession {
         public IntVector3 toLocal(IntVector3 worldPosition) {
             return worldPosition.subtract(min);
         }
+    }
+
+    public record SelectedComponent(String type, String id) {
     }
 }

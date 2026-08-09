@@ -3,9 +3,11 @@ package com.dungeonarchitect.command;
 import com.dungeonarchitect.authoring.AuthoringManager;
 import com.dungeonarchitect.authoring.AuthoringSession;
 import com.dungeonarchitect.domain.Direction3;
+import com.dungeonarchitect.domain.FeatureSlotEntry;
 import com.dungeonarchitect.domain.FeatureTemplate;
 import com.dungeonarchitect.domain.RoomTemplate;
 import com.dungeonarchitect.domain.SocketType;
+import com.dungeonarchitect.feature.FeatureMatcher;
 import com.dungeonarchitect.feature.FeatureTemplateRegistry;
 import com.dungeonarchitect.feature.FeatureTemplateValidator;
 import com.dungeonarchitect.generation.DoorGeometry;
@@ -32,6 +34,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.concurrent.CompletionException;
 
 public final class DungeonArchitectCommand implements CommandExecutor, TabCompleter {
     private final String version;
@@ -68,6 +71,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
                 case "version" -> sender.sendMessage(Component.text("DungeonArchitect " + version));
                 case "reload" -> reload(sender);
                 case "wand" -> wand(sender);
+                case "selector" -> selector(sender);
                 case "gui" -> menuManager.openMain(requirePlayer(sender));
                 case "rooms" -> rooms(sender, args);
                 case "features" -> menuManager.openFeatures(requirePlayer(sender));
@@ -91,7 +95,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
 
     private void help(CommandSender sender) {
         sender.sendMessage(Component.text("/da | /da help"));
-        sender.sendMessage(Component.text("/da wand"));
+        sender.sendMessage(Component.text("/da wand | /da selector"));
         sender.sendMessage(Component.text("/da gui | rooms | rooms edit [room] | features | config | dungeons"));
         sender.sendMessage(Component.text("/da room create <id> | edit <id> | cancel | bounds | door [id] [socket] [facing]"));
         sender.sendMessage(Component.text("/da room marker add <name> [type] | feature [slotName]"));
@@ -116,6 +120,12 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
         player.sendMessage(Component.text("DungeonArchitect wand added. Left click pos1, right click pos2."));
     }
 
+    private void selector(CommandSender sender) {
+        Player player = requirePlayer(sender);
+        player.getInventory().addItem(authoringManager.createSelector());
+        player.sendMessage(Component.text("DungeonArchitect selector added. Hold to outline room components; right click to ray-select one."));
+    }
+
     private void room(CommandSender sender, String[] args) {
         Player player = requirePlayer(sender);
         if (args.length < 2) {
@@ -124,9 +134,16 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
         switch (args[1].toLowerCase(Locale.ROOT)) {
             case "create" -> {
                 requireArgs(args, 3, "/da room create <id>");
-                authoringManager.createSession(player, args[2]);
-                player.sendMessage(Component.text("Authoring room " + args[2] + " in da_edit. Previous selection, bounds, doors, markers, and features were cleared."));
-                player.sendMessage(Component.text("Use /da wand to select bounds, then /da room bounds."));
+                String roomId = args[2];
+                player.sendMessage(Component.text("Preparing isolated edit workspace for room " + roomId + "..."));
+                authoringManager.createSession(player, roomId).whenComplete((session, error) -> {
+                    if (error != null) {
+                        player.sendMessage(Component.text("Failed to start room edit: " + message(error)));
+                        return;
+                    }
+                    player.sendMessage(Component.text("Authoring room " + roomId + " in da_edit. Previous workspace blocks were cleared."));
+                    player.sendMessage(Component.text("Use /da wand to select bounds, then /da room bounds."));
+                });
             }
             case "edit" -> editRoom(player, args);
             case "cancel" -> {
@@ -173,12 +190,14 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
         requireArgs(args, 3, "/da room edit <id>");
         RoomTemplate template = templateRegistry.get(args[2])
             .orElseThrow(() -> new IllegalArgumentException("Unknown room template " + args[2]));
-        try {
-            authoringManager.editSession(player, template);
+        player.sendMessage(Component.text("Preparing isolated edit workspace for room " + template.id() + "..."));
+        authoringManager.editSession(player, template).whenComplete((session, error) -> {
+            if (error != null) {
+                player.sendMessage(Component.text("Failed to paste room for editing: " + message(error)));
+                return;
+            }
             player.sendMessage(Component.text("Pasted " + template.id() + " into the edit world. Save with /da room save."));
-        } catch (Exception ex) {
-            throw new IllegalArgumentException("Failed to paste room for editing: " + ex.getMessage(), ex);
-        }
+        });
     }
 
     private void bounds(Player player) {
@@ -204,7 +223,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
         var local = authoringManager.targetedLocalPosition(player)
             .orElseThrow(() -> new IllegalArgumentException("Look at a block inside selected bounds"));
         String type = args.length >= 5 ? args[4] : "generic";
-        authoringManager.session(player).addMarker(args[3], type, local);
+        authoringManager.addMarker(player, args[3], type, local);
         player.sendMessage(Component.text("Added marker " + args[3] + " at " + local + "."));
     }
 
@@ -222,8 +241,15 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
         switch (args[1].toLowerCase(Locale.ROOT)) {
             case "create" -> {
                 requireArgs(args, 3, "/da feature create <id>");
-                authoringManager.createFeatureSession(player, args[2]);
-                player.sendMessage(Component.text("Authoring feature " + args[2] + " in da_edit. Select bounds, then /da feature bounds."));
+                String featureId = args[2];
+                player.sendMessage(Component.text("Preparing isolated edit workspace for feature " + featureId + "..."));
+                authoringManager.createFeatureSession(player, featureId).whenComplete((session, error) -> {
+                    if (error != null) {
+                        player.sendMessage(Component.text("Failed to start feature edit: " + message(error)));
+                        return;
+                    }
+                    player.sendMessage(Component.text("Authoring feature " + featureId + " in da_edit. Select bounds, then /da feature bounds."));
+                });
             }
             case "bounds" -> {
                 var bounds = authoringManager.saveCurrentSelectionAsRoomBounds(player);
@@ -245,12 +271,14 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
                 requireArgs(args, 3, "/da feature edit <id>");
                 FeatureTemplate template = featureRegistry.get(args[2])
                     .orElseThrow(() -> new IllegalArgumentException("Unknown feature template " + args[2]));
-                try {
-                    authoringManager.editFeatureSession(player, template);
+                player.sendMessage(Component.text("Preparing isolated edit workspace for feature " + template.id() + "..."));
+                authoringManager.editFeatureSession(player, template).whenComplete((session, error) -> {
+                    if (error != null) {
+                        player.sendMessage(Component.text("Failed to paste feature for editing: " + message(error)));
+                        return;
+                    }
                     player.sendMessage(Component.text("Pasted feature " + template.id() + " into the edit world. Save with /da feature save."));
-                } catch (Exception ex) {
-                    throw new IllegalArgumentException("Failed to paste feature for editing: " + ex.getMessage(), ex);
-                }
+                });
             }
             case "inspect" -> inspectFeature(sender, args);
             case "validate" -> validateFeature(sender, args);
@@ -325,6 +353,28 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
         }
         sender.sendMessage(Component.text("doors=" + template.doors().size() + " markers=" + template.markers().size() + " features=" + template.featureSlots().size()));
         template.doors().forEach(door -> sender.sendMessage(Component.text("door " + door.id() + " pos=" + door.position() + " facing=" + door.facing() + " socket=" + door.socketType() + " size=" + door.width() + "x" + door.height())));
+        template.featureSlots().forEach(slot -> {
+            sender.sendMessage(Component.text("featureSlot " + slot.id() + " pos=" + slot.position() + " size=" + slot.size() + " entries=" + slot.entries().size()));
+            if (slot.entries().isEmpty()) {
+                sender.sendMessage(Component.text("  no entries selected; this slot always pastes nothing"));
+            }
+            slot.entries().forEach(entry -> sender.sendMessage(Component.text("  " + describeFeatureEntry(slot, entry))));
+        });
+    }
+
+    private String describeFeatureEntry(com.dungeonarchitect.domain.RoomFeatureSlot slot, FeatureSlotEntry entry) {
+        if (entry.featureId().equals(FeatureSlotEntry.EMPTY)) {
+            return "empty weight=" + entry.weight() + " OK";
+        }
+        FeatureTemplate feature = featureRegistry.get(entry.featureId()).orElse(null);
+        if (feature == null) {
+            return entry.featureId() + " weight=" + entry.weight() + " UNKNOWN";
+        }
+        var rotation = FeatureMatcher.rotationFor(slot.size(), feature.size());
+        if (rotation == null) {
+            return entry.featureId() + " weight=" + entry.weight() + " SIZE_MISMATCH featureSize=" + feature.size();
+        }
+        return entry.featureId() + " weight=" + entry.weight() + " OK featureSize=" + feature.size() + " rotation=" + rotation;
     }
 
     private void deleteRoom(CommandSender sender, String[] args) {
@@ -394,11 +444,11 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
             player.sendMessage(Component.text("Exited da_edit."));
             return;
         }
-        if (dungeonManager.getDungeon(player).isEmpty()) {
-            throw new IllegalArgumentException("You are not in a dungeon");
+        if (dungeonManager.exitDungeon(player)) {
+            player.sendMessage(Component.text("Exited dungeon."));
+            return;
         }
-        dungeonManager.exitDungeon(player);
-        player.sendMessage(Component.text("Exited dungeon."));
+        throw new IllegalArgumentException("You are not in a dungeon or edit world");
     }
 
     private void list(CommandSender sender) {
@@ -517,6 +567,14 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
         }
     }
 
+    private String message(Throwable throwable) {
+        Throwable current = throwable;
+        while (current instanceof CompletionException && current.getCause() != null) {
+            current = current.getCause();
+        }
+        return current.getMessage();
+    }
+
     private void sendValidation(CommandSender sender, TemplateValidationResult result) {
         if (result.valid()) {
             sender.sendMessage(Component.text("Validation OK."));
@@ -531,7 +589,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
     @Override
     public @Nullable List<String> onTabComplete(@NotNull CommandSender sender, @NotNull Command command, @NotNull String label, @NotNull String[] args) {
         if (args.length == 1) {
-            return prefix(args[0], List.of("help", "version", "reload", "wand", "gui", "rooms", "features", "config", "dungeons", "exit", "room", "feature", "generate", "list", "debug", "teleport", "destroy"));
+            return prefix(args[0], List.of("help", "version", "reload", "wand", "selector", "gui", "rooms", "features", "config", "dungeons", "exit", "room", "feature", "generate", "list", "debug", "teleport", "destroy"));
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("room")) {
             return prefix(args[1], List.of("create", "edit", "cancel", "bounds", "pos1", "pos2", "door", "marker", "feature", "component", "save", "inspect", "validate", "delete"));

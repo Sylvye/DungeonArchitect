@@ -20,36 +20,63 @@ import java.io.IOException;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Random;
+import java.util.logging.Logger;
 
 public final class FeatureService {
     private final FeatureTemplateRegistry registry;
     private final RoomStructureService structureService;
+    private final Logger logger;
 
     public FeatureService(FeatureTemplateRegistry registry, RoomStructureService structureService) {
+        this(registry, structureService, Logger.getLogger("DungeonArchitect"));
+    }
+
+    public FeatureService(FeatureTemplateRegistry registry, RoomStructureService structureService, Logger logger) {
         this.registry = registry;
         this.structureService = structureService;
+        this.logger = logger;
     }
 
     public void placeFeatures(World world, RoomTemplate template, RoomTransform roomTransform, long dungeonSeed, int nodeIndex) throws IOException {
         for (RoomFeatureSlot slot : template.featureSlots()) {
-            FeatureSlotEntry selected = select(slot.entries(), new Random(dungeonSeed ^ slot.id().hashCode() ^ nodeIndex));
-            if (selected.featureId().equals(FeatureSlotEntry.EMPTY)) {
+            FeatureRollResult roll = roll(slot, new Random(dungeonSeed ^ slot.id().hashCode() ^ nodeIndex));
+            if (roll.status() == FeatureRollStatus.EMPTY || roll.status() == FeatureRollStatus.NO_ENTRIES) {
                 continue;
             }
-            FeatureTemplate feature = registry.get(selected.featureId()).orElse(null);
-            if (feature == null) {
+            if (roll.status() == FeatureRollStatus.UNKNOWN_FEATURE || roll.status() == FeatureRollStatus.SIZE_MISMATCH) {
+                logger.warning("Skipped feature slot " + template.id() + "/" + slot.id() + ": " + roll.reason());
                 continue;
             }
-            Rotation featureRotation = FeatureMatcher.rotationFor(slot.size(), feature.size());
-            if (featureRotation == null) {
-                continue;
-            }
-            placeFeature(world, roomTransform, slot, feature, featureRotation, dungeonSeed, nodeIndex);
+            FeatureTemplate feature = registry.get(roll.selectedFeatureId()).orElseThrow();
+            placeFeature(world, roomTransform, slot, feature, roll.rotation(), dungeonSeed, nodeIndex);
         }
     }
 
+    public FeatureRollResult roll(RoomFeatureSlot slot, Random random) {
+        if (slot.entries().isEmpty()) {
+            return FeatureRollResult.noEntries(slot);
+        }
+        FeatureSlotEntry selected = select(slot.entries(), random);
+        int total = totalWeight(slot.entries());
+        if (selected.featureId().equals(FeatureSlotEntry.EMPTY)) {
+            return new FeatureRollResult(slot.id(), slot.entries(), selected.featureId(), selected.weight(), total, FeatureRollStatus.EMPTY, "selected empty", null);
+        }
+        FeatureTemplate feature = registry.get(selected.featureId()).orElse(null);
+        if (feature == null) {
+            return new FeatureRollResult(slot.id(), slot.entries(), selected.featureId(), selected.weight(), total, FeatureRollStatus.UNKNOWN_FEATURE, "selected unknown feature " + selected.featureId(), null);
+        }
+        Rotation rotation = FeatureMatcher.rotationFor(slot.size(), feature.size());
+        if (rotation == null) {
+            return new FeatureRollResult(slot.id(), slot.entries(), selected.featureId(), selected.weight(), total, FeatureRollStatus.SIZE_MISMATCH, "selected feature " + selected.featureId() + " size " + feature.size() + " does not fit slot size " + slot.size(), null);
+        }
+        return new FeatureRollResult(slot.id(), slot.entries(), selected.featureId(), selected.weight(), total, FeatureRollStatus.SELECTED, "selected feature " + selected.featureId(), rotation);
+    }
+
     public static FeatureSlotEntry select(List<FeatureSlotEntry> entries, Random random) {
-        int total = entries.stream().mapToInt(FeatureSlotEntry::weight).sum();
+        int total = totalWeight(entries);
+        if (total <= 0) {
+            throw new IllegalArgumentException("Feature entries must have positive total weight");
+        }
         int roll = random.nextInt(total);
         for (FeatureSlotEntry entry : entries) {
             roll -= entry.weight();
@@ -58,6 +85,10 @@ public final class FeatureService {
             }
         }
         return entries.getLast();
+    }
+
+    private static int totalWeight(List<FeatureSlotEntry> entries) {
+        return entries.stream().mapToInt(FeatureSlotEntry::weight).sum();
     }
 
     private void placeFeature(World world, RoomTransform roomTransform, RoomFeatureSlot slot, FeatureTemplate feature, Rotation featureRotation, long dungeonSeed, int nodeIndex) throws IOException {
@@ -72,6 +103,13 @@ public final class FeatureService {
         IntVector3 origin = transformedLocalBounds(roomTransform, localFeatureMin, rotatedFeatureSize).min();
         RoomTransform featureTransform = new RoomTransform(origin, worldRotation, feature.size());
         IntVector3 pasteOrigin = RoomStructurePlacer.pasteOrigin(featureTransform);
+        logger.info("Placing feature " + feature.id()
+            + " slot=" + slot.id()
+            + " origin=" + origin
+            + " pasteOrigin=" + pasteOrigin
+            + " rotation=" + worldRotation
+            + " featureSize=" + feature.size()
+            + " slotSize=" + slot.size());
         structure.place(
             new Location(world, pasteOrigin.x(), pasteOrigin.y(), pasteOrigin.z()),
             true,
@@ -118,5 +156,32 @@ public final class FeatureService {
             case CLOCKWISE_180 -> StructureRotation.CLOCKWISE_180;
             case COUNTERCLOCKWISE_90 -> StructureRotation.COUNTERCLOCKWISE_90;
         };
+    }
+
+    public enum FeatureRollStatus {
+        NO_ENTRIES,
+        EMPTY,
+        UNKNOWN_FEATURE,
+        SIZE_MISMATCH,
+        SELECTED
+    }
+
+    public record FeatureRollResult(
+        String slotId,
+        List<FeatureSlotEntry> entries,
+        String selectedFeatureId,
+        int selectedWeight,
+        int totalWeight,
+        FeatureRollStatus status,
+        String reason,
+        Rotation rotation
+    ) {
+        public FeatureRollResult {
+            entries = List.copyOf(entries);
+        }
+
+        private static FeatureRollResult noEntries(RoomFeatureSlot slot) {
+            return new FeatureRollResult(slot.id(), List.of(), null, 0, 0, FeatureRollStatus.NO_ENTRIES, "slot has no feature entries", null);
+        }
     }
 }

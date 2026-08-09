@@ -199,17 +199,26 @@ public final class DungeonManager {
         Bukkit.getPluginManager().callEvent(new DungeonDestroyedEvent(instance));
     }
 
-    public void exitDungeon(Player player) {
+    public boolean exitDungeon(Player player) {
         Optional<DungeonInstance> instance = getDungeon(player);
-        if (instance.isEmpty()) {
-            return;
-        }
-        playerInstances.remove(player.getUniqueId());
-        playerRooms.remove(player.getUniqueId());
         World defaultWorld = Bukkit.getWorlds().isEmpty() ? null : Bukkit.getWorlds().getFirst();
-        if (defaultWorld != null && player.getWorld().getName().equals(instance.get().worldName())) {
-            player.teleport(defaultWorld.getSpawnLocation());
+        if (instance.isPresent()) {
+            playerInstances.remove(player.getUniqueId());
+            playerRooms.remove(player.getUniqueId());
+            if (defaultWorld != null && player.getWorld().getName().equals(instance.get().worldName())) {
+                player.teleport(defaultWorld.getSpawnLocation());
+            }
+            return true;
         }
+        if (defaultWorld != null && worldManager.isDungeonWorld(player.getWorld())) {
+            player.teleport(defaultWorld.getSpawnLocation());
+            return true;
+        }
+        return false;
+    }
+
+    public boolean isDungeonWorld(World world) {
+        return worldManager.isDungeonWorld(world);
     }
 
     public Optional<DungeonInstance> getDungeonByAliasOrId(String value) {

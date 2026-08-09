@@ -16,6 +16,7 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Set;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class AuthoringSessionTest {
@@ -46,6 +47,55 @@ final class AuthoringSessionTest {
         session.selectCurrentBounds(componentBounds);
 
         assertEquals(componentBounds, session.currentSelection().orElseThrow());
+    }
+
+    @Test
+    void componentSelectionRecordsTypeAndId() {
+        AuthoringSession session = new AuthoringSession("room");
+        SelectionBounds componentBounds = SelectionBounds.between(new IntVector3(4, 5, 6), new IntVector3(4, 7, 8));
+
+        session.selectComponentBounds("door", "door_a", componentBounds);
+
+        assertEquals(componentBounds, session.currentSelection().orElseThrow());
+        assertEquals(new AuthoringSession.SelectedComponent("door", "door_a"), session.selectedComponent().orElseThrow());
+    }
+
+    @Test
+    void manualSelectionClearsSelectedComponent() {
+        AuthoringSession session = new AuthoringSession("room");
+        session.selectComponentBounds("feature", "feature_a", SelectionBounds.between(new IntVector3(4, 5, 6), new IntVector3(4, 7, 8)));
+
+        session.setPosition(1, new org.bukkit.Location(fakeWorld(), 1, 2, 3));
+
+        assertFalse(session.selectedComponent().isPresent());
+    }
+
+    @Test
+    void arbitraryBoundsClearSelectedComponent() {
+        AuthoringSession session = new AuthoringSession("room");
+        session.selectComponentBounds("marker", "spawn", SelectionBounds.between(new IntVector3(4, 5, 6), new IntVector3(4, 5, 6)));
+
+        session.selectCurrentBounds(SelectionBounds.between(new IntVector3(1, 2, 3), new IntVector3(3, 4, 5)));
+
+        assertFalse(session.selectedComponent().isPresent());
+    }
+
+    @Test
+    void renamesComponentsAndRejectsDuplicates() {
+        AuthoringSession session = new AuthoringSession("room");
+        session.addDoor("door_a", new IntVector3(1, 1, 0), Direction3.NORTH, SocketType.STANDARD, 1, 2);
+        session.addDoor("door_b", new IntVector3(2, 1, 0), Direction3.NORTH, SocketType.STANDARD, 1, 2);
+        session.addMarker("marker_a", "generic", new IntVector3(1, 1, 1));
+        session.addFeatureSlot(new RoomFeatureSlot("slot_a", new IntVector3(1, 1, 1), new IntVector3(1, 1, 1), Direction3.NORTH));
+
+        assertTrue(session.renameDoor("door_a", "door_c"));
+        assertTrue(session.renameMarker("marker_a", "marker_c"));
+        assertTrue(session.renameFeatureSlot("slot_a", "slot_c"));
+
+        assertEquals("door_c", session.doors().getFirst().id());
+        assertEquals("marker_c", session.markers().getFirst().name());
+        assertEquals("slot_c", session.featureSlots().getFirst().id());
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class, () -> session.renameDoor("door_c", "door_b"));
     }
 
     @Test

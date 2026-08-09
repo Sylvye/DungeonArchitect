@@ -16,13 +16,7 @@ public record RoomFeatureSlot(
         if (size.x() <= 0 || size.y() <= 0 || size.z() <= 0) {
             throw new IllegalArgumentException("Feature slot size must be positive");
         }
-        if (entries == null || entries.isEmpty()) {
-            entries = List.of(new FeatureSlotEntry(FeatureSlotEntry.EMPTY, 1));
-        } else if (entries.stream().noneMatch(entry -> entry.featureId().equals(FeatureSlotEntry.EMPTY))) {
-            entries = java.util.stream.Stream.concat(entries.stream(), java.util.stream.Stream.of(new FeatureSlotEntry(FeatureSlotEntry.EMPTY, 1))).toList();
-        } else {
-            entries = List.copyOf(entries);
-        }
+        entries = entries == null ? List.of() : List.copyOf(entries);
     }
 
     public RoomFeatureSlot(String id, IntVector3 position, IntVector3 size, Direction3 facing) {

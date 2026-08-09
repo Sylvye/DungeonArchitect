@@ -55,6 +55,10 @@ public final class DungeonWorldManager {
         createWorld(new UUID(0L, 0L));
     }
 
+    public boolean isDungeonWorld(World world) {
+        return world != null && world.getName().equals(sharedWorldName);
+    }
+
     public void destroyWorld(String worldName) throws IOException {
         if (worldName.equals(sharedWorldName)) {
             return;

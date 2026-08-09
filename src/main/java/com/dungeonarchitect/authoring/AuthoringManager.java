@@ -32,38 +32,51 @@ import org.bukkit.block.structure.StructureRotation;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.persistence.PersistentDataType;
+import org.bukkit.plugin.Plugin;
+import org.bukkit.scheduler.BukkitTask;
 import org.bukkit.structure.Structure;
 import org.bukkit.util.BlockVector;
+import org.bukkit.util.Vector;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 
 public final class AuthoringManager {
     private static final String EDIT_WORLD_NAME = "da_edit";
-    private static final IntVector3 EDIT_ORIGIN = new IntVector3(0, 80, 0);
+    private static final int CLEAR_BLOCKS_PER_TICK = 50_000;
+    public static final Material SELECTOR_MATERIAL = Material.BREEZE_ROD;
+    private final Plugin plugin;
     private final Server server;
     private final Path roomsDirectory;
     private final Path featuresDirectory;
+    private final EditWorkspaceStore workspaceStore;
     private final NamespacedKey wandKey;
+    private final NamespacedKey selectorKey;
     private final Material wandMaterial;
     private final RoomCategory defaultCategory;
     private final int defaultWeight;
     private final Map<UUID, AuthoringSession> sessions = new HashMap<>();
+    private final Map<UUID, Boolean> preparingWorkspaces = new HashMap<>();
     private final RoomTemplateValidator validator = new RoomTemplateValidator();
     private final FeatureTemplateValidator featureValidator;
 
-    public AuthoringManager(Server server, Path roomsDirectory, Path featuresDirectory, NamespacedKey wandKey, Material wandMaterial, RoomCategory defaultCategory, int defaultWeight) {
+    public AuthoringManager(Plugin plugin, Server server, Path roomsDirectory, Path featuresDirectory, NamespacedKey wandKey, NamespacedKey selectorKey, Material wandMaterial, RoomCategory defaultCategory, int defaultWeight) {
+        this.plugin = plugin;
         this.server = server;
         this.roomsDirectory = roomsDirectory;
         this.featuresDirectory = featuresDirectory;
+        this.workspaceStore = new EditWorkspaceStore(roomsDirectory.getParent().resolve("edit-workspaces.yml"));
         this.wandKey = wandKey;
+        this.selectorKey = selectorKey;
         this.wandMaterial = wandMaterial;
         this.defaultCategory = defaultCategory;
         this.defaultWeight = defaultWeight;
@@ -86,81 +99,101 @@ public final class AuthoringManager {
         return item.getItemMeta().getPersistentDataContainer().has(wandKey, PersistentDataType.BYTE);
     }
 
+    public ItemStack createSelector() {
+        ItemStack item = new ItemStack(SELECTOR_MATERIAL);
+        var meta = item.getItemMeta();
+        meta.displayName(GuiItems.text("Architect's Selector", net.kyori.adventure.text.format.NamedTextColor.AQUA));
+        meta.getPersistentDataContainer().set(selectorKey, PersistentDataType.BYTE, (byte) 1);
+        item.setItemMeta(meta);
+        return item;
+    }
+
+    public boolean isSelector(ItemStack item) {
+        if (item == null || item.getType() != SELECTOR_MATERIAL || !item.hasItemMeta()) {
+            return false;
+        }
+        return item.getItemMeta().getPersistentDataContainer().has(selectorKey, PersistentDataType.BYTE);
+    }
+
     public AuthoringSession session(Player player) {
         return sessions.computeIfAbsent(player.getUniqueId(), id -> new AuthoringSession("unnamed_room"));
     }
 
-    public AuthoringSession createSession(Player player, String roomId) {
-        clearExistingEditCopy(player);
-        enterEditWorld(player);
-        AuthoringSession session = new AuthoringSession(roomId);
-        session.featureSession(false);
-        session.category(defaultCategory);
-        session.weight(defaultWeight);
-        sessions.put(player.getUniqueId(), session);
-        return session;
+    public CompletableFuture<AuthoringSession> createSession(Player player, String roomId) {
+        return prepareWorkspace(player).thenApply(workspace -> {
+            placeScaffold(editWorld(), workspace.buildOrigin());
+            AuthoringSession session = new AuthoringSession(roomId);
+            session.featureSession(false);
+            session.category(defaultCategory);
+            session.weight(defaultWeight);
+            sessions.put(player.getUniqueId(), session);
+            teleportToWorkspace(player, workspace);
+            return session;
+        });
     }
 
-    public AuthoringSession createFeatureSession(Player player, String featureId) {
+    public CompletableFuture<AuthoringSession> createFeatureSession(Player player, String featureId) {
         if (featureId.equalsIgnoreCase(com.dungeonarchitect.domain.FeatureSlotEntry.EMPTY)) {
             throw new IllegalArgumentException("empty is reserved");
         }
-        clearExistingEditCopy(player);
-        enterEditWorld(player);
-        AuthoringSession session = new AuthoringSession(featureId);
-        session.featureSession(true);
-        sessions.put(player.getUniqueId(), session);
-        return session;
+        return prepareWorkspace(player).thenApply(workspace -> {
+            placeScaffold(editWorld(), workspace.buildOrigin());
+            AuthoringSession session = new AuthoringSession(featureId);
+            session.featureSession(true);
+            sessions.put(player.getUniqueId(), session);
+            teleportToWorkspace(player, workspace);
+            return session;
+        });
     }
 
-    public AuthoringSession editSession(Player player, RoomTemplate template) throws IOException {
-        clearExistingEditCopy(player);
-        World world = editWorld();
-        Structure structure = server.getStructureManager().loadStructure(template.structureFile().toFile());
-        var size = structure.getSize();
-        IntVector3 nbtSize = new IntVector3(size.getBlockX(), size.getBlockY(), size.getBlockZ());
-        if (!nbtSize.equals(template.size())) {
-            throw new IOException("room.nbt size " + nbtSize + " does not match room.yml size " + template.size() + ". Re-save this room from the original build area first.");
-        }
-        structure.place(
-            new Location(world, EDIT_ORIGIN.x(), EDIT_ORIGIN.y(), EDIT_ORIGIN.z()),
-            true,
-            StructureRotation.NONE,
-            Mirror.NONE,
-            0,
-            RoomStructurePlacer.STRUCTURE_INTEGRITY,
-            new java.util.Random(0L)
-        );
-        AuthoringSession session = new AuthoringSession(template.id());
-        session.loadTemplateForEdit(template, world, EDIT_ORIGIN);
-        sessions.put(player.getUniqueId(), session);
-        player.teleport(new Location(world, EDIT_ORIGIN.x() + 0.5, EDIT_ORIGIN.y() + 2, EDIT_ORIGIN.z() + 0.5));
-        return session;
+    public CompletableFuture<AuthoringSession> editSession(Player player, RoomTemplate template) {
+        return prepareWorkspace(player).thenApply(workspace -> {
+            try {
+                if (!workspace.containsTemplate(template.size())) {
+                    throw new IOException("Room " + template.id() + " size " + template.size() + " is too large for the edit workspace.");
+                }
+                World world = editWorld();
+                Structure structure = server.getStructureManager().loadStructure(template.structureFile().toFile());
+                var size = structure.getSize();
+                IntVector3 nbtSize = new IntVector3(size.getBlockX(), size.getBlockY(), size.getBlockZ());
+                if (!nbtSize.equals(template.size())) {
+                    throw new IOException("room.nbt size " + nbtSize + " does not match room.yml size " + template.size() + ". Re-save this room from the original build area first.");
+                }
+                pasteStructure(world, structure, workspace.buildOrigin());
+                AuthoringSession session = new AuthoringSession(template.id());
+                session.loadTemplateForEdit(template, world, workspace.buildOrigin());
+                sessions.put(player.getUniqueId(), session);
+                teleportToWorkspace(player, workspace);
+                return session;
+            } catch (IOException ex) {
+                throw new CompletionException(ex);
+            }
+        });
     }
 
-    public AuthoringSession editFeatureSession(Player player, FeatureTemplate template) throws IOException {
-        clearExistingEditCopy(player);
-        World world = editWorld();
-        Structure structure = server.getStructureManager().loadStructure(template.structureFile().toFile());
-        var size = structure.getSize();
-        IntVector3 nbtSize = new IntVector3(size.getBlockX(), size.getBlockY(), size.getBlockZ());
-        if (!nbtSize.equals(template.size())) {
-            throw new IOException("feature.nbt size " + nbtSize + " does not match feature.yml size " + template.size() + ". Re-save this feature first.");
-        }
-        structure.place(
-            new Location(world, EDIT_ORIGIN.x(), EDIT_ORIGIN.y(), EDIT_ORIGIN.z()),
-            true,
-            StructureRotation.NONE,
-            Mirror.NONE,
-            0,
-            RoomStructurePlacer.STRUCTURE_INTEGRITY,
-            new java.util.Random(0L)
-        );
-        AuthoringSession session = new AuthoringSession(template.id());
-        session.loadFeatureForEdit(template, world, EDIT_ORIGIN);
-        sessions.put(player.getUniqueId(), session);
-        player.teleport(new Location(world, EDIT_ORIGIN.x() + 0.5, EDIT_ORIGIN.y() + 2, EDIT_ORIGIN.z() + 0.5));
-        return session;
+    public CompletableFuture<AuthoringSession> editFeatureSession(Player player, FeatureTemplate template) {
+        return prepareWorkspace(player).thenApply(workspace -> {
+            try {
+                if (!workspace.containsTemplate(template.size())) {
+                    throw new IOException("Feature " + template.id() + " size " + template.size() + " is too large for the edit workspace.");
+                }
+                World world = editWorld();
+                Structure structure = server.getStructureManager().loadStructure(template.structureFile().toFile());
+                var size = structure.getSize();
+                IntVector3 nbtSize = new IntVector3(size.getBlockX(), size.getBlockY(), size.getBlockZ());
+                if (!nbtSize.equals(template.size())) {
+                    throw new IOException("feature.nbt size " + nbtSize + " does not match feature.yml size " + template.size() + ". Re-save this feature first.");
+                }
+                pasteStructure(world, structure, workspace.buildOrigin());
+                AuthoringSession session = new AuthoringSession(template.id());
+                session.loadFeatureForEdit(template, world, workspace.buildOrigin());
+                sessions.put(player.getUniqueId(), session);
+                teleportToWorkspace(player, workspace);
+                return session;
+            } catch (IOException ex) {
+                throw new CompletionException(ex);
+            }
+        });
     }
 
     public void setSelection(Player player, int index, Location location) {
@@ -194,6 +227,20 @@ public final class AuthoringManager {
         return session == null || !session.featureSession() ? Optional.empty() : Optional.of(session.roomId());
     }
 
+    public void renameActiveRoomId(Player player, String oldId, String newId) {
+        AuthoringSession session = sessions.get(player.getUniqueId());
+        if (session != null && !session.featureSession() && session.roomId().equalsIgnoreCase(oldId)) {
+            session.roomId(newId);
+        }
+    }
+
+    public void renameActiveFeatureId(Player player, String oldId, String newId) {
+        AuthoringSession session = sessions.get(player.getUniqueId());
+        if (session != null && session.featureSession() && session.roomId().equalsIgnoreCase(oldId)) {
+            session.roomId(newId);
+        }
+    }
+
     public boolean isEditingRoom(Player player, String roomId) {
         AuthoringSession session = sessions.get(player.getUniqueId());
         return session != null && session.editingExistingRoom() && session.roomId().equalsIgnoreCase(roomId);
@@ -207,9 +254,14 @@ public final class AuthoringManager {
         return Optional.of(session);
     }
 
+    public boolean hasEditableRoomSession(Player player) {
+        AuthoringSession session = sessions.get(player.getUniqueId());
+        return isRoomComponentSession(session);
+    }
+
     public List<String> componentIds(Player player, String type) {
         AuthoringSession session = sessions.get(player.getUniqueId());
-        if (session == null || !session.editingExistingRoom()) {
+        if (!isRoomComponentSession(session)) {
             return List.of();
         }
         return switch (type.toLowerCase(java.util.Locale.ROOT)) {
@@ -218,6 +270,33 @@ public final class AuthoringManager {
             case "feature" -> session.featureSlots().stream().map(RoomFeatureSlot::id).toList();
             default -> List.of();
         };
+    }
+
+    public List<ComponentSelection> componentSelections(Player player) {
+        AuthoringSession session = sessions.get(player.getUniqueId());
+        if (!isRoomComponentSession(session)) {
+            return List.of();
+        }
+        return componentSelections(session);
+    }
+
+    public Optional<AuthoringSession.SelectedComponent> selectedComponent(Player player) {
+        AuthoringSession session = sessions.get(player.getUniqueId());
+        return session == null ? Optional.empty() : session.selectedComponent();
+    }
+
+    public Optional<ComponentSelection> raycastComponent(Player player, double maxDistance) {
+        return raycastComponentHit(player, maxDistance).map(SelectionRaycaster.Hit::value);
+    }
+
+    public Optional<SelectionRaycaster.Hit<ComponentSelection>> raycastComponentHit(Player player, double maxDistance) {
+        List<ComponentSelection> components = componentSelections(player);
+        if (components.isEmpty()) {
+            return Optional.empty();
+        }
+        Location eye = player.getEyeLocation();
+        Vector direction = eye.getDirection();
+        return SelectionRaycaster.firstHit(components, ComponentSelection::worldBounds, eye.toVector(), direction, maxDistance);
     }
 
     public Optional<IntVector3> targetedLocalPosition(Player player) {
@@ -247,6 +326,7 @@ public final class AuthoringManager {
         int width = Math.max(size.x(), size.z());
         int height = size.y();
         session.addDoor(id, local.min(), facing, socketType, width, height);
+        selectComponent(player, "door", id);
         return new DoorCreation(id, local, width, height);
     }
 
@@ -261,7 +341,14 @@ public final class AuthoringManager {
         Direction3 facing = BukkitVectors.direction(player.getFacing());
         RoomFeatureSlot slot = new RoomFeatureSlot(id, local.min(), local.size(), facing);
         session.addFeatureSlot(slot);
+        selectComponent(player, "feature", slot.id());
         return slot;
+    }
+
+    public void addMarker(Player player, String name, String type, IntVector3 localPosition) {
+        AuthoringSession session = session(player);
+        session.addMarker(name, type, localPosition);
+        selectComponent(player, "marker", name);
     }
 
     public TemplateValidationResult save(Player player, String requestedId) throws IOException {
@@ -344,31 +431,16 @@ public final class AuthoringManager {
 
     public ComponentSelection selectComponent(Player player, String type, String id) {
         AuthoringSession session = session(player);
-        if (!session.editingExistingRoom()) {
-            throw new IllegalStateException("Paste a room for editing first");
+        if (!isRoomComponentSession(session)) {
+            throw new IllegalStateException("Save room bounds first with /da room bounds");
         }
-        SelectionBounds localBounds = switch (type.toLowerCase(java.util.Locale.ROOT)) {
-            case "door" -> session.doors().stream()
-                .filter(door -> door.id().equalsIgnoreCase(id))
-                .findFirst()
-                .map(this::doorBounds)
-                .orElseThrow(() -> new IllegalArgumentException("Unknown door " + id));
-            case "marker" -> session.markers().stream()
-                .filter(marker -> marker.name().equalsIgnoreCase(id))
-                .findFirst()
-                .map(marker -> SelectionBounds.between(marker.position(), marker.position()))
-                .orElseThrow(() -> new IllegalArgumentException("Unknown marker " + id));
-            case "feature" -> session.featureSlots().stream()
-                .filter(slot -> slot.id().equalsIgnoreCase(id))
-                .findFirst()
-                .map(slot -> SelectionBounds.between(slot.position(), slot.position().add(slot.size()).subtract(new IntVector3(1, 1, 1))))
-                .orElseThrow(() -> new IllegalArgumentException("Unknown feature " + id));
-            default -> throw new IllegalArgumentException("Unknown component type " + type);
-        };
-        SelectionBounds roomBounds = session.roomBounds().orElseThrow();
-        SelectionBounds worldBounds = new SelectionBounds(roomBounds.min().add(localBounds.min()), roomBounds.min().add(localBounds.max()));
-        session.selectCurrentBounds(worldBounds);
-        return new ComponentSelection(type.toLowerCase(java.util.Locale.ROOT), id, localBounds, worldBounds);
+        String normalizedType = type.toLowerCase(java.util.Locale.ROOT);
+        ComponentSelection selection = componentSelections(session).stream()
+            .filter(component -> component.type().equals(normalizedType) && component.id().equalsIgnoreCase(id))
+            .findFirst()
+            .orElseThrow(() -> new IllegalArgumentException("Unknown " + normalizedType + " " + id));
+        session.selectComponentBounds(selection.type(), selection.id(), selection.worldBounds());
+        return selection;
     }
 
     public void highlightInvalid(Player player, TemplateValidationResult result) {
@@ -385,8 +457,8 @@ public final class AuthoringManager {
 
     public boolean removeComponent(Player player, String type, String id) {
         AuthoringSession session = session(player);
-        if (!session.editingExistingRoom()) {
-            throw new IllegalStateException("Paste a room for editing first");
+        if (!isRoomComponentSession(session)) {
+            throw new IllegalStateException("Save room bounds first with /da room bounds");
         }
         return switch (type.toLowerCase(java.util.Locale.ROOT)) {
             case "door" -> session.removeDoor(id);
@@ -396,9 +468,47 @@ public final class AuthoringManager {
         };
     }
 
+    public boolean renameComponent(Player player, String type, String oldId, String newId) {
+        AuthoringSession session = session(player);
+        if (!isRoomComponentSession(session)) {
+            throw new IllegalStateException("Save room bounds first with /da room bounds");
+        }
+        return switch (type.toLowerCase(java.util.Locale.ROOT)) {
+            case "door" -> session.renameDoor(oldId, newId);
+            case "marker" -> session.renameMarker(oldId, newId);
+            case "feature" -> session.renameFeatureSlot(oldId, newId);
+            default -> throw new IllegalArgumentException("Unknown component type " + type);
+        };
+    }
+
     public void cancelEdit(Player player) {
         clearExistingEditCopy(player);
         sessions.remove(player.getUniqueId());
+    }
+
+    private List<ComponentSelection> componentSelections(AuthoringSession session) {
+        SelectionBounds roomBounds = session.roomBounds().orElse(null);
+        if (roomBounds == null) {
+            return List.of();
+        }
+
+        List<ComponentSelection> selections = new ArrayList<>();
+        session.doors().forEach(door -> selections.add(componentSelection("door", door.id(), doorBounds(door), roomBounds)));
+        session.markers().forEach(marker -> selections.add(componentSelection("marker", marker.name(), SelectionBounds.between(marker.position(), marker.position()), roomBounds)));
+        session.featureSlots().forEach(slot -> {
+            SelectionBounds localBounds = SelectionBounds.between(slot.position(), slot.position().add(slot.size()).subtract(new IntVector3(1, 1, 1)));
+            selections.add(componentSelection("feature", slot.id(), localBounds, roomBounds));
+        });
+        return List.copyOf(selections);
+    }
+
+    private boolean isRoomComponentSession(AuthoringSession session) {
+        return session != null && !session.featureSession() && session.roomBounds().isPresent();
+    }
+
+    private ComponentSelection componentSelection(String type, String id, SelectionBounds localBounds, SelectionBounds roomBounds) {
+        SelectionBounds worldBounds = new SelectionBounds(roomBounds.min().add(localBounds.min()), roomBounds.min().add(localBounds.max()));
+        return new ComponentSelection(type, id, localBounds, worldBounds);
     }
 
     private void highlightLocal(Player player, IntVector3 local, Particle particle) {
@@ -436,6 +546,10 @@ public final class AuthoringManager {
         editWorld();
     }
 
+    public EditWorkspace workspace(Player player) {
+        return workspaceStore.workspace(player.getUniqueId());
+    }
+
     public boolean isInEditWorld(Player player) {
         return isEditWorld(player.getWorld());
     }
@@ -451,11 +565,6 @@ public final class AuthoringManager {
         player.teleport(server.getWorlds().getFirst().getSpawnLocation());
     }
 
-    private void enterEditWorld(Player player) {
-        World world = editWorld();
-        player.teleport(new Location(world, EDIT_ORIGIN.x() + 0.5, EDIT_ORIGIN.y() + 2, EDIT_ORIGIN.z() + 0.5));
-    }
-
     private void configureEditWorld(World world) {
         world.setAutoSave(false);
         world.setKeepSpawnInMemory(false);
@@ -469,6 +578,65 @@ public final class AuthoringManager {
         world.setGameRule(GameRule.DO_PATROL_SPAWNING, false);
         world.setGameRule(GameRule.DO_TRADER_SPAWNING, false);
         world.setGameRule(GameRule.DO_INSOMNIA, false);
+    }
+
+    private CompletableFuture<EditWorkspace> prepareWorkspace(Player player) {
+        UUID playerId = player.getUniqueId();
+        if (preparingWorkspaces.containsKey(playerId)) {
+            CompletableFuture<EditWorkspace> failed = new CompletableFuture<>();
+            failed.completeExceptionally(new IllegalStateException("Your edit workspace is still preparing"));
+            return failed;
+        }
+        EditWorkspace workspace = workspace(player);
+        World world = editWorld();
+        preparingWorkspaces.put(playerId, true);
+        CompletableFuture<EditWorkspace> future = new CompletableFuture<>();
+        WorkspaceClearTask clearTask = new WorkspaceClearTask(
+            world,
+            workspace.clearBounds(),
+            () -> {
+                preparingWorkspaces.remove(playerId);
+                future.complete(workspace);
+            },
+            error -> {
+                preparingWorkspaces.remove(playerId);
+                future.completeExceptionally(error);
+            }
+        );
+        clearTask.start();
+        return future;
+    }
+
+    private void teleportToWorkspace(Player player, EditWorkspace workspace) {
+        World world = editWorld();
+        IntVector3 origin = workspace.buildOrigin();
+        player.teleport(new Location(world, origin.x() + 0.5, origin.y() + 2, origin.z() + 0.5));
+    }
+
+    private void placeScaffold(World world, IntVector3 buildOrigin) {
+        for (IntVector3 block : AuthoringScaffold.floorBlocks(buildOrigin)) {
+            world.getBlockAt(block.x(), block.y(), block.z()).setType(Material.GLASS, false);
+        }
+    }
+
+    public void spawnSelectorRay(Player player, double distance) {
+        Location eye = player.getEyeLocation();
+        World world = player.getWorld();
+        for (Vector point : SelectionRaycaster.rayPoints(eye.toVector(), eye.getDirection(), distance, 0.75)) {
+            world.spawnParticle(Particle.WAX_OFF, point.getX(), point.getY(), point.getZ(), 1, 0, 0, 0, 0);
+        }
+    }
+
+    private void pasteStructure(World world, Structure structure, IntVector3 origin) {
+        structure.place(
+            new Location(world, origin.x(), origin.y(), origin.z()),
+            true,
+            StructureRotation.NONE,
+            Mirror.NONE,
+            0,
+            RoomStructurePlacer.STRUCTURE_INTEGRITY,
+            new java.util.Random(0L)
+        );
     }
 
     private void clearExistingEditCopy(Player player) {
@@ -503,5 +671,63 @@ public final class AuthoringManager {
             case UP, DOWN -> new IntVector3(door.width() - 1, 0, door.height() - 1);
         };
         return SelectionBounds.between(door.position(), door.position().add(maxOffset));
+    }
+
+    private final class WorkspaceClearTask implements Runnable {
+        private final World world;
+        private final com.dungeonarchitect.domain.BoundingBox3i bounds;
+        private final Runnable onComplete;
+        private final java.util.function.Consumer<Throwable> onError;
+        private int x;
+        private int y;
+        private int z;
+        private BukkitTask task;
+
+        private WorkspaceClearTask(World world, com.dungeonarchitect.domain.BoundingBox3i bounds, Runnable onComplete, java.util.function.Consumer<Throwable> onError) {
+            this.world = world;
+            this.bounds = bounds;
+            this.onComplete = onComplete;
+            this.onError = onError;
+            this.x = bounds.min().x();
+            this.y = bounds.min().y();
+            this.z = bounds.min().z();
+        }
+
+        private void start() {
+            task = server.getScheduler().runTaskTimer(plugin, this, 1L, 1L);
+        }
+
+        @Override
+        public void run() {
+            try {
+                int cleared = 0;
+                while (cleared++ < CLEAR_BLOCKS_PER_TICK) {
+                    world.getBlockAt(x, y, z).setType(Material.AIR, false);
+                    if (!advance()) {
+                        task.cancel();
+                        onComplete.run();
+                        return;
+                    }
+                }
+            } catch (Throwable throwable) {
+                task.cancel();
+                onError.accept(throwable);
+            }
+        }
+
+        private boolean advance() {
+            z++;
+            if (z <= bounds.max().z()) {
+                return true;
+            }
+            z = bounds.min().z();
+            y++;
+            if (y <= bounds.max().y()) {
+                return true;
+            }
+            y = bounds.min().y();
+            x++;
+            return x <= bounds.max().x();
+        }
     }
 }

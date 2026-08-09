@@ -52,7 +52,7 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
         String worldPrefix = getConfig().getString("worlds.name-prefix", "da_");
         boolean deleteOnDestroy = getConfig().getBoolean("worlds.delete-on-destroy", true);
 
-        FeatureService featureService = new FeatureService(featureTemplateRegistry, structureService);
+        FeatureService featureService = new FeatureService(featureTemplateRegistry, structureService, getLogger());
         RoomStructurePlacer structurePlacer = new RoomStructurePlacer(structureService, featureService);
         DungeonWorldManager worldManager = new DungeonWorldManager(this, worldPrefix, deleteOnDestroy);
         dungeonManager = new DungeonManager(
@@ -70,10 +70,12 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
         RoomCategory defaultCategory = RoomCategory.valueOf(getConfig().getString("authoring.default-category", "GENERIC").toUpperCase(Locale.ROOT));
         int defaultWeight = getConfig().getInt("authoring.default-weight", 10);
         AuthoringManager authoringManager = new AuthoringManager(
+            this,
             getServer(),
             roomTemplateRegistry.roomsDirectory(),
             featureTemplateRegistry.featuresDirectory(),
             new NamespacedKey(this, "authoring_wand"),
+            new NamespacedKey(this, "authoring_selector"),
             wandMaterial,
             defaultCategory,
             defaultWeight

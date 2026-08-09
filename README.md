@@ -13,9 +13,11 @@ The checked-in Gradle wrapper uses Gradle 8.14.3.
 ## Developer Workflow
 
 - `/da wand` gives the authoring wand.
+- `/da selector` gives the spyglass component selector.
 - `/da` opens the main GUI; `/da help` prints command help.
 - `/da room create <id>` starts a room session.
 - Left/right click blocks with the wand to set the current selection.
+- Hold the selector to outline doors, markers, and feature slots; right click to select the first component in view.
 - `/da room bounds` saves the current selection as the room bounds.
 - `/da room door` saves the current selection as a door region using defaults.
 - `/da room door [id] [socketType] [facing]` adds a socket with explicit overrides.

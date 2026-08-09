@@ -7,6 +7,7 @@ import com.dungeonarchitect.template.TemplateValidationResult;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -56,7 +57,7 @@ public final class FeatureTemplateRegistry {
     }
 
     public Optional<FeatureTemplate> get(String id) {
-        return Optional.ofNullable(templates.get(id));
+        return Optional.ofNullable(templates.get(id.toLowerCase(java.util.Locale.ROOT)));
     }
 
     public Collection<FeatureTemplate> all() {
@@ -72,9 +73,8 @@ public final class FeatureTemplateRegistry {
     }
 
     public void deleteFeature(String featureId) throws IOException {
-        Path featureDirectory = featuresDirectory.resolve(featureId).toAbsolutePath().normalize();
-        Path root = featuresDirectory.toAbsolutePath().normalize();
-        if (!featureDirectory.startsWith(root) || !Files.isDirectory(featureDirectory)) {
+        Path featureDirectory = templateDirectory(featureId);
+        if (!Files.isDirectory(featureDirectory)) {
             throw new IllegalArgumentException("Unknown feature template " + featureId);
         }
         try (var walk = Files.walk(featureDirectory)) {
@@ -83,5 +83,71 @@ public final class FeatureTemplateRegistry {
             }
         }
         reload();
+    }
+
+    public FeatureTemplate duplicateFeature(String oldId, String newId) throws IOException {
+        String normalizedNewId = normalizeId(newId);
+        Path source = templateDirectory(oldId);
+        Path target = templateDirectory(normalizedNewId);
+        if (!Files.isDirectory(source)) {
+            throw new IllegalArgumentException("Unknown feature template " + oldId);
+        }
+        if (Files.exists(target)) {
+            throw new IllegalArgumentException("Feature template already exists: " + normalizedNewId);
+        }
+        copyDirectory(source, target);
+        FeatureTemplate copied = FeatureTemplateIO.load(target);
+        FeatureTemplate renamed = new FeatureTemplate(normalizedNewId, copied.size(), copied.tags(), target.resolve("feature.nbt"));
+        FeatureTemplateIO.save(renamed, target);
+        reload();
+        return renamed;
+    }
+
+    public FeatureTemplate renameFeature(String oldId, String newId) throws IOException {
+        String normalizedNewId = normalizeId(newId);
+        Path source = templateDirectory(oldId);
+        Path target = templateDirectory(normalizedNewId);
+        if (!Files.isDirectory(source)) {
+            throw new IllegalArgumentException("Unknown feature template " + oldId);
+        }
+        if (Files.exists(target)) {
+            throw new IllegalArgumentException("Feature template already exists: " + normalizedNewId);
+        }
+        Files.move(source, target);
+        FeatureTemplate moved = FeatureTemplateIO.load(target);
+        FeatureTemplate renamed = new FeatureTemplate(normalizedNewId, moved.size(), moved.tags(), target.resolve("feature.nbt"));
+        FeatureTemplateIO.save(renamed, target);
+        reload();
+        return renamed;
+    }
+
+    private Path templateDirectory(String featureId) {
+        String normalized = normalizeId(featureId);
+        Path root = featuresDirectory.toAbsolutePath().normalize();
+        Path directory = root.resolve(normalized).normalize();
+        if (!directory.startsWith(root)) {
+            throw new IllegalArgumentException("Invalid feature id " + featureId);
+        }
+        return directory;
+    }
+
+    private String normalizeId(String featureId) {
+        if (featureId == null || featureId.isBlank() || featureId.contains("/") || featureId.contains("\\") || featureId.contains("..")) {
+            throw new IllegalArgumentException("Invalid feature id " + featureId);
+        }
+        return featureId.toLowerCase(java.util.Locale.ROOT);
+    }
+
+    private void copyDirectory(Path source, Path target) throws IOException {
+        try (var walk = Files.walk(source)) {
+            for (Path path : walk.toList()) {
+                Path destination = target.resolve(source.relativize(path).toString());
+                if (Files.isDirectory(path)) {
+                    Files.createDirectories(destination);
+                } else {
+                    Files.copy(path, destination, StandardCopyOption.COPY_ATTRIBUTES);
+                }
+            }
+        }
     }
 }
