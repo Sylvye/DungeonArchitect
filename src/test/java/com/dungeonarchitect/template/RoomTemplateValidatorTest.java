@@ -53,7 +53,9 @@ final class RoomTemplateValidatorTest {
         assertFalse(result.valid());
         assertTrue(result.errors().stream().anyMatch(error -> error.contains("duplicate door")));
         assertTrue(result.errors().stream().anyMatch(error -> error.contains("outside room bounds")));
-        assertEquals(List.of(new IntVector3(9, 1, 0)), result.issues().stream().map(TemplateValidationResult.ValidationIssue::localPosition).toList());
+        assertTrue(result.issues().stream()
+            .map(TemplateValidationResult.ValidationIssue::localPosition)
+            .anyMatch(new IntVector3(9, 1, 0)::equals));
     }
 
     @Test

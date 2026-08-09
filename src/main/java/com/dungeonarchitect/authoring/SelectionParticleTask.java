@@ -10,6 +10,7 @@ import java.util.List;
 
 public final class SelectionParticleTask implements Runnable {
     private static final Particle.DustOptions DOOR_DUST = new Particle.DustOptions(Color.fromRGB(0, 255, 171), 1.0f);
+    private static final Particle.DustOptions GATEWAY_DUST = new Particle.DustOptions(Color.fromRGB(255, 213, 79), 1.0f);
     private static final Particle.DustOptions MARKER_DUST = new Particle.DustOptions(Color.fromRGB(255, 33, 117), 1.0f);
     private static final Particle.DustOptions FEATURE_DUST = new Particle.DustOptions(Color.fromRGB(33, 158, 255), 1.0f);
     private static final double OUTLINE_STEP = 0.5;
@@ -90,6 +91,7 @@ public final class SelectionParticleTask implements Runnable {
     private static Particle.DustOptions dust(String type) {
         return switch (type) {
             case "door" -> DOOR_DUST;
+            case "gateway" -> GATEWAY_DUST;
             case "marker" -> MARKER_DUST;
             case "feature" -> FEATURE_DUST;
             default -> FEATURE_DUST;

@@ -3,6 +3,8 @@ package com.dungeonarchitect.gui;
 import com.dungeonarchitect.authoring.AuthoringManager;
 import com.dungeonarchitect.authoring.AuthoringSession;
 import com.dungeonarchitect.domain.DoorSocket;
+import com.dungeonarchitect.domain.DoorSlotEntry;
+import com.dungeonarchitect.domain.DoorTemplate;
 import com.dungeonarchitect.domain.FeatureSlotEntry;
 import com.dungeonarchitect.domain.FeatureTemplate;
 import com.dungeonarchitect.domain.IntVector3;
@@ -11,6 +13,9 @@ import com.dungeonarchitect.domain.RoomFeatureSlot;
 import com.dungeonarchitect.domain.RoomMarker;
 import com.dungeonarchitect.domain.RoomTemplate;
 import com.dungeonarchitect.domain.Rotation;
+import com.dungeonarchitect.door.DoorTemplateIO;
+import com.dungeonarchitect.door.DoorTemplateMatcher;
+import com.dungeonarchitect.door.DoorTemplateRegistry;
 import com.dungeonarchitect.feature.FeatureMatcher;
 import com.dungeonarchitect.feature.FeatureTemplateIO;
 import com.dungeonarchitect.feature.FeatureTemplateRegistry;
@@ -54,17 +59,19 @@ public final class MenuManager implements Listener {
     private final AuthoringManager authoringManager;
     private final RoomTemplateRegistry templateRegistry;
     private final FeatureTemplateRegistry featureRegistry;
+    private final DoorTemplateRegistry doorRegistry;
     private final DungeonManager dungeonManager;
     private final ChatPromptManager prompts;
     private final Runnable reloadAll;
     private final Map<UUID, PlayerMenuActions> actions = new HashMap<>();
     private final RoomTemplateValidator validator = new RoomTemplateValidator();
 
-    public MenuManager(Plugin plugin, AuthoringManager authoringManager, RoomTemplateRegistry templateRegistry, FeatureTemplateRegistry featureRegistry, DungeonManager dungeonManager, ChatPromptManager prompts, Runnable reloadAll) {
+    public MenuManager(Plugin plugin, AuthoringManager authoringManager, RoomTemplateRegistry templateRegistry, FeatureTemplateRegistry featureRegistry, DoorTemplateRegistry doorRegistry, DungeonManager dungeonManager, ChatPromptManager prompts, Runnable reloadAll) {
         this.plugin = plugin;
         this.authoringManager = authoringManager;
         this.templateRegistry = templateRegistry;
         this.featureRegistry = featureRegistry;
+        this.doorRegistry = doorRegistry;
         this.dungeonManager = dungeonManager;
         this.prompts = prompts;
         this.reloadAll = reloadAll;
@@ -73,9 +80,10 @@ public final class MenuManager implements Listener {
     public void openMain(Player player) {
         Menu menu = menu("da:main", 27, "DungeonArchitect");
         button(menu, 10, Material.BOOKSHELF, "Rooms", List.of("Edit room metadata and validate templates."), this::openRooms);
-        button(menu, 12, Material.STRUCTURE_BLOCK, "Features", List.of("Edit reusable feature templates."), this::openFeatures);
-        button(menu, 14, Material.COMPARATOR, "Config", List.of("Edit config.yml."), this::openConfig);
+        button(menu, 12, Material.OAK_DOOR, "Doors", List.of("Edit reusable door templates."), this::openDoors);
+        button(menu, 14, Material.STRUCTURE_BLOCK, "Features", List.of("Edit reusable feature templates."), this::openFeatures);
         button(menu, 16, Material.ENDER_PEARL, "Dungeons", List.of("Manage active dungeon instances."), this::openDungeons);
+        button(menu, 22, Material.COMPARATOR, "Config", List.of("Edit config.yml."), this::openConfig);
         open(player, menu);
     }
 
@@ -88,7 +96,7 @@ public final class MenuManager implements Listener {
         int slot = 0;
         for (RoomTemplate template : templateRegistry.all()) {
             int target = slot++;
-            button(menu, target, Material.PAPER, template.id(), List.of("Category: " + template.category(), "Doors: " + template.doors().size(), "Click to edit."), p -> openRoom(p, template.id()));
+            button(menu, target, Material.PAPER, template.id(), List.of("Category: " + template.category(), "Door Slots: " + template.doors().size(), "Click to edit."), p -> openRoom(p, template.id()));
             if (slot >= 45) {
                 break;
             }
@@ -173,7 +181,7 @@ public final class MenuManager implements Listener {
             p.sendMessage(Component.text("Room edit session cancelled."));
             openRoom(p, roomId);
         });
-        button(menu, 28, Material.IRON_DOOR, "Doors: " + doors.size(), doors.stream().map(door -> door.id() + " " + door.socketType() + " " + door.facing()).toList(), p -> openComponents(p, roomId, "door"));
+        button(menu, 28, Material.IRON_DOOR, "Door Slots: " + doors.size(), doors.stream().map(door -> door.id() + " " + door.size() + " " + door.facing()).toList(), p -> openComponents(p, roomId, "door"));
         button(menu, 30, Material.REDSTONE_TORCH, "Markers: " + markers.size(), markers.stream().map(marker -> marker.name() + " " + marker.type()).toList(), p -> openComponents(p, roomId, "marker"));
         button(menu, 32, Material.CHEST, "Feature Slots: " + features.size(), features.stream().map(slot -> slot.id() + " size=" + slot.size()).toList(), p -> openComponents(p, roomId, "feature"));
         button(menu, 36, Material.NAME_TAG, "Rename Room", List.of("Move this room template to a new id."), p -> promptRenameRoom(p, template.id()));
@@ -192,7 +200,7 @@ public final class MenuManager implements Listener {
         if (type.equals("door")) {
             var doors = activeEdit == null ? template.doors() : activeEdit.doors();
             for (var door : doors) {
-                button(menu, slot++, Material.IRON_DOOR, door.id(), List.of("Position: " + door.position(), "Facing: " + door.facing(), "Right click to select in edit world.", "Shift-left to rename.", "Shift-right to delete."), p -> openComponents(p, roomId, type), p -> selectComponent(p, roomId, type, door.id()), p -> promptRenameComponent(p, roomId, type, door.id()), p -> openDeleteComponentConfirm(p, roomId, type, door.id()));
+                button(menu, slot++, Material.IRON_DOOR, door.id(), List.of("Position: " + door.position(), "Size: " + door.size(), "Facing: " + door.facing(), "Entries: " + door.entries().size(), "Left click to edit entries.", "Right click to select in edit world.", "Shift-left to rename.", "Shift-right to delete."), p -> openDoorSlot(p, roomId, door.id()), p -> selectComponent(p, roomId, type, door.id()), p -> promptRenameComponent(p, roomId, type, door.id()), p -> openDeleteComponentConfirm(p, roomId, type, door.id()));
                 if (slot >= 45) {
                     break;
                 }
@@ -234,19 +242,130 @@ public final class MenuManager implements Listener {
             button(menu, 5, Material.YELLOW_CONCRETE, "No Entries Selected", List.of("This slot always pastes nothing."), p -> openFeatureSlot(p, roomId, slotId));
         }
         button(menu, slot++, Material.BARRIER, "empty", entryLore(featureSlot, FeatureSlotEntry.EMPTY, "Virtual feature; pastes nothing."), p -> toggleFeatureEntry(p, template, featureSlot, FeatureSlotEntry.EMPTY, 1), null, p -> promptFeatureWeight(p, template, featureSlot, FeatureSlotEntry.EMPTY));
+        List<FeatureTemplate> unavailable = new ArrayList<>();
         for (FeatureTemplate feature : featureRegistry.all()) {
-            if (!FeatureMatcher.matches(featureSlot, feature)) {
+            FeatureMatcher.FeatureMatchResult match = FeatureMatcher.match(featureSlot, feature);
+            if (!match.matched()) {
+                unavailable.add(feature);
                 continue;
             }
-            Rotation rotation = FeatureMatcher.rotationFor(featureSlot.size(), feature.size());
+            Rotation rotation = match.rotation();
             IntVector3 rotatedSize = rotation.rotateSize(feature.size());
             button(menu, slot++, Material.STRUCTURE_BLOCK, feature.id(), entryLore(featureSlot, feature.id(), "Size: " + feature.size(), "Paste size: " + rotatedSize, "Offset: " + FeatureMatcher.placementOffset(featureSlot.size(), rotatedSize), "Rotation: " + rotation), p -> toggleFeatureEntry(p, template, featureSlot, feature.id(), 1), null, p -> promptFeatureWeight(p, template, featureSlot, feature.id()));
             if (slot >= 45) {
                 break;
             }
         }
+        slot = addUnavailableFeatureEntries(menu, slot, featureSlot, unavailable);
         button(menu, 49, Material.ARROW, "Back", List.of(), p -> openComponents(p, roomId, "feature"));
         open(player, menu);
+    }
+
+    private void openDoorSlot(Player player, String roomId, String slotId) {
+        RoomTemplate template = templateRegistry.get(roomId)
+            .orElseThrow(() -> new IllegalArgumentException("Unknown room " + roomId));
+        AuthoringSession activeEdit = authoringManager.editingSession(player, roomId).orElse(null);
+        List<DoorSocket> doorSlots = activeEdit == null ? template.doors() : activeEdit.doors();
+        DoorSocket doorSlot = doorSlots.stream()
+            .filter(slot -> slot.id().equalsIgnoreCase(slotId))
+            .findFirst()
+            .orElseThrow(() -> new IllegalArgumentException("Unknown door slot " + slotId));
+        Menu menu = menu("da:door-slot:" + roomId + ":" + slotId, 54, "Door Slot: " + slotId);
+        button(menu, 4, Material.IRON_DOOR, "Slot " + slotId, List.of("Size: " + doorSlot.size(), "Position: " + doorSlot.position(), "Facing: " + doorSlot.facing(), "Tags: " + String.join(",", doorSlot.tags())), p -> openDoorSlot(p, roomId, slotId));
+        int slot = 9;
+        button(menu, slot++, Material.BARRIER, "empty", doorEntryLore(doorSlot, DoorSlotEntry.EMPTY, "Virtual door; leaves room blueprint unchanged."), p -> toggleDoorEntry(p, template, doorSlot, DoorSlotEntry.EMPTY, 1), null, p -> promptDoorWeight(p, template, doorSlot, DoorSlotEntry.EMPTY));
+        List<DoorTemplate> unavailable = new ArrayList<>();
+        for (DoorTemplate door : doorRegistry.all()) {
+            DoorTemplateMatcher.DoorTemplateMatchResult match = DoorTemplateMatcher.match(doorSlot, door);
+            if (!match.matched()) {
+                unavailable.add(door);
+                continue;
+            }
+            button(menu, slot++, Material.OAK_DOOR, door.id(), doorEntryLore(doorSlot, door.id(), "Bounds: " + door.size(), "Gateway: " + door.gateway().size(), "Door rotation: " + match.rotation(), "Tags: " + String.join(",", door.tags())), p -> toggleDoorEntry(p, template, doorSlot, door.id(), 1), null, p -> promptDoorWeight(p, template, doorSlot, door.id()));
+            if (slot >= 45) {
+                break;
+            }
+        }
+        slot = addUnavailableDoorEntries(menu, slot, doorSlot, unavailable);
+        button(menu, 49, Material.ARROW, "Back", List.of(), p -> openComponents(p, roomId, "door"));
+        open(player, menu);
+    }
+
+    private int addUnavailableFeatureEntries(Menu menu, int slot, RoomFeatureSlot featureSlot, List<FeatureTemplate> unavailable) {
+        if (slot >= 45 || unavailable.isEmpty()) {
+            return slot;
+        }
+        button(menu, slot++, Material.GRAY_STAINED_GLASS_PANE, "Unavailable", List.of("These features do not fit this slot."), p -> {});
+        for (FeatureTemplate feature : unavailable) {
+            if (slot >= 45) {
+                break;
+            }
+            FeatureMatcher.FeatureMatchResult match = FeatureMatcher.match(featureSlot, feature);
+            button(menu, slot++, Material.GRAY_CONCRETE, feature.id(), List.of("Unavailable: " + match.reason(), "Size: " + feature.size()), p -> p.sendMessage(Component.text("Feature " + feature.id() + " unavailable: " + match.reason())));
+        }
+        return slot;
+    }
+
+    private int addUnavailableDoorEntries(Menu menu, int slot, DoorSocket doorSlot, List<DoorTemplate> unavailable) {
+        if (slot >= 45 || unavailable.isEmpty()) {
+            return slot;
+        }
+        button(menu, slot++, Material.GRAY_STAINED_GLASS_PANE, "Unavailable", List.of("These doors do not match this slot."), p -> {});
+        for (DoorTemplate door : unavailable) {
+            if (slot >= 45) {
+                break;
+            }
+            DoorTemplateMatcher.DoorTemplateMatchResult match = DoorTemplateMatcher.match(doorSlot, door);
+            button(menu, slot++, Material.GRAY_CONCRETE, door.id(), List.of("Unavailable: " + match.reason(), "Bounds: " + door.size(), "Gateway: " + (door.gateway() == null ? "unset" : door.gateway().size() + " " + door.gateway().facing())), p -> p.sendMessage(Component.text("Door " + door.id() + " unavailable: " + match.reason())));
+        }
+        return slot;
+    }
+
+    private List<String> doorEntryLore(DoorSocket slot, String doorId, String... extra) {
+        List<String> lore = new ArrayList<>();
+        slot.entries().stream()
+            .filter(entry -> entry.doorId().equalsIgnoreCase(doorId))
+            .findFirst()
+            .ifPresentOrElse(entry -> lore.add("Selected weight: " + entry.weight()), () -> lore.add("Not selected"));
+        lore.addAll(List.of(extra));
+        lore.add("Left click toggles weight 1.");
+        lore.add("Shift-left edits weight.");
+        return lore;
+    }
+
+    private void toggleDoorEntry(Player player, RoomTemplate template, DoorSocket slot, String doorId, int defaultWeight) {
+        List<DoorSlotEntry> entries = new ArrayList<>(slot.entries());
+        boolean removed = entries.removeIf(entry -> entry.doorId().equalsIgnoreCase(doorId));
+        if (!removed) {
+            entries.add(new DoorSlotEntry(doorId, defaultWeight));
+        }
+        saveDoorSlot(player, template, slot.withEntries(entries));
+    }
+
+    private void promptDoorWeight(Player player, RoomTemplate template, DoorSocket slot, String doorId) {
+        prompts.prompt(player, "Enter weight for " + doorId, value -> {
+            int weight = Integer.parseInt(value);
+            List<DoorSlotEntry> entries = new ArrayList<>(slot.entries());
+            entries.removeIf(entry -> entry.doorId().equalsIgnoreCase(doorId));
+            entries.add(new DoorSlotEntry(doorId, weight));
+            saveDoorSlot(player, template, slot.withEntries(entries));
+        });
+    }
+
+    private void saveDoorSlot(Player player, RoomTemplate template, DoorSocket updatedSlot) {
+        AuthoringSession activeEdit = authoringManager.editingSession(player, template.id()).orElse(null);
+        if (activeEdit != null) {
+            activeEdit.removeDoor(updatedSlot.id());
+            activeEdit.addDoorSlot(updatedSlot);
+            player.sendMessage(Component.text("Door slot updated in the active edit session."));
+            openDoorSlot(player, template.id(), updatedSlot.id());
+            return;
+        }
+        List<DoorSocket> slots = new ArrayList<>(template.doors());
+        slots.replaceAll(slot -> slot.id().equalsIgnoreCase(updatedSlot.id()) ? updatedSlot : slot);
+        saveRoom(new RoomTemplate(template.id(), template.category(), template.weight(), template.tags(), template.size(), template.spawn(), slots, template.markers(), template.featureSlots(), template.structureFile()));
+        player.sendMessage(Component.text("Door slot updated."));
+        openDoorSlot(player, template.id(), updatedSlot.id());
     }
 
     private List<String> entryLore(RoomFeatureSlot slot, String featureId, String... extra) {
@@ -385,7 +504,7 @@ public final class MenuManager implements Listener {
                 for (int i = 0; i < doors.size(); i++) {
                     DoorSocket door = doors.get(i);
                     if (door.id().equalsIgnoreCase(oldId)) {
-                        doors.set(i, new DoorSocket(newId, door.position(), door.facing(), door.socketType(), door.width(), door.height()));
+                        doors.set(i, new DoorSocket(newId, door.position(), door.facing(), door.socketType(), door.width(), door.height(), door.size(), door.tags(), door.entries()));
                         found = true;
                         break;
                     }
@@ -428,6 +547,291 @@ public final class MenuManager implements Listener {
             return template;
         }
         return new RoomTemplate(template.id(), template.category(), template.weight(), template.tags(), template.size(), template.spawn(), doors, markers, features, template.structureFile());
+    }
+
+    public void openDoors(Player player) {
+        Menu menu = menu("da:doors", 54, "DungeonArchitect Doors");
+        int slot = 0;
+        for (DoorTemplate template : doorRegistry.all()) {
+            button(menu, slot++, Material.OAK_DOOR, template.id(), List.of("Size: " + template.size(), "Tags: " + String.join(",", template.tags()), "Gateway: " + (template.gateway() == null ? "unset" : template.gateway().size()), "Click to edit."), p -> openDoor(p, template.id()));
+            if (slot >= 45) {
+                break;
+            }
+        }
+        button(menu, 49, Material.ARROW, "Back", List.of(), this::openMain);
+        open(player, menu);
+    }
+
+    public void openDoor(Player player, String doorId) {
+        DoorTemplate template = doorRegistry.get(doorId)
+            .orElseThrow(() -> new IllegalArgumentException("Unknown door " + doorId));
+        AuthoringSession activeEdit = authoringManager.editingDoorSession(player, doorId).orElse(null);
+        var markers = activeEdit == null ? template.markers() : activeEdit.markers();
+        var features = activeEdit == null ? template.featureSlots() : activeEdit.featureSlots();
+        Menu menu = menu("da:door-template:" + doorId, 54, "Door: " + doorId);
+        button(menu, 4, Material.OAK_DOOR, "Size: " + template.size(), List.of("Captured door footprint."), p -> openDoor(p, doorId));
+        button(menu, 10, template.gateway() == null ? Material.RED_CONCRETE : Material.LIME_CONCRETE, "Gateway: " + (template.gateway() == null ? "unset" : template.gateway().size() + " " + template.gateway().facing()), List.of("Set with /da door gateway.", "Right click to select in edit world."), p -> openDoor(p, doorId), p -> selectDoorComponent(p, doorId, "gateway", "gateway"));
+        button(menu, 12, Material.OAK_SIGN, "Tags: " + String.join(",", template.tags()), List.of("Comma separated tags."), p -> prompts.prompt(p, "Enter comma-separated tags", value -> {
+            Set<String> tags = new LinkedHashSet<>();
+            for (String tag : value.split(",")) {
+                if (!tag.isBlank()) {
+                    tags.add(tag.trim());
+                }
+            }
+            saveDoorTemplate(new DoorTemplate(template.id(), template.size(), tags, template.markers(), template.featureSlots(), template.gateway(), template.structureFile()));
+            p.sendMessage(Component.text("Door tags updated."));
+            openDoor(p, doorId);
+        }));
+        button(menu, 20, Material.STRUCTURE_BLOCK, "Edit In World", List.of("Paste this door into the edit world."), p -> {
+            p.closeInventory();
+            p.sendMessage(Component.text("Preparing isolated edit workspace for " + template.id() + "..."));
+            authoringManager.editDoorSession(p, template).whenComplete((session, error) -> {
+                if (error != null) {
+                    p.sendMessage(Component.text("Edit paste failed: " + message(error)));
+                    return;
+                }
+                p.sendMessage(Component.text("Pasted door " + template.id() + " into the edit world."));
+            });
+        });
+        button(menu, 22, authoringManager.activeDoorId(player).filter(id -> id.equalsIgnoreCase(doorId)).isPresent() ? Material.EMERALD_BLOCK : Material.GRAY_CONCRETE, "Save Edit", List.of("Overwrite this door from the edit world."), p -> {
+            try {
+                TemplateValidationResult result = authoringManager.saveDoor(p, doorId);
+                sendValidation(p, result);
+                doorRegistry.reload();
+                templateRegistry.reload();
+                openDoor(p, doorId);
+            } catch (Exception ex) {
+                p.sendMessage(Component.text("Save failed: " + ex.getMessage()));
+                openDoor(p, doorId);
+            }
+        });
+        button(menu, 24, Material.BARRIER, "Cancel Edit", List.of("Clear the pasted edit copy."), p -> {
+            authoringManager.cancelEdit(p);
+            p.sendMessage(Component.text("Door edit session cancelled."));
+            openDoor(p, doorId);
+        });
+        button(menu, 28, Material.REDSTONE_TORCH, "Markers: " + markers.size(), markers.stream().map(marker -> marker.name() + " " + marker.type()).toList(), p -> openDoorComponents(p, doorId, "marker"));
+        button(menu, 30, Material.CHEST, "Feature Slots: " + features.size(), features.stream().map(slot -> slot.id() + " size=" + slot.size()).toList(), p -> openDoorComponents(p, doorId, "feature"));
+        button(menu, 49, Material.ARROW, "Back", List.of(), this::openDoors);
+        open(player, menu);
+    }
+
+    private void openDoorComponents(Player player, String doorId, String type) {
+        DoorTemplate template = doorRegistry.get(doorId)
+            .orElseThrow(() -> new IllegalArgumentException("Unknown door " + doorId));
+        AuthoringSession activeEdit = authoringManager.editingDoorSession(player, doorId).orElse(null);
+        Menu menu = menu("da:door-components:" + doorId + ":" + type, 54, "Door " + titleCase(type) + "s: " + doorId);
+        int slot = 0;
+        if (type.equals("marker")) {
+            var markers = activeEdit == null ? template.markers() : activeEdit.markers();
+            for (var marker : markers) {
+                button(menu, slot++, Material.REDSTONE_TORCH, marker.name(), List.of("Type: " + marker.type(), "Position: " + marker.position(), "Right click to select in edit world.", "Shift-left to rename.", "Shift-right to delete."), p -> openDoorComponents(p, doorId, type), p -> selectDoorComponent(p, doorId, type, marker.name()), p -> promptRenameDoorComponent(p, doorId, type, marker.name()), p -> openDeleteDoorComponentConfirm(p, doorId, type, marker.name()));
+                if (slot >= 45) {
+                    break;
+                }
+            }
+        } else if (type.equals("feature")) {
+            var features = activeEdit == null ? template.featureSlots() : activeEdit.featureSlots();
+            for (var feature : features) {
+                button(menu, slot++, Material.CHEST, feature.id(), List.of("Position: " + feature.position(), "Size: " + feature.size(), "Left click to edit entries.", "Right click to select in edit world.", "Shift-left to rename.", "Shift-right to delete."), p -> openDoorFeatureSlot(p, doorId, feature.id()), p -> selectDoorComponent(p, doorId, type, feature.id()), p -> promptRenameDoorComponent(p, doorId, type, feature.id()), p -> openDeleteDoorComponentConfirm(p, doorId, type, feature.id()));
+                if (slot >= 45) {
+                    break;
+                }
+            }
+        }
+        button(menu, 49, Material.ARROW, "Back", List.of(), p -> openDoor(p, doorId));
+        open(player, menu);
+    }
+
+    private void openDoorFeatureSlot(Player player, String doorId, String slotId) {
+        DoorTemplate template = doorRegistry.get(doorId)
+            .orElseThrow(() -> new IllegalArgumentException("Unknown door " + doorId));
+        AuthoringSession activeEdit = authoringManager.editingDoorSession(player, doorId).orElse(null);
+        List<RoomFeatureSlot> featureSlots = activeEdit == null ? template.featureSlots() : activeEdit.featureSlots();
+        RoomFeatureSlot featureSlot = featureSlots.stream()
+            .filter(slot -> slot.id().equalsIgnoreCase(slotId))
+            .findFirst()
+            .orElseThrow(() -> new IllegalArgumentException("Unknown feature slot " + slotId));
+        Menu menu = menu("da:door-feature-slot:" + doorId + ":" + slotId, 54, "Door Feature: " + slotId);
+        button(menu, 4, Material.HOPPER, "Slot " + slotId, List.of("Size: " + featureSlot.size(), "Position: " + featureSlot.position()), p -> openDoorFeatureSlot(p, doorId, slotId));
+        int slot = 9;
+        if (featureSlot.entries().isEmpty()) {
+            button(menu, 5, Material.YELLOW_CONCRETE, "No Entries Selected", List.of("This slot always pastes nothing."), p -> openDoorFeatureSlot(p, doorId, slotId));
+        }
+        button(menu, slot++, Material.BARRIER, "empty", entryLore(featureSlot, FeatureSlotEntry.EMPTY, "Virtual feature; pastes nothing."), p -> toggleDoorFeatureEntry(p, template, featureSlot, FeatureSlotEntry.EMPTY, 1), null, p -> promptDoorFeatureWeight(p, template, featureSlot, FeatureSlotEntry.EMPTY));
+        List<FeatureTemplate> unavailable = new ArrayList<>();
+        for (FeatureTemplate feature : featureRegistry.all()) {
+            FeatureMatcher.FeatureMatchResult match = FeatureMatcher.match(featureSlot, feature);
+            if (!match.matched()) {
+                unavailable.add(feature);
+                continue;
+            }
+            Rotation rotation = match.rotation();
+            IntVector3 rotatedSize = rotation.rotateSize(feature.size());
+            button(menu, slot++, Material.STRUCTURE_BLOCK, feature.id(), entryLore(featureSlot, feature.id(), "Size: " + feature.size(), "Paste size: " + rotatedSize, "Offset: " + FeatureMatcher.placementOffset(featureSlot.size(), rotatedSize), "Rotation: " + rotation), p -> toggleDoorFeatureEntry(p, template, featureSlot, feature.id(), 1), null, p -> promptDoorFeatureWeight(p, template, featureSlot, feature.id()));
+            if (slot >= 45) {
+                break;
+            }
+        }
+        slot = addUnavailableFeatureEntries(menu, slot, featureSlot, unavailable);
+        button(menu, 49, Material.ARROW, "Back", List.of(), p -> openDoorComponents(p, doorId, "feature"));
+        open(player, menu);
+    }
+
+    private void toggleDoorFeatureEntry(Player player, DoorTemplate template, RoomFeatureSlot slot, String featureId, int defaultWeight) {
+        List<FeatureSlotEntry> entries = new ArrayList<>(slot.entries());
+        boolean removed = entries.removeIf(entry -> entry.featureId().equalsIgnoreCase(featureId));
+        if (!removed) {
+            entries.add(new FeatureSlotEntry(featureId, defaultWeight));
+        }
+        saveDoorFeatureSlot(player, template, slot.withEntries(entries));
+    }
+
+    private void promptDoorFeatureWeight(Player player, DoorTemplate template, RoomFeatureSlot slot, String featureId) {
+        prompts.prompt(player, "Enter weight for " + featureId, value -> {
+            int weight = Integer.parseInt(value);
+            List<FeatureSlotEntry> entries = new ArrayList<>(slot.entries());
+            entries.removeIf(entry -> entry.featureId().equalsIgnoreCase(featureId));
+            entries.add(new FeatureSlotEntry(featureId, weight));
+            saveDoorFeatureSlot(player, template, slot.withEntries(entries));
+        });
+    }
+
+    private void saveDoorFeatureSlot(Player player, DoorTemplate template, RoomFeatureSlot updatedSlot) {
+        AuthoringSession activeEdit = authoringManager.editingDoorSession(player, template.id()).orElse(null);
+        if (activeEdit != null) {
+            activeEdit.removeFeature(updatedSlot.id());
+            activeEdit.addFeatureSlot(updatedSlot);
+            player.sendMessage(Component.text("Door feature slot updated in the active edit session."));
+            openDoorFeatureSlot(player, template.id(), updatedSlot.id());
+            return;
+        }
+        List<RoomFeatureSlot> slots = new ArrayList<>(template.featureSlots());
+        slots.replaceAll(slot -> slot.id().equalsIgnoreCase(updatedSlot.id()) ? updatedSlot : slot);
+        saveDoorTemplate(new DoorTemplate(template.id(), template.size(), template.tags(), template.markers(), slots, template.gateway(), template.structureFile()));
+        player.sendMessage(Component.text("Door feature slot updated."));
+        openDoorFeatureSlot(player, template.id(), updatedSlot.id());
+    }
+
+    private void selectDoorComponent(Player player, String doorId, String type, String id) {
+        if (authoringManager.editingDoorSession(player, doorId).isEmpty()) {
+            player.sendMessage(Component.text("Paste this door for editing before inspecting components."));
+            openDoor(player, doorId);
+            return;
+        }
+        var selection = authoringManager.selectComponent(player, type, id);
+        player.closeInventory();
+        player.sendMessage(Component.text("Selected " + type + " " + id + ": " + selection.worldBounds().describe()));
+    }
+
+    private void openDeleteDoorComponentConfirm(Player player, String doorId, String type, String id) {
+        Menu menu = menu("da:delete-door-component:" + doorId + ":" + type + ":" + id, 27, "Delete Component?");
+        button(menu, 11, Material.RED_CONCRETE, "Confirm Delete", List.of("Deletes " + type + " " + id), p -> {
+            boolean removed;
+            AuthoringSession activeEdit = authoringManager.editingDoorSession(p, doorId).orElse(null);
+            if (activeEdit != null) {
+                removed = type.equals("marker") ? activeEdit.removeMarker(id) : activeEdit.removeFeature(id);
+            } else {
+                DoorTemplate template = doorRegistry.get(doorId)
+                    .orElseThrow(() -> new IllegalArgumentException("Unknown door " + doorId));
+                DoorTemplate updated = removeDoorTemplateComponent(template, type, id);
+                removed = updated != template;
+                if (removed) {
+                    saveDoorTemplate(updated);
+                }
+            }
+            p.sendMessage(Component.text(removed ? "Deleted " + type + " " + id + "." : "No matching " + type + " named " + id + "."));
+            openDoorComponents(p, doorId, type);
+        });
+        button(menu, 15, Material.GRAY_CONCRETE, "Cancel", List.of(), p -> openDoorComponents(p, doorId, type));
+        open(player, menu);
+    }
+
+    private void promptRenameDoorComponent(Player player, String doorId, String type, String oldId) {
+        prompts.prompt(player, "Enter new " + type + " id", value -> {
+            try {
+                String newId = value.trim();
+                boolean renamed;
+                AuthoringSession activeEdit = authoringManager.editingDoorSession(player, doorId).orElse(null);
+                if (activeEdit != null) {
+                    renamed = type.equals("marker") ? activeEdit.renameMarker(oldId, newId) : activeEdit.renameFeatureSlot(oldId, newId);
+                    if (renamed) {
+                        authoringManager.selectComponent(player, type, newId);
+                    }
+                } else {
+                    DoorTemplate template = doorRegistry.get(doorId)
+                        .orElseThrow(() -> new IllegalArgumentException("Unknown door " + doorId));
+                    DoorTemplate updated = renameDoorTemplateComponent(template, type, oldId, newId);
+                    renamed = updated != template;
+                    if (renamed) {
+                        saveDoorTemplate(updated);
+                    }
+                }
+                player.sendMessage(Component.text(renamed ? "Renamed " + type + " " + oldId + " to " + newId + "." : "No matching " + type + " named " + oldId + "."));
+            } catch (Exception ex) {
+                player.sendMessage(Component.text("Rename failed: " + ex.getMessage()));
+            }
+            openDoorComponents(player, doorId, type);
+        });
+    }
+
+    private DoorTemplate removeDoorTemplateComponent(DoorTemplate template, String type, String id) {
+        List<RoomMarker> markers = new ArrayList<>(template.markers());
+        List<RoomFeatureSlot> features = new ArrayList<>(template.featureSlots());
+        boolean removed = switch (type) {
+            case "marker" -> markers.removeIf(marker -> marker.name().equalsIgnoreCase(id));
+            case "feature" -> features.removeIf(slot -> slot.id().equalsIgnoreCase(id));
+            default -> throw new IllegalArgumentException("Unknown door component type " + type);
+        };
+        if (!removed) {
+            return template;
+        }
+        return new DoorTemplate(template.id(), template.size(), template.tags(), markers, features, template.gateway(), template.structureFile());
+    }
+
+    private DoorTemplate renameDoorTemplateComponent(DoorTemplate template, String type, String oldId, String newId) {
+        if (newId == null || newId.isBlank()) {
+            throw new IllegalArgumentException("New id is required");
+        }
+        List<RoomMarker> markers = new ArrayList<>(template.markers());
+        List<RoomFeatureSlot> features = new ArrayList<>(template.featureSlots());
+        boolean renamed = switch (type) {
+            case "marker" -> {
+                if (markers.stream().anyMatch(marker -> marker.name().equalsIgnoreCase(newId))) {
+                    throw new IllegalArgumentException("Marker already exists: " + newId);
+                }
+                boolean found = false;
+                for (int i = 0; i < markers.size(); i++) {
+                    RoomMarker marker = markers.get(i);
+                    if (marker.name().equalsIgnoreCase(oldId)) {
+                        markers.set(i, new RoomMarker(newId, marker.type(), marker.position()));
+                        found = true;
+                        break;
+                    }
+                }
+                yield found;
+            }
+            case "feature" -> {
+                if (features.stream().anyMatch(slot -> slot.id().equalsIgnoreCase(newId))) {
+                    throw new IllegalArgumentException("Feature slot already exists: " + newId);
+                }
+                boolean found = false;
+                for (int i = 0; i < features.size(); i++) {
+                    RoomFeatureSlot slot = features.get(i);
+                    if (slot.id().equalsIgnoreCase(oldId)) {
+                        features.set(i, new RoomFeatureSlot(newId, slot.position(), slot.size(), slot.facing(), slot.entries()));
+                        found = true;
+                        break;
+                    }
+                }
+                yield found;
+            }
+            default -> throw new IllegalArgumentException("Unknown door component type " + type);
+        };
+        if (!renamed) {
+            return template;
+        }
+        return new DoorTemplate(template.id(), template.size(), template.tags(), markers, features, template.gateway(), template.structureFile());
     }
 
     private void promptRenameRoom(Player player, String roomId) {
@@ -705,6 +1109,17 @@ public final class MenuManager implements Listener {
         try {
             FeatureTemplateIO.save(template, featureDir);
             featureRegistry.reload();
+            templateRegistry.reload();
+        } catch (IOException ex) {
+            throw new IllegalArgumentException(ex.getMessage(), ex);
+        }
+    }
+
+    private void saveDoorTemplate(DoorTemplate template) {
+        Path doorDir = template.structureFile().getParent();
+        try {
+            DoorTemplateIO.save(template, doorDir);
+            doorRegistry.reload();
             templateRegistry.reload();
         } catch (IOException ex) {
             throw new IllegalArgumentException(ex.getMessage(), ex);

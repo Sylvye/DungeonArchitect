@@ -78,8 +78,8 @@ public final class AuthoringListener implements Listener {
             return;
         }
         event.setCancelled(true);
-        if (!authoringManager.hasEditableRoomSession(event.getPlayer())) {
-            event.getPlayer().sendActionBar(Component.text("Paste a room for editing first."));
+        if (!authoringManager.hasEditableComponentSession(event.getPlayer())) {
+            event.getPlayer().sendActionBar(Component.text("Paste a room or door for editing first."));
             return;
         }
         var hit = authoringManager.raycastComponentHit(event.getPlayer(), SELECTOR_RANGE);

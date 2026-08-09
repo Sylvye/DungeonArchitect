@@ -1,6 +1,7 @@
 package com.dungeonarchitect.template;
 
 import com.dungeonarchitect.domain.Direction3;
+import com.dungeonarchitect.domain.DoorSlotEntry;
 import com.dungeonarchitect.domain.DoorSocket;
 import com.dungeonarchitect.domain.FeatureSlotEntry;
 import com.dungeonarchitect.domain.IntVector3;
@@ -46,7 +47,10 @@ public final class RoomTemplateIO {
                 enumValue(Direction3.class, section.getString("facing", "NORTH")),
                 enumValue(SocketType.class, section.getString("socket", "STANDARD")),
                 section.getInt("width", 1),
-                section.getInt("height", 2)
+                section.getInt("height", 2),
+                section.isList("size") ? vector(section.getIntegerList("size")) : legacyDoorSize(enumValue(Direction3.class, section.getString("facing", "NORTH")), section.getInt("width", 1), section.getInt("height", 2)),
+                new LinkedHashSet<>(section.isList("tags") ? section.getStringList("tags") : List.of(section.getString("socket", "STANDARD").toLowerCase(Locale.ROOT))),
+                doorEntries(section)
             ));
         }
 
@@ -96,6 +100,16 @@ public final class RoomTemplateIO {
             item.put("socket", door.socketType().name());
             item.put("width", door.width());
             item.put("height", door.height());
+            item.put("size", list(door.size()));
+            item.put("tags", new ArrayList<>(door.tags()));
+            List<Map<String, Object>> entries = new ArrayList<>();
+            for (DoorSlotEntry entry : door.entries()) {
+                Map<String, Object> entryMap = new LinkedHashMap<>();
+                entryMap.put("door", entry.doorId());
+                entryMap.put("weight", entry.weight());
+                entries.add(entryMap);
+            }
+            item.put("entries", entries);
             doors.add(item);
         }
         yaml.set("doors", doors);
@@ -169,6 +183,22 @@ public final class RoomTemplateIO {
             throw new IllegalArgumentException("Expected vector with 3 integers, got " + values);
         }
         return new IntVector3(values.get(0), values.get(1), values.get(2));
+    }
+
+    private static List<DoorSlotEntry> doorEntries(ConfigurationSection section) {
+        List<DoorSlotEntry> entries = new ArrayList<>();
+        for (ConfigurationSection entry : sections(section, "entries")) {
+            entries.add(new DoorSlotEntry(entry.getString("door", DoorSlotEntry.EMPTY), entry.getInt("weight", 1)));
+        }
+        return entries;
+    }
+
+    private static IntVector3 legacyDoorSize(Direction3 facing, int width, int height) {
+        return switch (facing) {
+            case NORTH, SOUTH -> new IntVector3(width, height, 1);
+            case EAST, WEST -> new IntVector3(1, height, width);
+            default -> throw new IllegalArgumentException("Door facing must be horizontal");
+        };
     }
 
     private static List<Integer> list(IntVector3 vector) {

@@ -1,8 +1,11 @@
 package com.dungeonarchitect.template;
 
+import com.dungeonarchitect.domain.DoorSlotEntry;
 import com.dungeonarchitect.domain.RoomTemplate;
 import com.dungeonarchitect.domain.FeatureSlotEntry;
+import com.dungeonarchitect.domain.DoorSocket;
 import com.dungeonarchitect.domain.RoomFeatureSlot;
+import com.dungeonarchitect.door.DoorTemplateRegistry;
 import com.dungeonarchitect.feature.FeatureTemplateRegistry;
 
 import java.io.IOException;
@@ -32,8 +35,12 @@ public final class RoomTemplateRegistry {
     }
 
     public RoomTemplateRegistry(Path roomsDirectory, RoomStructureService structureService, FeatureTemplateRegistry featureRegistry) {
+        this(roomsDirectory, structureService, featureRegistry, null);
+    }
+
+    public RoomTemplateRegistry(Path roomsDirectory, RoomStructureService structureService, FeatureTemplateRegistry featureRegistry, DoorTemplateRegistry doorRegistry) {
         this.roomsDirectory = roomsDirectory;
-        this.validator = new RoomTemplateValidator(structureService, featureRegistry);
+        this.validator = new RoomTemplateValidator(structureService, featureRegistry, doorRegistry);
     }
 
     public TemplateValidationResult reload() {
@@ -151,6 +158,34 @@ public final class RoomTemplateRegistry {
                 }
                 if (changed) {
                     RoomTemplate updated = new RoomTemplate(template.id(), template.category(), template.weight(), template.tags(), template.size(), template.spawn(), template.doors(), template.markers(), slots, template.structureFile());
+                    RoomTemplateIO.save(updated, directory);
+                }
+            }
+        }
+        reload();
+    }
+
+    public void replaceDoorReferences(String oldDoorId, String newDoorId) throws IOException {
+        Files.createDirectories(roomsDirectory);
+        try (var stream = Files.list(roomsDirectory)) {
+            for (Path directory : stream.filter(Files::isDirectory).toList()) {
+                RoomTemplate template = RoomTemplateIO.load(directory);
+                List<DoorSocket> doors = new ArrayList<>();
+                boolean changed = false;
+                for (DoorSocket door : template.doors()) {
+                    List<DoorSlotEntry> entries = new ArrayList<>();
+                    for (DoorSlotEntry entry : door.entries()) {
+                        if (entry.doorId().equalsIgnoreCase(oldDoorId)) {
+                            entries.add(new DoorSlotEntry(newDoorId, entry.weight()));
+                            changed = true;
+                        } else {
+                            entries.add(entry);
+                        }
+                    }
+                    doors.add(door.withEntries(entries));
+                }
+                if (changed) {
+                    RoomTemplate updated = new RoomTemplate(template.id(), template.category(), template.weight(), template.tags(), template.size(), template.spawn(), doors, template.markers(), template.featureSlots(), template.structureFile());
                     RoomTemplateIO.save(updated, directory);
                 }
             }

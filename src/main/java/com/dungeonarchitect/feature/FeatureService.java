@@ -38,13 +38,17 @@ public final class FeatureService {
     }
 
     public void placeFeatures(World world, RoomTemplate template, RoomTransform roomTransform, long dungeonSeed, int nodeIndex) throws IOException {
-        for (RoomFeatureSlot slot : template.featureSlots()) {
+        placeFeatureSlots(world, template.id(), template.featureSlots(), roomTransform, dungeonSeed, nodeIndex);
+    }
+
+    public void placeFeatureSlots(World world, String ownerId, List<RoomFeatureSlot> slots, RoomTransform roomTransform, long dungeonSeed, int nodeIndex) throws IOException {
+        for (RoomFeatureSlot slot : slots) {
             FeatureRollResult roll = roll(slot, new Random(dungeonSeed ^ slot.id().hashCode() ^ nodeIndex));
             if (roll.status() == FeatureRollStatus.EMPTY || roll.status() == FeatureRollStatus.NO_ENTRIES) {
                 continue;
             }
             if (roll.status() == FeatureRollStatus.UNKNOWN_FEATURE || roll.status() == FeatureRollStatus.SIZE_MISMATCH) {
-                logger.warning("Skipped feature slot " + template.id() + "/" + slot.id() + ": " + roll.reason());
+                logger.warning("Skipped feature slot " + ownerId + "/" + slot.id() + ": " + roll.reason());
                 continue;
             }
             FeatureTemplate feature = registry.get(roll.selectedFeatureId()).orElseThrow();

@@ -3,11 +3,16 @@ package com.dungeonarchitect.authoring;
 import com.dungeonarchitect.domain.IntVector3;
 import com.dungeonarchitect.domain.RoomCategory;
 import com.dungeonarchitect.domain.Direction3;
+import com.dungeonarchitect.domain.DoorGateway;
+import com.dungeonarchitect.domain.DoorTemplate;
 import com.dungeonarchitect.domain.DoorSocket;
 import com.dungeonarchitect.domain.FeatureTemplate;
 import com.dungeonarchitect.domain.RoomFeatureSlot;
 import com.dungeonarchitect.domain.RoomTemplate;
 import com.dungeonarchitect.domain.SocketType;
+import com.dungeonarchitect.door.BoundaryFacing;
+import com.dungeonarchitect.door.DoorTemplateIO;
+import com.dungeonarchitect.door.DoorTemplateValidator;
 import com.dungeonarchitect.feature.FeatureTemplateIO;
 import com.dungeonarchitect.feature.FeatureTemplateValidator;
 import com.dungeonarchitect.gui.GuiItems;
@@ -58,6 +63,7 @@ public final class AuthoringManager {
     private final Server server;
     private final Path roomsDirectory;
     private final Path featuresDirectory;
+    private final Path doorsDirectory;
     private final EditWorkspaceStore workspaceStore;
     private final NamespacedKey wandKey;
     private final NamespacedKey selectorKey;
@@ -68,12 +74,14 @@ public final class AuthoringManager {
     private final Map<UUID, Boolean> preparingWorkspaces = new HashMap<>();
     private final RoomTemplateValidator validator = new RoomTemplateValidator();
     private final FeatureTemplateValidator featureValidator;
+    private final DoorTemplateValidator doorValidator;
 
     public AuthoringManager(Plugin plugin, Server server, Path roomsDirectory, Path featuresDirectory, NamespacedKey wandKey, NamespacedKey selectorKey, Material wandMaterial, RoomCategory defaultCategory, int defaultWeight) {
         this.plugin = plugin;
         this.server = server;
         this.roomsDirectory = roomsDirectory;
         this.featuresDirectory = featuresDirectory;
+        this.doorsDirectory = roomsDirectory.getParent().resolve("doors");
         this.workspaceStore = new EditWorkspaceStore(roomsDirectory.getParent().resolve("edit-workspaces.yml"));
         this.wandKey = wandKey;
         this.selectorKey = selectorKey;
@@ -81,6 +89,7 @@ public final class AuthoringManager {
         this.defaultCategory = defaultCategory;
         this.defaultWeight = defaultWeight;
         this.featureValidator = new FeatureTemplateValidator(new com.dungeonarchitect.template.RoomStructureService(server));
+        this.doorValidator = new DoorTemplateValidator(new com.dungeonarchitect.template.RoomStructureService(server));
     }
 
     public ItemStack createWand() {
@@ -146,6 +155,20 @@ public final class AuthoringManager {
         });
     }
 
+    public CompletableFuture<AuthoringSession> createDoorSession(Player player, String doorId) {
+        if (doorId.equalsIgnoreCase(com.dungeonarchitect.domain.DoorSlotEntry.EMPTY)) {
+            throw new IllegalArgumentException("empty is reserved");
+        }
+        return prepareWorkspace(player).thenApply(workspace -> {
+            placeScaffold(editWorld(), workspace.buildOrigin());
+            AuthoringSession session = new AuthoringSession(doorId);
+            session.doorSession(true);
+            sessions.put(player.getUniqueId(), session);
+            teleportToWorkspace(player, workspace);
+            return session;
+        });
+    }
+
     public CompletableFuture<AuthoringSession> editSession(Player player, RoomTemplate template) {
         return prepareWorkspace(player).thenApply(workspace -> {
             try {
@@ -196,6 +219,31 @@ public final class AuthoringManager {
         });
     }
 
+    public CompletableFuture<AuthoringSession> editDoorSession(Player player, DoorTemplate template) {
+        return prepareWorkspace(player).thenApply(workspace -> {
+            try {
+                if (!workspace.containsTemplate(template.size())) {
+                    throw new IOException("Door " + template.id() + " size " + template.size() + " is too large for the edit workspace.");
+                }
+                World world = editWorld();
+                Structure structure = server.getStructureManager().loadStructure(template.structureFile().toFile());
+                var size = structure.getSize();
+                IntVector3 nbtSize = new IntVector3(size.getBlockX(), size.getBlockY(), size.getBlockZ());
+                if (!nbtSize.equals(template.size())) {
+                    throw new IOException("door.nbt size " + nbtSize + " does not match door.yml size " + template.size() + ". Re-save this door first.");
+                }
+                pasteStructure(world, structure, workspace.buildOrigin());
+                AuthoringSession session = new AuthoringSession(template.id());
+                session.loadDoorForEdit(template, world, workspace.buildOrigin());
+                sessions.put(player.getUniqueId(), session);
+                teleportToWorkspace(player, workspace);
+                return session;
+            } catch (IOException ex) {
+                throw new CompletionException(ex);
+            }
+        });
+    }
+
     public void setSelection(Player player, int index, Location location) {
         if (!isEditWorld(location.getWorld())) {
             throw new IllegalStateException("The wand only works in da_edit");
@@ -227,6 +275,11 @@ public final class AuthoringManager {
         return session == null || !session.featureSession() ? Optional.empty() : Optional.of(session.roomId());
     }
 
+    public Optional<String> activeDoorId(Player player) {
+        AuthoringSession session = sessions.get(player.getUniqueId());
+        return session == null || !session.doorSession() ? Optional.empty() : Optional.of(session.roomId());
+    }
+
     public void renameActiveRoomId(Player player, String oldId, String newId) {
         AuthoringSession session = sessions.get(player.getUniqueId());
         if (session != null && !session.featureSession() && session.roomId().equalsIgnoreCase(oldId)) {
@@ -254,18 +307,32 @@ public final class AuthoringManager {
         return Optional.of(session);
     }
 
+    public Optional<AuthoringSession> editingDoorSession(Player player, String doorId) {
+        AuthoringSession session = sessions.get(player.getUniqueId());
+        if (session == null || !session.editingExistingDoor() || !session.roomId().equalsIgnoreCase(doorId)) {
+            return Optional.empty();
+        }
+        return Optional.of(session);
+    }
+
     public boolean hasEditableRoomSession(Player player) {
         AuthoringSession session = sessions.get(player.getUniqueId());
         return isRoomComponentSession(session);
     }
 
+    public boolean hasEditableComponentSession(Player player) {
+        AuthoringSession session = sessions.get(player.getUniqueId());
+        return isComponentSession(session);
+    }
+
     public List<String> componentIds(Player player, String type) {
         AuthoringSession session = sessions.get(player.getUniqueId());
-        if (!isRoomComponentSession(session)) {
+        if (!isComponentSession(session)) {
             return List.of();
         }
         return switch (type.toLowerCase(java.util.Locale.ROOT)) {
             case "door" -> session.doors().stream().map(com.dungeonarchitect.domain.DoorSocket::id).toList();
+            case "gateway" -> session.gateway() == null ? List.of() : List.of("gateway");
             case "marker" -> session.markers().stream().map(com.dungeonarchitect.domain.RoomMarker::name).toList();
             case "feature" -> session.featureSlots().stream().map(RoomFeatureSlot::id).toList();
             default -> List.of();
@@ -274,7 +341,7 @@ public final class AuthoringManager {
 
     public List<ComponentSelection> componentSelections(Player player) {
         AuthoringSession session = sessions.get(player.getUniqueId());
-        if (!isRoomComponentSession(session)) {
+        if (!isComponentSession(session)) {
             return List.of();
         }
         return componentSelections(session);
@@ -282,7 +349,7 @@ public final class AuthoringManager {
 
     public Optional<AuthoringSession.SelectedComponent> selectedComponent(Player player) {
         AuthoringSession session = sessions.get(player.getUniqueId());
-        if (!isRoomComponentSession(session)) {
+        if (!isComponentSession(session)) {
             return Optional.empty();
         }
         return selectedComponentSelection(player)
@@ -291,7 +358,7 @@ public final class AuthoringManager {
 
     public Optional<ComponentSelection> selectedComponentSelection(Player player) {
         AuthoringSession session = sessions.get(player.getUniqueId());
-        if (!isRoomComponentSession(session)) {
+        if (!isComponentSession(session)) {
             return Optional.empty();
         }
         Optional<AuthoringSession.SelectedComponent> selected = session.selectedComponent();
@@ -345,12 +412,34 @@ public final class AuthoringManager {
             .orElseThrow(() -> new IllegalStateException("Select the door region with the wand first"));
         SelectionBounds local = current.toLocal(roomBounds);
         String id = requestedId == null || requestedId.isBlank() ? "door_" + session.nextDoorNumber() : requestedId;
+        Direction3 inferredFacing = BoundaryFacing.infer(local, SelectionBounds.between(IntVector3.ZERO, roomBounds.size().subtract(new IntVector3(1, 1, 1))), "Door slot");
         IntVector3 size = local.size();
-        int width = Math.max(size.x(), size.z());
+        int width = switch (inferredFacing) {
+            case NORTH, SOUTH -> size.x();
+            case EAST, WEST -> size.z();
+            default -> throw new IllegalArgumentException("Door slot facing must be horizontal");
+        };
         int height = size.y();
-        session.addDoor(id, local.min(), facing, socketType, width, height);
+        session.addDoorSlot(id, local.min(), size, inferredFacing);
         selectComponent(player, "door", id);
         return new DoorCreation(id, local, width, height);
+    }
+
+    public DoorGateway saveDoorGateway(Player player) {
+        AuthoringSession session = session(player);
+        if (!session.doorSession()) {
+            throw new IllegalStateException("Start a door session with /da door create <id>");
+        }
+        SelectionBounds doorBounds = session.roomBounds()
+            .orElseThrow(() -> new IllegalStateException("Save door bounds first with /da door bounds"));
+        SelectionBounds current = session.currentSelection()
+            .orElseThrow(() -> new IllegalStateException("Select the gateway region with the wand first"));
+        SelectionBounds local = current.toLocal(doorBounds);
+        Direction3 facing = BoundaryFacing.infer(local, SelectionBounds.between(IntVector3.ZERO, doorBounds.size().subtract(new IntVector3(1, 1, 1))), "Gateway");
+        DoorGateway gateway = new DoorGateway(local.min(), local.size(), facing);
+        session.gateway(gateway);
+        selectComponent(player, "gateway", "gateway");
+        return gateway;
     }
 
     public RoomFeatureSlot createFeatureSlotFromSelection(Player player, String requestedId) {
@@ -368,8 +457,35 @@ public final class AuthoringManager {
         return slot;
     }
 
+    public RoomFeatureSlot createDoorFeatureSlotFromSelection(Player player, String requestedId) {
+        AuthoringSession session = session(player);
+        if (!session.doorSession()) {
+            throw new IllegalStateException("Start a door session with /da door create <id>");
+        }
+        SelectionBounds doorBounds = session.roomBounds()
+            .orElseThrow(() -> new IllegalStateException("Save door bounds first with /da door bounds"));
+        SelectionBounds current = session.currentSelection()
+            .orElseThrow(() -> new IllegalStateException("Select the feature slot region with the wand first"));
+        SelectionBounds local = current.toLocal(doorBounds);
+        String id = requestedId == null || requestedId.isBlank() ? "feature_" + session.nextFeatureNumber() : requestedId;
+        Direction3 facing = BukkitVectors.direction(player.getFacing());
+        RoomFeatureSlot slot = new RoomFeatureSlot(id, local.min(), local.size(), facing);
+        session.addFeatureSlot(slot);
+        selectComponent(player, "feature", slot.id());
+        return slot;
+    }
+
     public void addMarker(Player player, String name, String type, IntVector3 localPosition) {
         AuthoringSession session = session(player);
+        session.addMarker(name, type, localPosition);
+        selectComponent(player, "marker", name);
+    }
+
+    public void addDoorMarker(Player player, String name, String type, IntVector3 localPosition) {
+        AuthoringSession session = session(player);
+        if (!session.doorSession()) {
+            throw new IllegalStateException("Start a door session with /da door create <id>");
+        }
         session.addMarker(name, type, localPosition);
         selectComponent(player, "marker", name);
     }
@@ -448,14 +564,47 @@ public final class AuthoringManager {
         return featureValidator.validate(template);
     }
 
+    public TemplateValidationResult saveDoor(Player player, String requestedId) throws IOException {
+        AuthoringSession session = session(player);
+        if (!session.doorSession()) {
+            throw new IllegalStateException("Start a door session with /da door create <id>");
+        }
+        if (requestedId != null && !requestedId.isBlank()) {
+            if (requestedId.equalsIgnoreCase(com.dungeonarchitect.domain.DoorSlotEntry.EMPTY)) {
+                throw new IllegalStateException("empty is reserved");
+            }
+            if (session.editingExistingDoor() && !requestedId.equalsIgnoreCase(session.roomId())) {
+                throw new IllegalStateException("This edit session can only overwrite " + session.roomId());
+            }
+            session.roomId(requestedId);
+        }
+        SelectionBounds bounds = session.roomBounds()
+            .orElseThrow(() -> new IllegalStateException("Save door bounds first with /da door bounds"));
+        World world = session.world()
+            .orElseThrow(() -> new IllegalStateException("The selected world is no longer loaded"));
+        Path doorDirectory = doorsDirectory.resolve(session.roomId());
+        Files.createDirectories(doorDirectory);
+        Structure structure = server.getStructureManager().createStructure();
+        Location corner1 = new Location(world, bounds.min().x(), bounds.min().y(), bounds.min().z());
+        structure.fill(corner1, bounds.blockVectorSize(), true);
+        IntVector3 capturedSize = new IntVector3(structure.getSize().getBlockX(), structure.getSize().getBlockY(), structure.getSize().getBlockZ());
+        if (!capturedSize.equals(bounds.size())) {
+            throw new IllegalStateException("Captured door size " + capturedSize + " did not match selected bounds size " + bounds.size());
+        }
+        server.getStructureManager().saveStructure(doorDirectory.resolve("door.nbt").toFile(), structure);
+        DoorTemplate template = new DoorTemplate(session.roomId(), bounds.size(), session.tags(), session.markers(), session.featureSlots(), session.gateway(), doorDirectory.resolve("door.nbt"));
+        DoorTemplateIO.save(template, doorDirectory);
+        return doorValidator.validate(template);
+    }
+
     public void highlightComponent(Player player, String type, String id) {
         selectComponent(player, type, id);
     }
 
     public ComponentSelection selectComponent(Player player, String type, String id) {
         AuthoringSession session = session(player);
-        if (!isRoomComponentSession(session)) {
-            throw new IllegalStateException("Save room bounds first with /da room bounds");
+        if (!isComponentSession(session)) {
+            throw new IllegalStateException("Save bounds first");
         }
         String normalizedType = type.toLowerCase(java.util.Locale.ROOT);
         ComponentSelection selection = componentSelections(session).stream()
@@ -518,7 +667,11 @@ public final class AuthoringManager {
             .orElseThrow(() -> new IllegalStateException("Select the new component bounds with the wand first"));
         SelectionBounds local = current.toLocal(roomBounds);
         boolean updated = switch (type.toLowerCase(java.util.Locale.ROOT)) {
-            case "door" -> session.updateDoorBounds(id, local);
+            case "door" -> session.updateDoorBounds(
+                id,
+                local,
+                BoundaryFacing.infer(local, SelectionBounds.between(IntVector3.ZERO, roomBounds.size().subtract(new IntVector3(1, 1, 1))), "Door slot")
+            );
             case "marker" -> session.updateMarkerPosition(id, local.min());
             case "feature" -> session.updateFeatureSlotBounds(id, local);
             default -> throw new IllegalArgumentException("Unknown component type " + type);
@@ -542,6 +695,11 @@ public final class AuthoringManager {
 
         List<ComponentSelection> selections = new ArrayList<>();
         session.doors().forEach(door -> selections.add(componentSelection("door", door.id(), doorBounds(door), roomBounds)));
+        if (session.doorSession() && session.gateway() != null) {
+            DoorGateway gateway = session.gateway();
+            SelectionBounds gatewayBounds = SelectionBounds.between(gateway.position(), gateway.position().add(gateway.size()).subtract(new IntVector3(1, 1, 1)));
+            selections.add(componentSelection("gateway", "gateway", gatewayBounds, roomBounds));
+        }
         session.markers().forEach(marker -> selections.add(componentSelection("marker", marker.name(), SelectionBounds.between(marker.position(), marker.position()), roomBounds)));
         session.featureSlots().forEach(slot -> {
             SelectionBounds localBounds = SelectionBounds.between(slot.position(), slot.position().add(slot.size()).subtract(new IntVector3(1, 1, 1)));
@@ -551,6 +709,10 @@ public final class AuthoringManager {
     }
 
     private boolean isRoomComponentSession(AuthoringSession session) {
+        return session != null && !session.featureSession() && !session.doorSession() && session.roomBounds().isPresent();
+    }
+
+    private boolean isComponentSession(AuthoringSession session) {
         return session != null && !session.featureSession() && session.roomBounds().isPresent();
     }
 
@@ -713,12 +875,7 @@ public final class AuthoringManager {
     }
 
     private SelectionBounds doorBounds(DoorSocket door) {
-        IntVector3 maxOffset = switch (door.facing()) {
-            case NORTH, SOUTH -> new IntVector3(door.width() - 1, door.height() - 1, 0);
-            case EAST, WEST -> new IntVector3(0, door.height() - 1, door.width() - 1);
-            case UP, DOWN -> new IntVector3(door.width() - 1, 0, door.height() - 1);
-        };
-        return SelectionBounds.between(door.position(), door.position().add(maxOffset));
+        return SelectionBounds.between(door.position(), door.position().add(door.size()).subtract(new IntVector3(1, 1, 1)));
     }
 
     private final class WorkspaceClearTask implements Runnable {

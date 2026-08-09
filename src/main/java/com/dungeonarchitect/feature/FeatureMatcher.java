@@ -12,7 +12,15 @@ public final class FeatureMatcher {
     }
 
     public static boolean matches(RoomFeatureSlot slot, FeatureTemplate feature) {
-        return rotationFor(slot.size(), feature.size()) != null;
+        return match(slot, feature).matched();
+    }
+
+    public static FeatureMatchResult match(RoomFeatureSlot slot, FeatureTemplate feature) {
+        Rotation rotation = rotationFor(slot.size(), feature.size());
+        if (rotation == null) {
+            return FeatureMatchResult.rejected("feature size " + feature.size() + " does not fit slot size " + slot.size() + " with allowed yaw rotations");
+        }
+        return FeatureMatchResult.matched(rotation, "matched");
     }
 
     public static Rotation rotationFor(IntVector3 slotSize, IntVector3 featureSize) {
@@ -51,5 +59,15 @@ public final class FeatureMatcher {
         return featureSize.x() <= slotSize.x()
             && featureSize.y() <= slotSize.y()
             && featureSize.z() <= slotSize.z();
+    }
+
+    public record FeatureMatchResult(boolean matched, Rotation rotation, String reason) {
+        private static FeatureMatchResult matched(Rotation rotation, String reason) {
+            return new FeatureMatchResult(true, rotation, reason);
+        }
+
+        private static FeatureMatchResult rejected(String reason) {
+            return new FeatureMatchResult(false, null, reason);
+        }
     }
 }

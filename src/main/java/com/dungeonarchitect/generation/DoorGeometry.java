@@ -15,12 +15,7 @@ public final class DoorGeometry {
     }
 
     public static BoundingBox3i localBounds(DoorSocket door) {
-        IntVector3 maxOffset = switch (door.facing()) {
-            case NORTH, SOUTH -> new IntVector3(door.width() - 1, door.height() - 1, 0);
-            case EAST, WEST -> new IntVector3(0, door.height() - 1, door.width() - 1);
-            case UP, DOWN -> new IntVector3(door.width() - 1, 0, door.height() - 1);
-        };
-        return new BoundingBox3i(door.position(), door.position().add(maxOffset));
+        return new BoundingBox3i(door.position(), door.position().add(door.size()).subtract(new IntVector3(1, 1, 1)));
     }
 
     public static BoundingBox3i transformedBounds(DoorSocket door, RoomTransform transform) {
@@ -45,7 +40,7 @@ public final class DoorGeometry {
     }
 
     public static boolean sameAperture(DoorSocket first, DoorSocket second) {
-        return first.width() == second.width() && first.height() == second.height();
+        return first.size().equals(second.size());
     }
 
     public static String describe(DoorSocket door, RoomTransform transform) {
@@ -53,7 +48,7 @@ public final class DoorGeometry {
         BoundingBox3i bounds = transformedBounds(door, transform);
         return "id=" + door.id()
             + " facing=" + facing
-            + " size=" + door.width() + "x" + door.height()
+            + " size=" + door.size()
             + " bounds=" + bounds
             + " center=" + center(bounds);
     }

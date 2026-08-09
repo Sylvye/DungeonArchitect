@@ -1,6 +1,9 @@
 package com.dungeonarchitect.authoring;
 
 import com.dungeonarchitect.domain.Direction3;
+import com.dungeonarchitect.domain.DoorGateway;
+import com.dungeonarchitect.domain.DoorSlotEntry;
+import com.dungeonarchitect.domain.DoorTemplate;
 import com.dungeonarchitect.domain.DoorSocket;
 import com.dungeonarchitect.domain.FeatureTemplate;
 import com.dungeonarchitect.domain.IntVector3;
@@ -32,7 +35,10 @@ public final class AuthoringSession {
     private IntVector3 spawn;
     private boolean editingExistingRoom;
     private boolean featureSession;
+    private boolean doorSession;
     private boolean editingExistingFeature;
+    private boolean editingExistingDoor;
+    private DoorGateway gateway;
     private SelectedComponent selectedComponent;
     private final List<DoorSocket> doors = new ArrayList<>();
     private final List<RoomMarker> markers = new ArrayList<>();
@@ -93,8 +99,26 @@ public final class AuthoringSession {
         return editingExistingFeature;
     }
 
+    public boolean doorSession() {
+        return doorSession;
+    }
+
+    public boolean editingExistingDoor() {
+        return editingExistingDoor;
+    }
+
     public void featureSession(boolean featureSession) {
         this.featureSession = featureSession;
+        if (featureSession) {
+            doorSession = false;
+        }
+    }
+
+    public void doorSession(boolean doorSession) {
+        this.doorSession = doorSession;
+        if (doorSession) {
+            featureSession = false;
+        }
     }
 
     public RoomCategory category() {
@@ -155,7 +179,10 @@ public final class AuthoringSession {
         roomId = template.id();
         worldId = world.getUID();
         featureSession = false;
+        doorSession = false;
         editingExistingFeature = false;
+        editingExistingDoor = false;
+        gateway = null;
         roomBounds = SelectionBounds.between(origin, origin.add(template.size()).subtract(new IntVector3(1, 1, 1)));
         pos1 = roomBounds.min();
         pos2 = roomBounds.max();
@@ -176,8 +203,11 @@ public final class AuthoringSession {
         roomId = template.id();
         worldId = world.getUID();
         featureSession = true;
+        doorSession = false;
         editingExistingFeature = true;
         editingExistingRoom = false;
+        editingExistingDoor = false;
+        gateway = null;
         roomBounds = SelectionBounds.between(origin, origin.add(template.size()).subtract(new IntVector3(1, 1, 1)));
         pos1 = roomBounds.min();
         pos2 = roomBounds.max();
@@ -185,6 +215,34 @@ public final class AuthoringSession {
         doors.clear();
         markers.clear();
         featureSlots.clear();
+    }
+
+    public void loadDoorForEdit(DoorTemplate template, World world, IntVector3 origin) {
+        roomId = template.id();
+        worldId = world.getUID();
+        featureSession = false;
+        doorSession = true;
+        editingExistingFeature = false;
+        editingExistingRoom = false;
+        editingExistingDoor = true;
+        roomBounds = SelectionBounds.between(origin, origin.add(template.size()).subtract(new IntVector3(1, 1, 1)));
+        pos1 = roomBounds.min();
+        pos2 = roomBounds.max();
+        tags = new LinkedHashSet<>(template.tags());
+        gateway = template.gateway();
+        doors.clear();
+        markers.clear();
+        markers.addAll(template.markers());
+        featureSlots.clear();
+        featureSlots.addAll(template.featureSlots());
+    }
+
+    public DoorGateway gateway() {
+        return gateway;
+    }
+
+    public void gateway(DoorGateway gateway) {
+        this.gateway = gateway;
     }
 
     public int nextDoorNumber() {
@@ -198,6 +256,16 @@ public final class AuthoringSession {
     public void addDoor(String id, IntVector3 localPosition, Direction3 facing, SocketType socketType, int width, int height) {
         doors.removeIf(door -> door.id().equalsIgnoreCase(id));
         doors.add(new DoorSocket(id, localPosition, facing, socketType, width, height));
+    }
+
+    public void addDoorSlot(String id, IntVector3 localPosition, IntVector3 size, Direction3 facing) {
+        doors.removeIf(door -> door.id().equalsIgnoreCase(id));
+        doors.add(new DoorSocket(id, localPosition, size, facing, java.util.Set.of(), java.util.List.of()));
+    }
+
+    public void addDoorSlot(DoorSocket slot) {
+        doors.removeIf(door -> door.id().equalsIgnoreCase(slot.id()));
+        doors.add(slot);
     }
 
     public void addMarker(String name, String type, IntVector3 localPosition) {
@@ -217,7 +285,7 @@ public final class AuthoringSession {
         for (int i = 0; i < doors.size(); i++) {
             DoorSocket door = doors.get(i);
             if (door.id().equalsIgnoreCase(oldId)) {
-                doors.set(i, new DoorSocket(newId, door.position(), door.facing(), door.socketType(), door.width(), door.height()));
+                doors.set(i, new DoorSocket(newId, door.position(), door.facing(), door.socketType(), door.width(), door.height(), door.size(), door.tags(), door.entries()));
                 selectedComponent = null;
                 return true;
             }
@@ -225,14 +293,14 @@ public final class AuthoringSession {
         return false;
     }
 
-    public boolean updateDoorBounds(String id, SelectionBounds localBounds) {
+    public boolean updateDoorBounds(String id, SelectionBounds localBounds, Direction3 facing) {
         IntVector3 size = localBounds.size();
         int width = Math.max(size.x(), size.z());
         int height = size.y();
         for (int i = 0; i < doors.size(); i++) {
             DoorSocket door = doors.get(i);
             if (door.id().equalsIgnoreCase(id)) {
-                doors.set(i, new DoorSocket(door.id(), localBounds.min(), door.facing(), door.socketType(), width, height));
+                doors.set(i, new DoorSocket(door.id(), localBounds.min(), facing, door.socketType(), width, height, localBounds.size(), door.tags(), door.entries()));
                 return true;
             }
         }
@@ -311,6 +379,17 @@ public final class AuthoringSession {
     public void addFeatureSlot(RoomFeatureSlot slot) {
         featureSlots.removeIf(existing -> existing.id().equalsIgnoreCase(slot.id()));
         featureSlots.add(slot);
+    }
+
+    public boolean updateDoorEntries(String id, List<DoorSlotEntry> entries) {
+        for (int i = 0; i < doors.size(); i++) {
+            DoorSocket door = doors.get(i);
+            if (door.id().equalsIgnoreCase(id)) {
+                doors.set(i, door.withEntries(entries));
+                return true;
+            }
+        }
+        return false;
     }
 
     public List<DoorSocket> doors() {

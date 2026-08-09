@@ -1,15 +1,13 @@
 package com.dungeonarchitect.runtime;
 
-import com.dungeonarchitect.domain.BoundingBox3i;
 import com.dungeonarchitect.domain.IntVector3;
 import com.dungeonarchitect.domain.Rotation;
 import com.dungeonarchitect.domain.RoomTemplate;
 import com.dungeonarchitect.domain.RoomTransform;
+import com.dungeonarchitect.door.DoorService;
 import com.dungeonarchitect.feature.FeatureService;
-import com.dungeonarchitect.generation.DoorGeometry;
 import com.dungeonarchitect.template.RoomStructureService;
 import org.bukkit.Location;
-import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.block.structure.Mirror;
 import org.bukkit.block.structure.StructureRotation;
@@ -22,10 +20,16 @@ public final class RoomStructurePlacer {
     public static final float STRUCTURE_INTEGRITY = 1.0f;
     private final RoomStructureService structureService;
     private final FeatureService featureService;
+    private final DoorService doorService;
 
     public RoomStructurePlacer(RoomStructureService structureService, FeatureService featureService) {
+        this(structureService, featureService, null);
+    }
+
+    public RoomStructurePlacer(RoomStructureService structureService, FeatureService featureService, DoorService doorService) {
         this.structureService = structureService;
         this.featureService = featureService;
+        this.doorService = doorService;
     }
 
     public void place(World world, RoomTemplate template, RoomTransform transform, long dungeonSeed, int nodeIndex) throws IOException {
@@ -44,9 +48,10 @@ public final class RoomStructurePlacer {
             STRUCTURE_INTEGRITY,
             new Random(dungeonSeed ^ nodeIndex)
         );
-        clearDoorApertures(world, template, transform);
         featureService.placeFeatures(world, template, transform, dungeonSeed, nodeIndex);
-        clearDoorApertures(world, template, transform);
+        if (doorService != null) {
+            doorService.placeDoors(world, template, transform, dungeonSeed, nodeIndex);
+        }
     }
 
     public static IntVector3 pasteOrigin(RoomTransform transform) {
@@ -70,16 +75,4 @@ public final class RoomStructurePlacer {
         };
     }
 
-    private void clearDoorApertures(World world, RoomTemplate template, RoomTransform transform) {
-        for (var door : template.doors()) {
-            BoundingBox3i bounds = DoorGeometry.transformedBounds(door, transform);
-            for (int x = bounds.min().x(); x <= bounds.max().x(); x++) {
-                for (int y = bounds.min().y(); y <= bounds.max().y(); y++) {
-                    for (int z = bounds.min().z(); z <= bounds.max().z(); z++) {
-                        world.getBlockAt(x, y, z).setType(Material.AIR, false);
-                    }
-                }
-            }
-        }
-    }
 }

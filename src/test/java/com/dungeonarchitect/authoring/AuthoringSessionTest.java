@@ -116,7 +116,7 @@ final class AuthoringSessionTest {
         session.addMarker("marker_a", "spawn", new IntVector3(1, 1, 1));
         session.addFeatureSlot(new RoomFeatureSlot("slot_a", new IntVector3(1, 1, 1), new IntVector3(1, 1, 1), Direction3.SOUTH));
 
-        assertTrue(session.updateDoorBounds("door_a", SelectionBounds.between(new IntVector3(2, 3, 0), new IntVector3(4, 6, 0))));
+        assertTrue(session.updateDoorBounds("door_a", SelectionBounds.between(new IntVector3(2, 3, 0), new IntVector3(4, 6, 0)), Direction3.NORTH));
         assertTrue(session.updateMarkerPosition("marker_a", new IntVector3(5, 6, 7)));
         assertTrue(session.updateFeatureSlotBounds("slot_a", SelectionBounds.between(new IntVector3(8, 1, 8), new IntVector3(10, 2, 11))));
 

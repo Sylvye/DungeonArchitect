@@ -1,9 +1,13 @@
 package com.dungeonarchitect.authoring;
 
 import com.dungeonarchitect.domain.Direction3;
+import com.dungeonarchitect.domain.DoorGateway;
 import com.dungeonarchitect.domain.DoorSocket;
+import com.dungeonarchitect.domain.DoorTemplate;
 import com.dungeonarchitect.domain.IntVector3;
 import com.dungeonarchitect.domain.RoomCategory;
+import com.dungeonarchitect.domain.RoomFeatureSlot;
+import com.dungeonarchitect.domain.RoomMarker;
 import com.dungeonarchitect.domain.RoomTemplate;
 import com.dungeonarchitect.domain.SocketType;
 import org.bukkit.Location;
@@ -57,6 +61,36 @@ final class AuthoringManagerComponentSelectionTest {
         assertEquals(4, door.height());
         assertEquals(new AuthoringSession.SelectedComponent("door", "door_a"), session.selectedComponent().orElseThrow());
         assertEquals(SelectionBounds.between(new IntVector3(15, 82, 10), new IntVector3(16, 85, 10)), updated.worldBounds());
+    }
+
+    @Test
+    void doorEditSessionExposesMarkersAndFeatureSlotsForSelection() {
+        Player player = fakePlayer();
+        World world = fakeWorld();
+        AuthoringManager manager = manager();
+        AuthoringSession session = manager.session(player);
+        DoorTemplate door = new DoorTemplate(
+            "arch",
+            new IntVector3(8, 6, 4),
+            Set.of(),
+            List.of(new RoomMarker("spark", "generic", new IntVector3(2, 2, 1))),
+            List.of(new RoomFeatureSlot("trim", new IntVector3(3, 1, 1), new IntVector3(2, 2, 1), Direction3.NORTH)),
+            new DoorGateway(new IntVector3(2, 1, 0), new IntVector3(3, 4, 1), Direction3.NORTH),
+            Path.of("door.nbt")
+        );
+        session.loadDoorForEdit(door, world, new IntVector3(100, 80, 100));
+        SelectionBounds originalSelection = session.currentSelection().orElseThrow();
+
+        assertEquals(3, manager.componentSelections(player).size());
+        assertEquals(List.of("gateway"), manager.componentIds(player, "gateway"));
+        AuthoringManager.ComponentSelection selected = manager.selectComponent(player, "feature", "trim");
+
+        assertEquals(originalSelection, session.currentSelection().orElseThrow());
+        assertEquals(SelectionBounds.between(new IntVector3(103, 81, 101), new IntVector3(104, 82, 101)), selected.worldBounds());
+        assertEquals(selected, manager.selectedComponentSelection(player).orElseThrow());
+
+        AuthoringManager.ComponentSelection gateway = manager.selectComponent(player, "gateway", "gateway");
+        assertEquals(SelectionBounds.between(new IntVector3(102, 81, 100), new IntVector3(104, 84, 100)), gateway.worldBounds());
     }
 
     private AuthoringManager manager() {

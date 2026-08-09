@@ -1,11 +1,17 @@
 package com.dungeonarchitect.template;
 
 import com.dungeonarchitect.domain.BoundingBox3i;
+import com.dungeonarchitect.domain.DoorSlotEntry;
 import com.dungeonarchitect.domain.DoorSocket;
+import com.dungeonarchitect.domain.IntVector3;
 import com.dungeonarchitect.domain.FeatureSlotEntry;
 import com.dungeonarchitect.domain.RoomFeatureSlot;
 import com.dungeonarchitect.domain.RoomMarker;
 import com.dungeonarchitect.domain.RoomTemplate;
+import com.dungeonarchitect.authoring.SelectionBounds;
+import com.dungeonarchitect.door.BoundaryFacing;
+import com.dungeonarchitect.door.DoorTemplateMatcher;
+import com.dungeonarchitect.door.DoorTemplateRegistry;
 import com.dungeonarchitect.feature.FeatureMatcher;
 import com.dungeonarchitect.feature.FeatureTemplateRegistry;
 
@@ -16,18 +22,24 @@ import java.util.Set;
 public final class RoomTemplateValidator {
     private final RoomStructureService structureService;
     private final FeatureTemplateRegistry featureRegistry;
+    private final DoorTemplateRegistry doorRegistry;
 
     public RoomTemplateValidator() {
-        this(null, null);
+        this(null, null, null);
     }
 
     public RoomTemplateValidator(RoomStructureService structureService) {
-        this(structureService, null);
+        this(structureService, null, null);
     }
 
     public RoomTemplateValidator(RoomStructureService structureService, FeatureTemplateRegistry featureRegistry) {
+        this(structureService, featureRegistry, null);
+    }
+
+    public RoomTemplateValidator(RoomStructureService structureService, FeatureTemplateRegistry featureRegistry, DoorTemplateRegistry doorRegistry) {
         this.structureService = structureService;
         this.featureRegistry = featureRegistry;
+        this.doorRegistry = doorRegistry;
     }
 
     public TemplateValidationResult validate(RoomTemplate template) {
@@ -64,6 +76,33 @@ public final class RoomTemplateValidator {
             if (!bounds.contains(door.position())) {
                 result.add(template.id() + ": door " + door.id() + " is outside room bounds", door.position());
             }
+            IntVector3 max = door.position().add(door.size()).subtract(new IntVector3(1, 1, 1));
+            if (!bounds.contains(max)) {
+                result.add(template.id() + ": door " + door.id() + " extends outside room bounds", door.position());
+            } else {
+                try {
+                    BoundaryFacing.infer(SelectionBounds.between(door.position(), max), SelectionBounds.between(bounds.min(), bounds.max()), "Door " + door.id());
+                } catch (IllegalArgumentException ex) {
+                    result.add(template.id() + ": " + ex.getMessage(), door.position());
+                }
+            }
+            for (DoorSlotEntry entry : door.entries()) {
+                if (entry.doorId().equals(DoorSlotEntry.EMPTY)) {
+                    continue;
+                }
+                if (doorRegistry == null) {
+                    continue;
+                }
+                var doorTemplate = doorRegistry.get(entry.doorId());
+                if (doorTemplate.isEmpty()) {
+                    result.add(template.id() + ": door " + door.id() + " references unknown door template " + entry.doorId(), door.position());
+                } else {
+                    DoorTemplateMatcher.DoorTemplateMatchResult match = DoorTemplateMatcher.match(door, doorTemplate.get());
+                    if (!match.matched()) {
+                        result.add(template.id() + ": door " + door.id() + " does not match door template " + entry.doorId() + ": " + match.reason(), door.position());
+                    }
+                }
+            }
         }
     }
 
@@ -98,8 +137,11 @@ public final class RoomTemplateValidator {
                 var feature = featureRegistry.get(entry.featureId());
                 if (feature.isEmpty()) {
                     result.add(template.id() + ": feature slot " + slot.id() + " references unknown feature " + entry.featureId(), slot.position());
-                } else if (!FeatureMatcher.matches(slot, feature.get())) {
-                    result.add(template.id() + ": feature slot " + slot.id() + " does not match feature " + entry.featureId() + " size " + feature.get().size(), slot.position());
+                } else {
+                    FeatureMatcher.FeatureMatchResult match = FeatureMatcher.match(slot, feature.get());
+                    if (!match.matched()) {
+                        result.add(template.id() + ": feature slot " + slot.id() + " does not match feature " + entry.featureId() + ": " + match.reason(), slot.position());
+                    }
                 }
             }
         }

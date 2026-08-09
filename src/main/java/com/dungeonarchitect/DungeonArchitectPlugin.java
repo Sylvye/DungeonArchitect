@@ -7,6 +7,8 @@ import com.dungeonarchitect.authoring.AuthoringManager;
 import com.dungeonarchitect.authoring.SelectionParticleTask;
 import com.dungeonarchitect.command.DungeonArchitectCommand;
 import com.dungeonarchitect.domain.RoomCategory;
+import com.dungeonarchitect.door.DoorService;
+import com.dungeonarchitect.door.DoorTemplateRegistry;
 import com.dungeonarchitect.feature.FeatureService;
 import com.dungeonarchitect.feature.FeatureTemplateRegistry;
 import com.dungeonarchitect.gui.ChatPromptManager;
@@ -31,6 +33,7 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
     private DungeonManager dungeonManager;
     private RoomTemplateRegistry roomTemplateRegistry;
     private FeatureTemplateRegistry featureTemplateRegistry;
+    private DoorTemplateRegistry doorTemplateRegistry;
     private DungeonArchitectAPI api;
 
     @Override
@@ -41,7 +44,9 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
         RoomStructureService structureService = new RoomStructureService(getServer());
         featureTemplateRegistry = new FeatureTemplateRegistry(dataPath.resolve("features"), structureService);
         featureTemplateRegistry.reload().errors().forEach(error -> getLogger().warning(error));
-        roomTemplateRegistry = new RoomTemplateRegistry(dataPath.resolve("rooms"), structureService, featureTemplateRegistry);
+        doorTemplateRegistry = new DoorTemplateRegistry(dataPath.resolve("doors"), structureService);
+        doorTemplateRegistry.reload().errors().forEach(error -> getLogger().warning(error));
+        roomTemplateRegistry = new RoomTemplateRegistry(dataPath.resolve("rooms"), structureService, featureTemplateRegistry, doorTemplateRegistry);
         var validation = roomTemplateRegistry.reload();
         if (!validation.valid()) {
             validation.errors().forEach(error -> getLogger().warning(error));
@@ -53,7 +58,8 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
         boolean deleteOnDestroy = getConfig().getBoolean("worlds.delete-on-destroy", true);
 
         FeatureService featureService = new FeatureService(featureTemplateRegistry, structureService, getLogger());
-        RoomStructurePlacer structurePlacer = new RoomStructurePlacer(structureService, featureService);
+        DoorService doorService = new DoorService(doorTemplateRegistry, structureService, featureService, getLogger());
+        RoomStructurePlacer structurePlacer = new RoomStructurePlacer(structureService, featureService, doorService);
         DungeonWorldManager worldManager = new DungeonWorldManager(this, worldPrefix, deleteOnDestroy);
         dungeonManager = new DungeonManager(
             this,
@@ -90,11 +96,11 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
         }, 20L);
 
         ChatPromptManager chatPromptManager = new ChatPromptManager(this);
-        MenuManager menuManager = new MenuManager(this, authoringManager, roomTemplateRegistry, featureTemplateRegistry, dungeonManager, chatPromptManager, this::reloadContent);
+        MenuManager menuManager = new MenuManager(this, authoringManager, roomTemplateRegistry, featureTemplateRegistry, doorTemplateRegistry, dungeonManager, chatPromptManager, this::reloadContent);
         getServer().getPluginManager().registerEvents(chatPromptManager, this);
         getServer().getPluginManager().registerEvents(menuManager, this);
 
-        DungeonArchitectCommand command = new DungeonArchitectCommand(getPluginMeta().getVersion(), authoringManager, roomTemplateRegistry, featureTemplateRegistry, dungeonManager, menuManager, structureService);
+        DungeonArchitectCommand command = new DungeonArchitectCommand(getPluginMeta().getVersion(), authoringManager, roomTemplateRegistry, featureTemplateRegistry, doorTemplateRegistry, dungeonManager, menuManager, structureService);
         PluginCommand da = getCommand("da");
         if (da == null) {
             throw new IllegalStateException("Missing /da command registration");
@@ -124,6 +130,7 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
     private void reloadContent() {
         reloadConfig();
         featureTemplateRegistry.reload();
+        doorTemplateRegistry.reload();
         roomTemplateRegistry.reload();
     }
 }
