@@ -43,7 +43,7 @@ public final class FeatureService {
 
     public void placeFeatureSlots(World world, String ownerId, List<RoomFeatureSlot> slots, RoomTransform roomTransform, long dungeonSeed, int nodeIndex) throws IOException {
         for (RoomFeatureSlot slot : slots) {
-            FeatureRollResult roll = roll(slot, new Random(dungeonSeed ^ slot.id().hashCode() ^ nodeIndex));
+            FeatureRollResult roll = roll(slot, new Random(rollSeed(dungeonSeed, nodeIndex, ownerId, slot.id())));
             if (roll.status() == FeatureRollStatus.EMPTY || roll.status() == FeatureRollStatus.NO_ENTRIES) {
                 continue;
             }
@@ -91,8 +91,32 @@ public final class FeatureService {
         return entries.getLast();
     }
 
+    public static long rollSeed(long dungeonSeed, int nodeIndex, String ownerId, String slotId) {
+        long seed = dungeonSeed ^ 0x9E3779B97F4A7C15L;
+        seed = mix(seed ^ nodeIndex);
+        seed = mix(seed ^ stableHash(ownerId));
+        return mix(seed ^ stableHash(slotId));
+    }
+
     private static int totalWeight(List<FeatureSlotEntry> entries) {
         return entries.stream().mapToInt(FeatureSlotEntry::weight).sum();
+    }
+
+    private static long stableHash(String value) {
+        long hash = 1125899906842597L;
+        for (int i = 0; i < value.length(); i++) {
+            hash = 31 * hash + value.charAt(i);
+        }
+        return hash;
+    }
+
+    private static long mix(long value) {
+        value ^= value >>> 33;
+        value *= 0xff51afd7ed558ccdL;
+        value ^= value >>> 33;
+        value *= 0xc4ceb9fe1a85ec53L;
+        value ^= value >>> 33;
+        return value;
     }
 
     private void placeFeature(World world, RoomTransform roomTransform, RoomFeatureSlot slot, FeatureTemplate feature, Rotation featureRotation, long dungeonSeed, int nodeIndex) throws IOException {

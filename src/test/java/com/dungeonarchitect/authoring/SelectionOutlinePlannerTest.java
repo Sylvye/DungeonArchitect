@@ -1,5 +1,6 @@
 package com.dungeonarchitect.authoring;
 
+import com.dungeonarchitect.domain.Direction3;
 import com.dungeonarchitect.domain.IntVector3;
 import org.bukkit.util.Vector;
 import org.junit.jupiter.api.Test;
@@ -36,5 +37,18 @@ final class SelectionOutlinePlannerTest {
 
         assertEquals(new Vector(0, 0, 0), unoffset);
         assertEquals(new Vector(0.035, 0, 0), offset);
+    }
+
+    @Test
+    void facingLineStartsAtFacingFaceAndExtendsOutward() {
+        SelectionBounds bounds = SelectionBounds.between(new IntVector3(10, 80, 20), new IntVector3(12, 83, 22));
+
+        List<Vector> north = SelectionOutlinePlanner.facingLinePoints(bounds, Direction3.NORTH, 1.0, 2.0, SelectionOutlinePlanner.Offset.ZERO);
+        List<Vector> east = SelectionOutlinePlanner.facingLinePoints(bounds, Direction3.EAST, 1.0, 2.0, new SelectionOutlinePlanner.Offset(0.035, 0, 0));
+
+        assertEquals(new Vector(11.5, 82.0, 20.0), north.getFirst());
+        assertEquals(new Vector(11.5, 82.0, 18.0), north.getLast());
+        assertEquals(new Vector(13.035, 82.0, 21.5), east.getFirst());
+        assertEquals(new Vector(15.035, 82.0, 21.5), east.getLast());
     }
 }

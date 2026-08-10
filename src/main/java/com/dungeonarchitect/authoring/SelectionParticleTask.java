@@ -14,6 +14,7 @@ public final class SelectionParticleTask implements Runnable {
     private static final Particle.DustOptions MARKER_DUST = new Particle.DustOptions(Color.fromRGB(255, 33, 117), 1.0f);
     private static final Particle.DustOptions FEATURE_DUST = new Particle.DustOptions(Color.fromRGB(33, 158, 255), 1.0f);
     private static final double OUTLINE_STEP = 0.5;
+    private static final double FACING_LINE_LENGTH = 2.0;
     private final AuthoringManager authoringManager;
 
     public SelectionParticleTask(AuthoringManager authoringManager) {
@@ -60,7 +61,7 @@ public final class SelectionParticleTask implements Runnable {
     }
 
     private static StyledOutline componentOutline(String prefix, AuthoringManager.ComponentSelection selection) {
-        return StyledOutline.dust(prefix + ":" + selection.type() + ":" + selection.id(), selection.worldBounds(), dust(selection.type()));
+        return StyledOutline.dust(prefix + ":" + selection.type() + ":" + selection.id(), selection.worldBounds(), dust(selection.type()), selection.facing());
     }
 
     private static boolean sameComponent(AuthoringManager.ComponentSelection first, AuthoringManager.ComponentSelection second) {
@@ -86,6 +87,11 @@ public final class SelectionParticleTask implements Runnable {
                 world.spawnParticle(Particle.DUST, point.getX(), point.getY(), point.getZ(), 1, 0, 0, 0, 0, outline.dust());
             }
         }
+        if (outline.dust() != null && outline.facing() != null) {
+            for (var point : SelectionOutlinePlanner.facingLinePoints(outline.bounds(), outline.facing(), OUTLINE_STEP, FACING_LINE_LENGTH, offset)) {
+                world.spawnParticle(Particle.DUST, point.getX(), point.getY(), point.getZ(), 1, 0, 0, 0, 0, outline.dust());
+            }
+        }
     }
 
     private static Particle.DustOptions dust(String type) {
@@ -98,13 +104,17 @@ public final class SelectionParticleTask implements Runnable {
         };
     }
 
-    record StyledOutline(String key, SelectionBounds bounds, Particle particle, Particle.DustOptions dust) {
+    record StyledOutline(String key, SelectionBounds bounds, Particle particle, Particle.DustOptions dust, com.dungeonarchitect.domain.Direction3 facing) {
         private static StyledOutline particle(String key, SelectionBounds bounds, Particle particle) {
-            return new StyledOutline(key, bounds, particle, null);
+            return new StyledOutline(key, bounds, particle, null, null);
         }
 
         private static StyledOutline dust(String key, SelectionBounds bounds, Particle.DustOptions dust) {
-            return new StyledOutline(key, bounds, null, dust);
+            return dust(key, bounds, dust, null);
+        }
+
+        private static StyledOutline dust(String key, SelectionBounds bounds, Particle.DustOptions dust, com.dungeonarchitect.domain.Direction3 facing) {
+            return new StyledOutline(key, bounds, null, dust, facing);
         }
     }
 }

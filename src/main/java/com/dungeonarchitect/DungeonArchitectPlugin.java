@@ -64,7 +64,7 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
         dungeonManager = new DungeonManager(
             this,
             roomTemplateRegistry,
-            new DeterministicDungeonGenerator(maxAttempts, spawnY),
+            new DeterministicDungeonGenerator(maxAttempts, spawnY, doorTemplateRegistry::all),
             worldManager,
             structurePlacer
         );

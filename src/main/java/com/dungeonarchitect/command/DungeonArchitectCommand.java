@@ -623,7 +623,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
                 sender.sendMessage(Component.text("node " + node.index() + " template=" + node.templateId() + " depth=" + node.depth() + " origin=" + node.transform().origin() + " pasteOrigin=" + com.dungeonarchitect.runtime.RoomStructurePlacer.pasteOrigin(node.transform()) + " rotation=" + node.transform().rotation() + " metadataSize=" + node.transform().templateSize() + " nbtSize=" + nbtSize + " bounds=" + node.transform().transformedBounds()));
             }
             for (var edge : instance.graph().edges()) {
-                sender.sendMessage(Component.text("edge " + edge.fromNode() + ":" + edge.fromDoorId() + " -> " + edge.toNode() + ":" + edge.toDoorId()));
+                sender.sendMessage(Component.text("edge " + edge.fromNode() + ":" + edge.fromDoorId() + doorDebugSuffix(edge.fromDoorTemplateId()) + " -> " + edge.toNode() + ":" + edge.toDoorId() + doorDebugSuffix(edge.toDoorTemplateId())));
                 var from = instance.graph().nodes().get(edge.fromNode());
                 var to = instance.graph().nodes().get(edge.toNode());
                 RoomTemplate fromTemplate = templateRegistry.get(from.templateId()).orElse(null);
@@ -634,6 +634,19 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
                     if (fromDoor != null && toDoor != null) {
                         sender.sendMessage(Component.text("  from " + DoorGeometry.describe(fromDoor, from.transform())));
                         sender.sendMessage(Component.text("  to   " + DoorGeometry.describe(toDoor, to.transform())));
+                        if (edge.fromDoorTemplateId() != null && edge.toDoorTemplateId() != null) {
+                            var fromDoorTemplate = doorRegistry.get(edge.fromDoorTemplateId()).orElse(null);
+                            var toDoorTemplate = doorRegistry.get(edge.toDoorTemplateId()).orElse(null);
+                            if (fromDoorTemplate != null && toDoorTemplate != null) {
+                                var fromDoorTransform = DoorGeometry.doorTransform(fromDoor, fromDoorTemplate, from.transform());
+                                var toDoorTransform = DoorGeometry.doorTransform(toDoor, toDoorTemplate, to.transform());
+                                var fromGateway = DoorGeometry.transformedBounds(fromDoorTemplate.gateway(), fromDoorTransform);
+                                var toGateway = DoorGeometry.transformedBounds(toDoorTemplate.gateway(), toDoorTransform);
+                                var expectedToGateway = DoorGeometry.shifted(fromGateway, DoorGeometry.gatewayFacing(fromDoorTemplate, fromDoorTransform).vector());
+                                sender.sendMessage(Component.text("  from gateway door=" + fromDoorTemplate.id() + " facing=" + DoorGeometry.gatewayFacing(fromDoorTemplate, fromDoorTransform) + " bounds=" + fromGateway));
+                                sender.sendMessage(Component.text("  to   gateway door=" + toDoorTemplate.id() + " facing=" + DoorGeometry.gatewayFacing(toDoorTemplate, toDoorTransform) + " bounds=" + toGateway + " delta=" + DoorGeometry.delta(expectedToGateway, toGateway)));
+                            }
+                        }
                     }
                 }
             }
@@ -695,6 +708,10 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
             .filter(door -> door.id().equals(doorId))
             .findFirst()
             .orElse(null);
+    }
+
+    private String doorDebugSuffix(String doorTemplateId) {
+        return doorTemplateId == null ? "" : "[" + doorTemplateId + "]";
     }
 
     private Player requirePlayer(CommandSender sender) {

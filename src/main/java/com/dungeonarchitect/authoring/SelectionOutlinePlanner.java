@@ -1,5 +1,7 @@
 package com.dungeonarchitect.authoring;
 
+import com.dungeonarchitect.domain.Direction3;
+
 import org.bukkit.util.Vector;
 
 import java.util.ArrayList;
@@ -51,6 +53,37 @@ public final class SelectionOutlinePlanner {
             add(points, offset, min.x(), max.y(), z);
             add(points, offset, max.x(), min.y(), z);
             add(points, offset, max.x(), max.y(), z);
+        }
+        return List.copyOf(points);
+    }
+
+    public static List<Vector> facingLinePoints(SelectionBounds bounds, Direction3 facing, double step, double length, Offset offset) {
+        if (step <= 0) {
+            throw new IllegalArgumentException("step must be positive");
+        }
+        if (length <= 0) {
+            throw new IllegalArgumentException("length must be positive");
+        }
+        if (facing == null || facing == Direction3.UP || facing == Direction3.DOWN) {
+            return List.of();
+        }
+        var min = bounds.min();
+        var max = bounds.visualMax();
+        double centerX = (min.x() + max.x()) / 2.0;
+        double centerY = (min.y() + max.y()) / 2.0;
+        double centerZ = (min.z() + max.z()) / 2.0;
+        Vector start = switch (facing) {
+            case NORTH -> new Vector(centerX, centerY, min.z());
+            case SOUTH -> new Vector(centerX, centerY, max.z());
+            case EAST -> new Vector(max.x(), centerY, centerZ);
+            case WEST -> new Vector(min.x(), centerY, centerZ);
+            default -> throw new IllegalArgumentException("Facing must be horizontal");
+        };
+        Vector direction = new Vector(facing.vector().x(), facing.vector().y(), facing.vector().z());
+        List<Vector> points = new ArrayList<>();
+        for (double distance = 0; distance <= length; distance += step) {
+            Vector point = start.clone().add(direction.clone().multiply(distance));
+            points.add(new Vector(point.getX() + offset.x(), point.getY() + offset.y(), point.getZ() + offset.z()));
         }
         return List.copyOf(points);
     }

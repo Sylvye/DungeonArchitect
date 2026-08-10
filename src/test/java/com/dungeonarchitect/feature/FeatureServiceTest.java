@@ -55,6 +55,34 @@ final class FeatureServiceTest {
     }
 
     @Test
+    void rollSeedIncludesOwnerContextForRepeatedDoorTemplateSlots() {
+        long dungeonSeed = 12345L;
+        String doorFeatureSlotId = "feature_1";
+
+        long northDoor = FeatureService.rollSeed(dungeonSeed, 7, "door:7:north:arch", doorFeatureSlotId);
+        long eastDoor = FeatureService.rollSeed(dungeonSeed, 7, "door:7:east:arch", doorFeatureSlotId);
+        long otherRoom = FeatureService.rollSeed(dungeonSeed, 8, "door:8:north:arch", doorFeatureSlotId);
+
+        org.junit.jupiter.api.Assertions.assertNotEquals(northDoor, eastDoor);
+        org.junit.jupiter.api.Assertions.assertNotEquals(northDoor, otherRoom);
+        assertEquals(northDoor, FeatureService.rollSeed(dungeonSeed, 7, "door:7:north:arch", doorFeatureSlotId));
+    }
+
+    @Test
+    void differentOwnersCanProduceDifferentSelectionsForSameFeatureSlot() {
+        List<FeatureSlotEntry> entries = List.of(
+            new FeatureSlotEntry("empty", 1),
+            new FeatureSlotEntry("chest", 1),
+            new FeatureSlotEntry("trap", 1)
+        );
+
+        FeatureSlotEntry first = FeatureService.select(entries, new Random(FeatureService.rollSeed(99L, 1, "door:1:north:arch", "feature_1")));
+        FeatureSlotEntry second = FeatureService.select(entries, new Random(FeatureService.rollSeed(99L, 1, "door:1:south:arch", "feature_1")));
+
+        org.junit.jupiter.api.Assertions.assertNotEquals(first, second);
+    }
+
+    @Test
     void rollReportsNoEntriesAndEmptySelection() {
         FeatureService service = new FeatureService(new FeatureTemplateRegistry(tempDir, null), null);
 

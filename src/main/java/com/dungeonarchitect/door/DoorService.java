@@ -1,10 +1,10 @@
 package com.dungeonarchitect.door;
 
 import com.dungeonarchitect.domain.BoundingBox3i;
-import com.dungeonarchitect.domain.Direction3;
 import com.dungeonarchitect.domain.DoorSlotEntry;
 import com.dungeonarchitect.domain.DoorSocket;
 import com.dungeonarchitect.domain.DoorTemplate;
+import com.dungeonarchitect.domain.DungeonEdge;
 import com.dungeonarchitect.domain.IntVector3;
 import com.dungeonarchitect.domain.RoomTemplate;
 import com.dungeonarchitect.domain.RoomTransform;
@@ -21,8 +21,10 @@ import org.bukkit.structure.Structure;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 import java.util.logging.Logger;
+import java.util.stream.Collectors;
 
 public final class DoorService {
     private final DoorTemplateRegistry registry;
@@ -38,8 +40,29 @@ public final class DoorService {
     }
 
     public void placeDoors(World world, RoomTemplate room, RoomTransform roomTransform, long dungeonSeed, int nodeIndex) throws IOException {
+        placeDoors(world, room, roomTransform, dungeonSeed, nodeIndex, List.of());
+    }
+
+    public void placeDoors(World world, RoomTemplate room, RoomTransform roomTransform, long dungeonSeed, int nodeIndex, List<DungeonEdge> edges) throws IOException {
         BoundingBox3i roomBounds = roomTransform.transformedBounds();
+        Map<String, String> connectedSelections = selectedDoorTemplates(nodeIndex, edges);
+        if (!edges.isEmpty() && connectedSelections.isEmpty()) {
+            return;
+        }
         for (DoorSocket slot : room.doors()) {
+            String selectedDoorTemplateId = connectedSelections.get(slot.id());
+            if (selectedDoorTemplateId != null) {
+                DoorTemplate door = registry.get(selectedDoorTemplateId).orElse(null);
+                if (door == null) {
+                    logger.warning("Skipped connected door slot " + room.id() + "/" + slot.id() + ": selected door template disappeared " + selectedDoorTemplateId);
+                    continue;
+                }
+                placeDoor(world, roomTransform, roomBounds, slot, door, dungeonSeed, nodeIndex);
+                continue;
+            }
+            if (!shouldPlaceSlot(slot.id(), nodeIndex, edges)) {
+                continue;
+            }
             DoorRollResult roll = roll(slot, new Random(dungeonSeed ^ nodeIndex ^ slot.id().hashCode()));
             if (roll.status() == DoorRollStatus.EMPTY || roll.status() == DoorRollStatus.NO_ENTRIES) {
                 continue;
@@ -51,6 +74,31 @@ public final class DoorService {
             DoorTemplate door = registry.get(roll.selectedDoorId()).orElseThrow();
             placeDoor(world, roomTransform, roomBounds, slot, door, dungeonSeed, nodeIndex);
         }
+    }
+
+    private Map<String, String> selectedDoorTemplates(int nodeIndex, List<DungeonEdge> edges) {
+        return edges.stream()
+            .flatMap(edge -> {
+                java.util.stream.Stream<Map.Entry<String, String>> stream = java.util.stream.Stream.empty();
+                if (edge.fromNode() == nodeIndex && edge.fromDoorTemplateId() != null) {
+                    stream = java.util.stream.Stream.concat(stream, java.util.stream.Stream.of(Map.entry(edge.fromDoorId(), edge.fromDoorTemplateId())));
+                }
+                if (edge.toNode() == nodeIndex && edge.toDoorTemplateId() != null) {
+                    stream = java.util.stream.Stream.concat(stream, java.util.stream.Stream.of(Map.entry(edge.toDoorId(), edge.toDoorTemplateId())));
+                }
+                return stream;
+            })
+            .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue, (first, second) -> first));
+    }
+
+    public static boolean shouldPlaceSlot(String slotId, int nodeIndex, List<DungeonEdge> edges) {
+        if (edges.isEmpty()) {
+            return true;
+        }
+        return edges.stream().anyMatch(edge ->
+            (edge.fromNode() == nodeIndex && edge.fromDoorId().equalsIgnoreCase(slotId) && edge.fromDoorTemplateId() != null)
+                || (edge.toNode() == nodeIndex && edge.toDoorId().equalsIgnoreCase(slotId) && edge.toDoorTemplateId() != null)
+        );
     }
 
     public DoorRollResult roll(DoorSocket slot, Random random) {
@@ -98,7 +146,7 @@ public final class DoorService {
             logger.warning("Skipped door " + door.id() + " for slot " + slot.id() + ": " + match.reason());
             return;
         }
-        Rotation rotation = rotationTo(door.gateway().facing(), roomTransform.transformFacing(slot.facing()));
+        Rotation rotation = DoorGeometry.doorTransform(slot, door, roomTransform).rotation();
         BoundingBox3i slotBounds = DoorGeometry.transformedBounds(slot, roomTransform);
         RoomTransform doorTransform = new RoomTransform(slotBounds.min(), rotation, door.size());
         BoundingBox3i doorBounds = doorTransform.transformedBounds();
@@ -121,20 +169,11 @@ public final class DoorService {
             RoomStructurePlacer.STRUCTURE_INTEGRITY,
             new Random(dungeonSeed ^ nodeIndex ^ door.id().hashCode())
         );
-        featureService.placeFeatureSlots(world, "door:" + door.id(), door.featureSlots(), doorTransform, dungeonSeed ^ door.id().hashCode(), nodeIndex);
+        featureService.placeFeatureSlots(world, "door:" + nodeIndex + ":" + slot.id() + ":" + door.id(), door.featureSlots(), doorTransform, dungeonSeed, nodeIndex);
     }
 
     private static boolean contains(BoundingBox3i outer, BoundingBox3i inner) {
         return outer.contains(inner.min()) && outer.contains(inner.max());
-    }
-
-    private static Rotation rotationTo(Direction3 from, Direction3 to) {
-        for (Rotation rotation : Rotation.values()) {
-            if (from.rotateY(rotation) == to) {
-                return rotation;
-            }
-        }
-        throw new IllegalArgumentException("Cannot rotate " + from + " to " + to);
     }
 
     private static StructureRotation toBukkit(Rotation rotation) {

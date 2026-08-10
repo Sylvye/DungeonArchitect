@@ -3,6 +3,8 @@ package com.dungeonarchitect.authoring;
 import net.kyori.adventure.text.Component;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
+import org.bukkit.event.block.BlockBreakEvent;
+import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.block.Action;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.inventory.EquipmentSlot;
@@ -77,6 +79,11 @@ public final class AuthoringListener implements Listener {
         if (event.getAction() != Action.RIGHT_CLICK_AIR && event.getAction() != Action.RIGHT_CLICK_BLOCK) {
             return;
         }
+        if (!canUseSelectorSelection(event.getHand(), event.getAction())) {
+            event.setCancelled(true);
+            event.getPlayer().sendActionBar(Component.text("Offhand selector is view-only."));
+            return;
+        }
         event.setCancelled(true);
         if (!authoringManager.hasEditableComponentSession(event.getPlayer())) {
             event.getPlayer().sendActionBar(Component.text("Paste a room or door for editing first."));
@@ -89,5 +96,23 @@ public final class AuthoringListener implements Listener {
                 authoringManager.selectComponent(event.getPlayer(), selection.type(), selection.id());
                 event.getPlayer().sendMessage(Component.text("Selected " + selection.type() + " " + selection.id() + "."));
             }, () -> event.getPlayer().sendActionBar(Component.text("No component selected.")));
+    }
+
+    static boolean canUseSelectorSelection(EquipmentSlot hand, Action action) {
+        return hand == EquipmentSlot.HAND && (action == Action.RIGHT_CLICK_AIR || action == Action.RIGHT_CLICK_BLOCK);
+    }
+
+    @EventHandler
+    public void onBlockPlace(BlockPlaceEvent event) {
+        if (event.getPlayer().hasPermission("dungeonarchitect.admin")) {
+            authoringManager.markWorkspaceDirty(event.getPlayer(), event.getBlockPlaced().getLocation());
+        }
+    }
+
+    @EventHandler
+    public void onBlockBreak(BlockBreakEvent event) {
+        if (event.getPlayer().hasPermission("dungeonarchitect.admin")) {
+            authoringManager.markWorkspaceDirty(event.getPlayer(), event.getBlock().getLocation());
+        }
     }
 }

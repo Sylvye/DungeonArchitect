@@ -2,7 +2,9 @@ package com.dungeonarchitect.generation;
 
 import com.dungeonarchitect.domain.BoundingBox3i;
 import com.dungeonarchitect.domain.Direction3;
+import com.dungeonarchitect.domain.DoorGateway;
 import com.dungeonarchitect.domain.DoorSocket;
+import com.dungeonarchitect.domain.DoorTemplate;
 import com.dungeonarchitect.domain.IntVector3;
 import com.dungeonarchitect.domain.RoomTransform;
 import com.dungeonarchitect.domain.Rotation;
@@ -18,8 +20,34 @@ public final class DoorGeometry {
         return new BoundingBox3i(door.position(), door.position().add(door.size()).subtract(new IntVector3(1, 1, 1)));
     }
 
+    public static BoundingBox3i localBounds(DoorGateway gateway) {
+        return new BoundingBox3i(gateway.position(), gateway.position().add(gateway.size()).subtract(new IntVector3(1, 1, 1)));
+    }
+
     public static BoundingBox3i transformedBounds(DoorSocket door, RoomTransform transform) {
-        List<IntVector3> points = localBounds(door).corners().stream()
+        return transformedBounds(localBounds(door), transform);
+    }
+
+    public static BoundingBox3i transformedBounds(DoorGateway gateway, RoomTransform transform) {
+        return transformedBounds(localBounds(gateway), transform);
+    }
+
+    public static RoomTransform doorTransform(DoorSocket slot, DoorTemplate door, RoomTransform roomTransform) {
+        Rotation rotation = rotationTo(door.gateway().facing(), roomTransform.transformFacing(slot.facing()));
+        BoundingBox3i slotBounds = transformedBounds(slot, roomTransform);
+        return new RoomTransform(slotBounds.min(), rotation, door.size());
+    }
+
+    public static BoundingBox3i gatewayBounds(DoorSocket slot, DoorTemplate door, RoomTransform roomTransform) {
+        return transformedBounds(door.gateway(), doorTransform(slot, door, roomTransform));
+    }
+
+    public static Direction3 gatewayFacing(DoorTemplate door, RoomTransform doorTransform) {
+        return doorTransform.transformFacing(door.gateway().facing());
+    }
+
+    private static BoundingBox3i transformedBounds(BoundingBox3i localBounds, RoomTransform transform) {
+        List<IntVector3> points = localBounds.corners().stream()
             .map(transform::transformLocal)
             .toList();
         int minX = points.stream().min(Comparator.comparingInt(IntVector3::x)).orElseThrow().x();
@@ -65,5 +93,14 @@ public final class DoorGeometry {
             + ","
             + (bounds.min().z() + bounds.max().z()) / 2.0
             + ")";
+    }
+
+    private static Rotation rotationTo(Direction3 from, Direction3 to) {
+        for (Rotation rotation : Rotation.values()) {
+            if (from.rotateY(rotation) == to) {
+                return rotation;
+            }
+        }
+        throw new IllegalArgumentException("Cannot rotate " + from + " to " + to);
     }
 }

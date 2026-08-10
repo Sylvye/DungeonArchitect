@@ -15,4 +15,13 @@ final class AuthoringListenerTest {
         assertFalse(AuthoringListener.canSetWandSelection(EquipmentSlot.OFF_HAND, Action.LEFT_CLICK_BLOCK, true));
         assertFalse(AuthoringListener.canSetWandSelection(EquipmentSlot.HAND, Action.RIGHT_CLICK_AIR, false));
     }
+
+    @Test
+    void onlyMainHandRightClicksCanSelectWithSelector() {
+        assertTrue(AuthoringListener.canUseSelectorSelection(EquipmentSlot.HAND, Action.RIGHT_CLICK_AIR));
+        assertTrue(AuthoringListener.canUseSelectorSelection(EquipmentSlot.HAND, Action.RIGHT_CLICK_BLOCK));
+        assertFalse(AuthoringListener.canUseSelectorSelection(EquipmentSlot.OFF_HAND, Action.RIGHT_CLICK_AIR));
+        assertFalse(AuthoringListener.canUseSelectorSelection(EquipmentSlot.OFF_HAND, Action.RIGHT_CLICK_BLOCK));
+        assertFalse(AuthoringListener.canUseSelectorSelection(EquipmentSlot.HAND, Action.LEFT_CLICK_BLOCK));
+    }
 }

@@ -1,5 +1,6 @@
 package com.dungeonarchitect.authoring;
 
+import com.dungeonarchitect.domain.BoundingBox3i;
 import com.dungeonarchitect.domain.IntVector3;
 import com.dungeonarchitect.domain.RoomCategory;
 import com.dungeonarchitect.domain.Direction3;
@@ -35,6 +36,7 @@ import org.bukkit.WorldCreator;
 import org.bukkit.block.structure.Mirror;
 import org.bukkit.block.structure.StructureRotation;
 import org.bukkit.entity.Player;
+import org.bukkit.entity.Entity;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.Plugin;
@@ -57,7 +59,7 @@ import java.util.concurrent.CompletionException;
 
 public final class AuthoringManager {
     private static final String EDIT_WORLD_NAME = "da_edit";
-    private static final int CLEAR_BLOCKS_PER_TICK = 50_000;
+    private static final int CLEAR_BLOCKS_PER_TICK = 250_000;
     public static final Material SELECTOR_MATERIAL = Material.BREEZE_ROD;
     private final Plugin plugin;
     private final Server server;
@@ -130,7 +132,7 @@ public final class AuthoringManager {
 
     public CompletableFuture<AuthoringSession> createSession(Player player, String roomId) {
         return prepareWorkspace(player).thenApply(workspace -> {
-            placeScaffold(editWorld(), workspace.buildOrigin());
+            placeScaffold(player, editWorld(), workspace.buildOrigin());
             AuthoringSession session = new AuthoringSession(roomId);
             session.featureSession(false);
             session.category(defaultCategory);
@@ -146,7 +148,7 @@ public final class AuthoringManager {
             throw new IllegalArgumentException("empty is reserved");
         }
         return prepareWorkspace(player).thenApply(workspace -> {
-            placeScaffold(editWorld(), workspace.buildOrigin());
+            placeScaffold(player, editWorld(), workspace.buildOrigin());
             AuthoringSession session = new AuthoringSession(featureId);
             session.featureSession(true);
             sessions.put(player.getUniqueId(), session);
@@ -160,7 +162,7 @@ public final class AuthoringManager {
             throw new IllegalArgumentException("empty is reserved");
         }
         return prepareWorkspace(player).thenApply(workspace -> {
-            placeScaffold(editWorld(), workspace.buildOrigin());
+            placeScaffold(player, editWorld(), workspace.buildOrigin());
             AuthoringSession session = new AuthoringSession(doorId);
             session.doorSession(true);
             sessions.put(player.getUniqueId(), session);
@@ -182,7 +184,9 @@ public final class AuthoringManager {
                 if (!nbtSize.equals(template.size())) {
                     throw new IOException("room.nbt size " + nbtSize + " does not match room.yml size " + template.size() + ". Re-save this room from the original build area first.");
                 }
-                pasteStructure(world, structure, workspace.buildOrigin());
+                SelectionBounds footprint = templateBounds(workspace.buildOrigin(), template.size());
+                placeSupportPlatform(player, world, footprint);
+                pasteStructure(player, world, structure, workspace.buildOrigin(), template.size());
                 AuthoringSession session = new AuthoringSession(template.id());
                 session.loadTemplateForEdit(template, world, workspace.buildOrigin());
                 sessions.put(player.getUniqueId(), session);
@@ -207,7 +211,9 @@ public final class AuthoringManager {
                 if (!nbtSize.equals(template.size())) {
                     throw new IOException("feature.nbt size " + nbtSize + " does not match feature.yml size " + template.size() + ". Re-save this feature first.");
                 }
-                pasteStructure(world, structure, workspace.buildOrigin());
+                SelectionBounds footprint = templateBounds(workspace.buildOrigin(), template.size());
+                placeSupportPlatform(player, world, footprint);
+                pasteStructure(player, world, structure, workspace.buildOrigin(), template.size());
                 AuthoringSession session = new AuthoringSession(template.id());
                 session.loadFeatureForEdit(template, world, workspace.buildOrigin());
                 sessions.put(player.getUniqueId(), session);
@@ -232,7 +238,9 @@ public final class AuthoringManager {
                 if (!nbtSize.equals(template.size())) {
                     throw new IOException("door.nbt size " + nbtSize + " does not match door.yml size " + template.size() + ". Re-save this door first.");
                 }
-                pasteStructure(world, structure, workspace.buildOrigin());
+                SelectionBounds footprint = templateBounds(workspace.buildOrigin(), template.size());
+                placeSupportPlatform(player, world, footprint);
+                pasteStructure(player, world, structure, workspace.buildOrigin(), template.size());
                 AuthoringSession session = new AuthoringSession(template.id());
                 session.loadDoorForEdit(template, world, workspace.buildOrigin());
                 sessions.put(player.getUniqueId(), session);
@@ -254,7 +262,9 @@ public final class AuthoringManager {
     public SelectionBounds saveCurrentSelectionAsRoomBounds(Player player) {
         AuthoringSession session = session(player);
         session.saveCurrentSelectionAsRoomBounds();
-        return session.roomBounds().orElseThrow();
+        SelectionBounds bounds = session.roomBounds().orElseThrow();
+        session.world().ifPresent(world -> placeSupportPlatform(player, world, bounds));
+        return bounds;
     }
 
     public Optional<SelectionBounds> currentSelection(Player player) {
@@ -694,16 +704,16 @@ public final class AuthoringManager {
         }
 
         List<ComponentSelection> selections = new ArrayList<>();
-        session.doors().forEach(door -> selections.add(componentSelection("door", door.id(), doorBounds(door), roomBounds)));
+        session.doors().forEach(door -> selections.add(componentSelection("door", door.id(), doorBounds(door), roomBounds, door.facing())));
         if (session.doorSession() && session.gateway() != null) {
             DoorGateway gateway = session.gateway();
             SelectionBounds gatewayBounds = SelectionBounds.between(gateway.position(), gateway.position().add(gateway.size()).subtract(new IntVector3(1, 1, 1)));
-            selections.add(componentSelection("gateway", "gateway", gatewayBounds, roomBounds));
+            selections.add(componentSelection("gateway", "gateway", gatewayBounds, roomBounds, gateway.facing()));
         }
-        session.markers().forEach(marker -> selections.add(componentSelection("marker", marker.name(), SelectionBounds.between(marker.position(), marker.position()), roomBounds)));
+        session.markers().forEach(marker -> selections.add(componentSelection("marker", marker.name(), SelectionBounds.between(marker.position(), marker.position()), roomBounds, null)));
         session.featureSlots().forEach(slot -> {
             SelectionBounds localBounds = SelectionBounds.between(slot.position(), slot.position().add(slot.size()).subtract(new IntVector3(1, 1, 1)));
-            selections.add(componentSelection("feature", slot.id(), localBounds, roomBounds));
+            selections.add(componentSelection("feature", slot.id(), localBounds, roomBounds, slot.facing()));
         });
         return List.copyOf(selections);
     }
@@ -716,9 +726,9 @@ public final class AuthoringManager {
         return session != null && !session.featureSession() && session.roomBounds().isPresent();
     }
 
-    private ComponentSelection componentSelection(String type, String id, SelectionBounds localBounds, SelectionBounds roomBounds) {
+    private ComponentSelection componentSelection(String type, String id, SelectionBounds localBounds, SelectionBounds roomBounds, Direction3 facing) {
         SelectionBounds worldBounds = new SelectionBounds(roomBounds.min().add(localBounds.min()), roomBounds.min().add(localBounds.max()));
-        return new ComponentSelection(type, id, localBounds, worldBounds);
+        return new ComponentSelection(type, id, localBounds, worldBounds, facing);
     }
 
     private void highlightLocal(Player player, IntVector3 local, Particle particle) {
@@ -760,6 +770,22 @@ public final class AuthoringManager {
         return workspaceStore.workspace(player.getUniqueId());
     }
 
+    public void markWorkspaceDirty(Player player, Location location) {
+        if (!isEditWorld(location.getWorld())) {
+            return;
+        }
+        IntVector3 position = BukkitVectors.blockVector(location);
+        EditWorkspace workspace = workspace(player);
+        if (!workspace.clearBounds().contains(position)) {
+            return;
+        }
+        workspaceStore.markDirty(player.getUniqueId(), new BoundingBox3i(position, position));
+    }
+
+    private void markDirty(Player player, SelectionBounds bounds) {
+        workspaceStore.markDirty(player.getUniqueId(), bounds.toBoundingBox());
+    }
+
     public boolean isInEditWorld(Player player) {
         return isEditWorld(player.getWorld());
     }
@@ -799,12 +825,18 @@ public final class AuthoringManager {
         }
         EditWorkspace workspace = workspace(player);
         World world = editWorld();
+        Optional<BoundingBox3i> dirtyBounds = workspaceStore.dirtyBounds(playerId);
+        BoundingBox3i boundsToClear = dirtyBounds.orElseGet(() -> workspaceStore.needsLegacyClear(playerId) ? workspace.clearBounds() : null);
+        if (boundsToClear == null) {
+            return CompletableFuture.completedFuture(workspace);
+        }
         preparingWorkspaces.put(playerId, true);
         CompletableFuture<EditWorkspace> future = new CompletableFuture<>();
         WorkspaceClearTask clearTask = new WorkspaceClearTask(
             world,
-            workspace.clearBounds(),
+            boundsToClear,
             () -> {
+                workspaceStore.markClean(playerId);
                 preparingWorkspaces.remove(playerId);
                 future.complete(workspace);
             },
@@ -823,10 +855,22 @@ public final class AuthoringManager {
         player.teleport(new Location(world, origin.x() + 0.5, origin.y() + 2, origin.z() + 0.5));
     }
 
-    private void placeScaffold(World world, IntVector3 buildOrigin) {
+    private void placeScaffold(Player player, World world, IntVector3 buildOrigin) {
         for (IntVector3 block : AuthoringScaffold.floorBlocks(buildOrigin)) {
             world.getBlockAt(block.x(), block.y(), block.z()).setType(Material.GLASS, false);
         }
+        markDirty(player, AuthoringScaffold.floorBounds(buildOrigin));
+    }
+
+    private void placeSupportPlatform(Player player, World world, SelectionBounds footprint) {
+        for (IntVector3 block : AuthoringScaffold.supportPlatformBlocks(footprint)) {
+            world.getBlockAt(block.x(), block.y(), block.z()).setType(Material.GLASS, false);
+        }
+        markDirty(player, AuthoringScaffold.supportPlatformBounds(footprint));
+    }
+
+    private SelectionBounds templateBounds(IntVector3 origin, IntVector3 size) {
+        return SelectionBounds.between(origin, origin.add(size).subtract(new IntVector3(1, 1, 1)));
     }
 
     public void spawnSelectorRay(Player player, double distance) {
@@ -837,7 +881,7 @@ public final class AuthoringManager {
         }
     }
 
-    private void pasteStructure(World world, Structure structure, IntVector3 origin) {
+    private void pasteStructure(Player player, World world, Structure structure, IntVector3 origin, IntVector3 size) {
         structure.place(
             new Location(world, origin.x(), origin.y(), origin.z()),
             true,
@@ -847,6 +891,7 @@ public final class AuthoringManager {
             RoomStructurePlacer.STRUCTURE_INTEGRITY,
             new java.util.Random(0L)
         );
+        markDirty(player, templateBounds(origin, size));
     }
 
     private void clearExistingEditCopy(Player player) {
@@ -859,6 +904,7 @@ public final class AuthoringManager {
         if (world.isEmpty() || bounds.isEmpty() || !isEditWorld(world.get())) {
             return;
         }
+        removeNonPlayerEntities(world.get(), bounds.get().toBoundingBox());
         for (int x = bounds.get().min().x(); x <= bounds.get().max().x(); x++) {
             for (int y = bounds.get().min().y(); y <= bounds.get().max().y(); y++) {
                 for (int z = bounds.get().min().z(); z <= bounds.get().max().z(); z++) {
@@ -868,10 +914,26 @@ public final class AuthoringManager {
         }
     }
 
+    private void removeNonPlayerEntities(World world, BoundingBox3i bounds) {
+        for (Entity entity : world.getEntities()) {
+            if (entity instanceof Player) {
+                continue;
+            }
+            Location location = entity.getLocation();
+            IntVector3 position = new IntVector3(location.getBlockX(), location.getBlockY(), location.getBlockZ());
+            if (bounds.contains(position)) {
+                entity.remove();
+            }
+        }
+    }
+
     public record DoorCreation(String id, SelectionBounds localBounds, int width, int height) {
     }
 
-    public record ComponentSelection(String type, String id, SelectionBounds localBounds, SelectionBounds worldBounds) {
+    public record ComponentSelection(String type, String id, SelectionBounds localBounds, SelectionBounds worldBounds, Direction3 facing) {
+        public ComponentSelection(String type, String id, SelectionBounds localBounds, SelectionBounds worldBounds) {
+            this(type, id, localBounds, worldBounds, null);
+        }
     }
 
     private SelectionBounds doorBounds(DoorSocket door) {
@@ -899,6 +961,7 @@ public final class AuthoringManager {
         }
 
         private void start() {
+            removeNonPlayerEntities(world, bounds);
             task = server.getScheduler().runTaskTimer(plugin, this, 1L, 1L);
         }
 
@@ -907,7 +970,10 @@ public final class AuthoringManager {
             try {
                 int cleared = 0;
                 while (cleared++ < CLEAR_BLOCKS_PER_TICK) {
-                    world.getBlockAt(x, y, z).setType(Material.AIR, false);
+                    var block = world.getBlockAt(x, y, z);
+                    if (block.getType() != Material.AIR) {
+                        block.setType(Material.AIR, false);
+                    }
                     if (!advance()) {
                         task.cancel();
                         onComplete.run();

@@ -1,6 +1,7 @@
 package com.dungeonarchitect.runtime;
 
 import com.dungeonarchitect.domain.IntVector3;
+import com.dungeonarchitect.domain.DungeonEdge;
 import com.dungeonarchitect.domain.Rotation;
 import com.dungeonarchitect.domain.RoomTemplate;
 import com.dungeonarchitect.domain.RoomTransform;
@@ -14,6 +15,7 @@ import org.bukkit.block.structure.StructureRotation;
 import org.bukkit.structure.Structure;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Random;
 
 public final class RoomStructurePlacer {
@@ -33,6 +35,10 @@ public final class RoomStructurePlacer {
     }
 
     public void place(World world, RoomTemplate template, RoomTransform transform, long dungeonSeed, int nodeIndex) throws IOException {
+        place(world, template, transform, dungeonSeed, nodeIndex, List.of());
+    }
+
+    public void place(World world, RoomTemplate template, RoomTransform transform, long dungeonSeed, int nodeIndex, List<DungeonEdge> edges) throws IOException {
         Structure structure = structureService.server().getStructureManager().loadStructure(template.structureFile().toFile());
         IntVector3 nbtSize = new IntVector3(structure.getSize().getBlockX(), structure.getSize().getBlockY(), structure.getSize().getBlockZ());
         if (!nbtSize.equals(template.size())) {
@@ -50,7 +56,7 @@ public final class RoomStructurePlacer {
         );
         featureService.placeFeatures(world, template, transform, dungeonSeed, nodeIndex);
         if (doorService != null) {
-            doorService.placeDoors(world, template, transform, dungeonSeed, nodeIndex);
+            doorService.placeDoors(world, template, transform, dungeonSeed, nodeIndex, edges);
         }
     }
 

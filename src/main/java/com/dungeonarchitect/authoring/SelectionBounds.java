@@ -1,5 +1,6 @@
 package com.dungeonarchitect.authoring;
 
+import com.dungeonarchitect.domain.BoundingBox3i;
 import com.dungeonarchitect.domain.IntVector3;
 import org.bukkit.util.BlockVector;
 
@@ -28,6 +29,10 @@ public record SelectionBounds(IntVector3 min, IntVector3 max) {
     public BlockVector blockVectorSize() {
         IntVector3 size = size();
         return new BlockVector(size.x(), size.y(), size.z());
+    }
+
+    public BoundingBox3i toBoundingBox() {
+        return new BoundingBox3i(min, max);
     }
 
     public boolean contains(IntVector3 worldPosition) {

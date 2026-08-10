@@ -20,6 +20,7 @@ import com.dungeonarchitect.template.RoomTemplateRegistry;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.World;
+import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
 
@@ -78,7 +79,7 @@ public final class DungeonManager {
                     + " rotation=" + node.transform().rotation()
                     + " metadataSize=" + template.size()
                     + " bounds=" + node.transform().transformedBounds());
-                structurePlacer.place(world, template, node.transform(), request.seed(), node.index());
+                structurePlacer.place(world, template, node.transform(), request.seed(), node.index(), graph.edges());
                 rooms.add(new RoomInstance(node, template));
             }
         } catch (IOException ex) {
@@ -162,7 +163,7 @@ public final class DungeonManager {
                         + " rotation=" + node.transform().rotation()
                         + " metadataSize=" + template.size()
                         + " bounds=" + node.transform().transformedBounds());
-                    structurePlacer.place(world, template, node.transform(), request.seed(), node.index());
+                    structurePlacer.place(world, template, node.transform(), request.seed(), node.index(), graph.edges());
                     rooms.add(new RoomInstance(node, template));
                     Bukkit.getScheduler().runTaskLater(plugin, () -> placeAsyncRoom(id, request, graph, world, rooms, index + 1, future), 1L);
                 } catch (Exception ex) {
@@ -343,12 +344,26 @@ public final class DungeonManager {
         }
         for (RoomInstance room : instance.rooms()) {
             var bounds = room.bounds();
+            removeNonPlayerEntities(world, bounds);
             for (int x = bounds.min().x(); x <= bounds.max().x(); x++) {
                 for (int y = bounds.min().y(); y <= bounds.max().y(); y++) {
                     for (int z = bounds.min().z(); z <= bounds.max().z(); z++) {
                         world.getBlockAt(x, y, z).setType(org.bukkit.Material.AIR, false);
                     }
                 }
+            }
+        }
+    }
+
+    private void removeNonPlayerEntities(World world, BoundingBox3i bounds) {
+        for (Entity entity : world.getEntities()) {
+            if (entity instanceof Player) {
+                continue;
+            }
+            Location location = entity.getLocation();
+            IntVector3 position = new IntVector3(location.getBlockX(), location.getBlockY(), location.getBlockZ());
+            if (bounds.contains(position)) {
+                entity.remove();
             }
         }
     }
