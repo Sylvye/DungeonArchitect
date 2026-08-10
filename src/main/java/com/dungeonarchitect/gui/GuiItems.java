@@ -1,5 +1,6 @@
 package com.dungeonarchitect.gui;
 
+import com.dungeonarchitect.template.DiagnosticText;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.format.TextDecoration;
@@ -28,6 +29,6 @@ public final class GuiItems {
     }
 
     public static List<Component> lore(Collection<String> lore) {
-        return lore.stream().limit(8).map(line -> text(line, NamedTextColor.GRAY)).toList();
+        return DiagnosticText.lore(List.copyOf(lore)).stream().map(line -> text(line, NamedTextColor.GRAY)).toList();
     }
 }

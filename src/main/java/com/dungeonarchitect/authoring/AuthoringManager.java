@@ -261,10 +261,20 @@ public final class AuthoringManager {
 
     public SelectionBounds saveCurrentSelectionAsRoomBounds(Player player) {
         AuthoringSession session = session(player);
-        session.saveCurrentSelectionAsRoomBounds();
-        SelectionBounds bounds = session.roomBounds().orElseThrow();
-        session.world().ifPresent(world -> placeSupportPlatform(player, world, bounds));
-        return bounds;
+        requireRoomSession(session);
+        return saveCurrentSelectionAsBounds(player, session);
+    }
+
+    public SelectionBounds saveCurrentSelectionAsFeatureBounds(Player player) {
+        AuthoringSession session = session(player);
+        requireFeatureSession(session);
+        return saveCurrentSelectionAsBounds(player, session);
+    }
+
+    public SelectionBounds saveCurrentSelectionAsDoorBounds(Player player) {
+        AuthoringSession session = session(player);
+        requireDoorSession(session);
+        return saveCurrentSelectionAsBounds(player, session);
     }
 
     public Optional<SelectionBounds> currentSelection(Player player) {
@@ -277,7 +287,7 @@ public final class AuthoringManager {
 
     public Optional<String> activeRoomId(Player player) {
         AuthoringSession session = sessions.get(player.getUniqueId());
-        return session == null || session.featureSession() ? Optional.empty() : Optional.of(session.roomId());
+        return session == null || !session.roomSession() ? Optional.empty() : Optional.of(session.roomId());
     }
 
     public Optional<String> activeFeatureId(Player player) {
@@ -292,7 +302,7 @@ public final class AuthoringManager {
 
     public void renameActiveRoomId(Player player, String oldId, String newId) {
         AuthoringSession session = sessions.get(player.getUniqueId());
-        if (session != null && !session.featureSession() && session.roomId().equalsIgnoreCase(oldId)) {
+        if (session != null && session.roomSession() && session.roomId().equalsIgnoreCase(oldId)) {
             session.roomId(newId);
         }
     }
@@ -423,6 +433,7 @@ public final class AuthoringManager {
 
     public DoorCreation createDoorFromSelection(Player player, String requestedId, SocketType socketType, Direction3 facing) {
         AuthoringSession session = session(player);
+        requireRoomSession(session);
         SelectionBounds roomBounds = session.roomBounds()
             .orElseThrow(() -> new IllegalStateException("Save room bounds first with /da room bounds"));
         SelectionBounds current = session.currentSelection()
@@ -465,6 +476,7 @@ public final class AuthoringManager {
 
     public RoomFeatureSlot createFeatureSlotFromSelection(Player player, String requestedId) {
         AuthoringSession session = session(player);
+        requireRoomSession(session);
         SelectionBounds roomBounds = session.roomBounds()
             .orElseThrow(() -> new IllegalStateException("Save room bounds first with /da room bounds"));
         SelectionBounds current = session.currentSelection()
@@ -498,6 +510,7 @@ public final class AuthoringManager {
 
     public void addMarker(Player player, String name, String type, IntVector3 localPosition) {
         AuthoringSession session = session(player);
+        requireRoomSession(session);
         session.addMarker(name, type, localPosition);
         selectComponent(player, "marker", name);
     }
@@ -513,6 +526,7 @@ public final class AuthoringManager {
 
     public TemplateValidationResult save(Player player, String requestedId) throws IOException {
         AuthoringSession session = session(player);
+        requireRoomSession(session);
         if (requestedId != null && !requestedId.isBlank()) {
             if (session.editingExistingRoom() && !requestedId.equalsIgnoreCase(session.roomId())) {
                 throw new IllegalStateException("This edit session can only overwrite " + session.roomId());
@@ -730,11 +744,36 @@ public final class AuthoringManager {
     }
 
     private boolean isRoomComponentSession(AuthoringSession session) {
-        return session != null && !session.featureSession() && !session.doorSession() && session.roomBounds().isPresent();
+        return session != null && session.roomSession() && session.roomBounds().isPresent();
     }
 
     private boolean isComponentSession(AuthoringSession session) {
         return session != null && !session.featureSession() && session.roomBounds().isPresent();
+    }
+
+    private SelectionBounds saveCurrentSelectionAsBounds(Player player, AuthoringSession session) {
+        session.saveCurrentSelectionAsRoomBounds();
+        SelectionBounds bounds = session.roomBounds().orElseThrow();
+        session.world().ifPresent(world -> placeSupportPlatform(player, world, bounds));
+        return bounds;
+    }
+
+    private void requireRoomSession(AuthoringSession session) {
+        if (!session.roomSession()) {
+            throw new IllegalStateException("Start a room session with /da room create <id>");
+        }
+    }
+
+    private void requireFeatureSession(AuthoringSession session) {
+        if (!session.featureSession()) {
+            throw new IllegalStateException("Start a feature session with /da feature create <id>");
+        }
+    }
+
+    private void requireDoorSession(AuthoringSession session) {
+        if (!session.doorSession()) {
+            throw new IllegalStateException("Start a door session with /da door create <id>");
+        }
     }
 
     private ComponentSelection componentSelection(String type, String id, SelectionBounds localBounds, SelectionBounds roomBounds, Direction3 facing) {

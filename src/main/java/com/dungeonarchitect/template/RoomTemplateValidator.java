@@ -20,7 +20,7 @@ import java.util.HashSet;
 import java.util.Set;
 
 public final class RoomTemplateValidator {
-    private final RoomStructureService structureService;
+    private final StructureSizeReader structureService;
     private final FeatureTemplateRegistry featureRegistry;
     private final DoorTemplateRegistry doorRegistry;
 
@@ -42,6 +42,16 @@ public final class RoomTemplateValidator {
         this.doorRegistry = doorRegistry;
     }
 
+    RoomTemplateValidator(StructureSizeReader structureService, FeatureTemplateRegistry featureRegistry, DoorTemplateRegistry doorRegistry) {
+        this.structureService = structureService;
+        this.featureRegistry = featureRegistry;
+        this.doorRegistry = doorRegistry;
+    }
+
+    public StructureSizeReader sizeReader() {
+        return structureService;
+    }
+
     public TemplateValidationResult validate(RoomTemplate template) {
         TemplateValidationResult result = new TemplateValidationResult();
         if (!Files.isRegularFile(template.structureFile())) {
@@ -50,7 +60,7 @@ public final class RoomTemplateValidator {
             try {
                 var nbtSize = structureService.loadSize(template.structureFile());
                 if (!nbtSize.equals(template.size())) {
-                    result.add(template.id() + ": room.nbt size " + nbtSize + " does not match room.yml size " + template.size() + ". Re-save this room from the original build area.");
+                    result.add(template.id() + ": room.nbt is " + DiagnosticText.size(nbtSize) + ", but room.yml says " + DiagnosticText.size(template.size()) + ". Re-save this room from the original build area.");
                 }
             } catch (Exception ex) {
                 result.add(template.id() + ": failed to load room.nbt for size validation: " + ex.getMessage());
@@ -62,7 +72,7 @@ public final class RoomTemplateValidator {
             validateMarkers(template, bounds, result);
             validateFeatureSlots(template, bounds, result);
         } catch (IllegalArgumentException ex) {
-            result.add(template.id() + ": invalid size: " + ex.getMessage());
+            result.add(template.id() + ": invalid size: " + readable(ex.getMessage()));
         }
         return result;
     }
@@ -74,19 +84,19 @@ public final class RoomTemplateValidator {
                 result.add(template.id() + ": duplicate door id " + door.id());
             }
             if (!bounds.contains(door.position())) {
-                result.add(template.id() + ": door " + door.id() + " is outside room bounds", door.position());
+                result.add(template.id() + ": door " + door.id() + " starts outside room bounds at " + DiagnosticText.position(door.position()), door.position());
             }
             IntVector3 max = door.position().add(door.size()).subtract(new IntVector3(1, 1, 1));
             if (!bounds.contains(max)) {
-                result.add(template.id() + ": door " + door.id() + " extends outside room bounds", door.position());
+                result.add(template.id() + ": door " + door.id() + " extends outside room bounds from " + DiagnosticText.position(door.position()) + " size " + DiagnosticText.size(door.size()), door.position());
             } else {
                 try {
                     var inferred = BoundaryFacing.infer(SelectionBounds.between(door.position(), max), SelectionBounds.between(bounds.min(), bounds.max()), "Door " + door.id());
                     if (door.facing() != inferred) {
-                        result.add(template.id() + ": door " + door.id() + " facing " + door.facing() + " does not match inferred bounds face " + inferred, door.position());
+                        result.add(template.id() + ": door " + door.id() + " faces " + door.facing() + ", but its bounds touch the " + inferred + " room face", door.position());
                     }
                 } catch (IllegalArgumentException ex) {
-                    result.add(template.id() + ": " + ex.getMessage(), door.position());
+                    result.add(template.id() + ": " + readable(ex.getMessage()), door.position());
                 }
             }
             for (DoorSlotEntry entry : door.entries()) {
@@ -98,11 +108,11 @@ public final class RoomTemplateValidator {
                 }
                 var doorTemplate = doorRegistry.get(entry.doorId());
                 if (doorTemplate.isEmpty()) {
-                    result.add(template.id() + ": door " + door.id() + " references unknown door template " + entry.doorId(), door.position());
+                    result.add(template.id() + ": door " + door.id() + " references missing or invalid door template " + entry.doorId(), door.position());
                 } else {
                     DoorTemplateMatcher.DoorTemplateMatchResult match = DoorTemplateMatcher.match(door, doorTemplate.get());
                     if (!match.matched()) {
-                        result.add(template.id() + ": door " + door.id() + " does not match door template " + entry.doorId() + ": " + match.reason(), door.position());
+                        result.add(template.id() + ": door " + door.id() + " cannot use door template " + entry.doorId() + ": " + match.reason(), door.position());
                     }
                 }
             }
@@ -112,7 +122,7 @@ public final class RoomTemplateValidator {
     private void validateMarkers(RoomTemplate template, BoundingBox3i bounds, TemplateValidationResult result) {
         for (RoomMarker marker : template.markers()) {
             if (!bounds.contains(marker.position())) {
-                result.add(template.id() + ": marker " + marker.name() + " is outside room bounds", marker.position());
+                result.add(template.id() + ": marker " + marker.name() + " is outside room bounds at " + DiagnosticText.position(marker.position()), marker.position());
             }
         }
     }
@@ -125,10 +135,10 @@ public final class RoomTemplateValidator {
             }
             boolean minInside = bounds.contains(slot.position());
             if (!minInside) {
-                result.add(template.id() + ": feature slot " + slot.id() + " is outside room bounds", slot.position());
+                result.add(template.id() + ": feature slot " + slot.id() + " starts outside room bounds at " + DiagnosticText.position(slot.position()), slot.position());
             }
             if (minInside && !bounds.contains(slot.position().add(slot.size()).subtract(new com.dungeonarchitect.domain.IntVector3(1, 1, 1)))) {
-                result.add(template.id() + ": feature slot " + slot.id() + " extends outside room bounds", slot.position());
+                result.add(template.id() + ": feature slot " + slot.id() + " extends outside room bounds from " + DiagnosticText.position(slot.position()) + " size " + DiagnosticText.size(slot.size()), slot.position());
             }
             for (FeatureSlotEntry entry : slot.entries()) {
                 if (entry.featureId().equals(FeatureSlotEntry.EMPTY)) {
@@ -139,14 +149,25 @@ public final class RoomTemplateValidator {
                 }
                 var feature = featureRegistry.get(entry.featureId());
                 if (feature.isEmpty()) {
-                    result.add(template.id() + ": feature slot " + slot.id() + " references unknown feature " + entry.featureId(), slot.position());
+                    result.add(template.id() + ": feature slot " + slot.id() + " references missing or invalid feature " + entry.featureId(), slot.position());
                 } else {
                     FeatureMatcher.FeatureMatchResult match = FeatureMatcher.match(slot, feature.get());
                     if (!match.matched()) {
-                        result.add(template.id() + ": feature slot " + slot.id() + " does not match feature " + entry.featureId() + ": " + match.reason(), slot.position());
+                        result.add(template.id() + ": feature slot " + slot.id() + " cannot use feature " + entry.featureId() + ": " + match.reason(), slot.position());
                     }
                 }
             }
         }
+    }
+
+    private String readable(String message) {
+        if (message == null) {
+            return "unknown error";
+        }
+        return message
+            .replace("IntVector3[x=", "(")
+            .replace(", y=", ", ")
+            .replace(", z=", ", ")
+            .replace("]", ")");
     }
 }

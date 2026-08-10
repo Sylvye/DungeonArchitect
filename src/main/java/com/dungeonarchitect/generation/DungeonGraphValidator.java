@@ -7,6 +7,7 @@ import com.dungeonarchitect.domain.DungeonGraph;
 import com.dungeonarchitect.domain.DungeonNode;
 import com.dungeonarchitect.domain.RoomTemplate;
 import com.dungeonarchitect.door.DoorTemplateMatcher;
+import com.dungeonarchitect.template.DiagnosticText;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -41,7 +42,7 @@ public final class DungeonGraphValidator {
             RoomTemplate fromTemplate = templates.get(from.templateId());
             RoomTemplate toTemplate = templates.get(to.templateId());
             if (fromTemplate == null || toTemplate == null) {
-                errors.add("Edge references missing template: " + edge);
+                errors.add("Edge references a missing room template: " + edge.fromNode() + " -> " + edge.toNode());
                 continue;
             }
             DoorSocket fromDoor = findDoor(fromTemplate, edge.fromDoorId(), errors);
@@ -58,17 +59,17 @@ public final class DungeonGraphValidator {
             var fromPosition = from.transform().transformLocal(fromDoor.position());
             var toPosition = to.transform().transformLocal(toDoor.position());
             if (toFacing != fromFacing.opposite()) {
-                errors.add("Edge " + edge + " has non-opposite facings: " + fromFacing + " and " + toFacing);
+                errors.add("Edge " + edge.fromNode() + ":" + edge.fromDoorId() + " -> " + edge.toNode() + ":" + edge.toDoorId() + " has non-opposite facings: " + fromFacing + " and " + toFacing);
             }
             var fromBounds = DoorGeometry.transformedBounds(fromDoor, from.transform());
             var toBounds = DoorGeometry.transformedBounds(toDoor, to.transform());
             if (!fromBounds.size().equals(toBounds.size())) {
-                errors.add("Edge " + edge + " has mismatched door aperture sizes: " + fromBounds.size() + " and " + toBounds.size());
+                errors.add("Edge " + edge.fromNode() + ":" + edge.fromDoorId() + " -> " + edge.toNode() + ":" + edge.toDoorId() + " has mismatched aperture sizes: " + DiagnosticText.size(fromBounds.size()) + " and " + DiagnosticText.size(toBounds.size()));
                 continue;
             }
             var expectedToBounds = DoorGeometry.shifted(fromBounds, fromFacing.vector());
             if (!toBounds.equals(expectedToBounds)) {
-                errors.add("Edge " + edge + " door rectangles are not aligned: expected " + expectedToBounds + " actual " + toBounds + " delta=" + DoorGeometry.delta(expectedToBounds, toBounds));
+                errors.add("Edge " + edge.fromNode() + ":" + edge.fromDoorId() + " -> " + edge.toNode() + ":" + edge.toDoorId() + " door rectangles are not aligned. Expected " + DiagnosticText.box(expectedToBounds) + "; actual " + DiagnosticText.box(toBounds) + "; delta " + DoorGeometry.delta(expectedToBounds, toBounds));
             }
         }
     }
@@ -77,17 +78,17 @@ public final class DungeonGraphValidator {
         DoorTemplate fromTemplate = doorTemplates.get(edge.fromDoorTemplateId());
         DoorTemplate toTemplate = doorTemplates.get(edge.toDoorTemplateId());
         if (fromTemplate == null || toTemplate == null) {
-            errors.add("Edge references missing door template: " + edge);
+            errors.add("Edge references a missing door template: " + edge.fromDoorTemplateId() + " or " + edge.toDoorTemplateId());
             return;
         }
         var fromMatch = DoorTemplateMatcher.match(fromDoor, fromTemplate);
         if (!fromMatch.matched()) {
-            errors.add("Edge " + edge + " from door template " + fromTemplate.id() + " does not match slot " + fromDoor.id() + ": " + fromMatch.reason());
+            errors.add("Edge from door template " + fromTemplate.id() + " does not match slot " + fromDoor.id() + ": " + fromMatch.reason());
             return;
         }
         var toMatch = DoorTemplateMatcher.match(toDoor, toTemplate);
         if (!toMatch.matched()) {
-            errors.add("Edge " + edge + " to door template " + toTemplate.id() + " does not match slot " + toDoor.id() + ": " + toMatch.reason());
+            errors.add("Edge to door template " + toTemplate.id() + " does not match slot " + toDoor.id() + ": " + toMatch.reason());
             return;
         }
         var fromDoorTransform = DoorGeometry.doorTransform(fromDoor, fromTemplate, from.transform());
@@ -95,17 +96,17 @@ public final class DungeonGraphValidator {
         var fromFacing = DoorGeometry.gatewayFacing(fromTemplate, fromDoorTransform);
         var toFacing = DoorGeometry.gatewayFacing(toTemplate, toDoorTransform);
         if (toFacing != fromFacing.opposite()) {
-            errors.add("Edge " + edge + " has non-opposite gateway facings: " + fromFacing + " and " + toFacing);
+            errors.add("Edge " + edge.fromNode() + ":" + edge.fromDoorId() + " -> " + edge.toNode() + ":" + edge.toDoorId() + " has non-opposite gateway facings: " + fromFacing + " and " + toFacing);
         }
         var fromBounds = DoorGeometry.transformedBounds(fromTemplate.gateway(), fromDoorTransform);
         var toBounds = DoorGeometry.transformedBounds(toTemplate.gateway(), toDoorTransform);
         if (!fromBounds.size().equals(toBounds.size())) {
-            errors.add("Edge " + edge + " has mismatched gateway sizes: " + fromBounds.size() + " and " + toBounds.size());
+            errors.add("Edge " + edge.fromNode() + ":" + edge.fromDoorId() + " -> " + edge.toNode() + ":" + edge.toDoorId() + " has mismatched gateway sizes: " + DiagnosticText.size(fromBounds.size()) + " and " + DiagnosticText.size(toBounds.size()));
             return;
         }
         var expectedToBounds = DoorGeometry.shifted(fromBounds, fromFacing.vector());
         if (!toBounds.equals(expectedToBounds)) {
-            errors.add("Edge " + edge + " gateways are not aligned: expected " + expectedToBounds + " actual " + toBounds + " delta=" + DoorGeometry.delta(expectedToBounds, toBounds));
+            errors.add("Edge " + edge.fromNode() + ":" + edge.fromDoorId() + " -> " + edge.toNode() + ":" + edge.toDoorId() + " gateways are not aligned. Expected " + DiagnosticText.box(expectedToBounds) + "; actual " + DiagnosticText.box(toBounds) + "; delta " + DoorGeometry.delta(expectedToBounds, toBounds));
         }
     }
 
@@ -114,7 +115,7 @@ public final class DungeonGraphValidator {
             .filter(door -> door.id().equals(doorId))
             .findFirst()
             .orElseGet(() -> {
-                errors.add("Template " + template.id() + " has no door " + doorId);
+                errors.add("Room " + template.id() + " has no door " + doorId);
                 return null;
             });
     }
@@ -125,7 +126,7 @@ public final class DungeonGraphValidator {
                 var first = graph.nodes().get(i).transform().transformedBounds();
                 var second = graph.nodes().get(j).transform().transformedBounds();
                 if (first.intersects(second)) {
-                    errors.add("Room bounds overlap: node " + i + " " + first + " and node " + j + " " + second);
+                    errors.add("Room bounds overlap: node " + i + " " + DiagnosticText.box(first) + " and node " + j + " " + DiagnosticText.box(second));
                 }
             }
         }

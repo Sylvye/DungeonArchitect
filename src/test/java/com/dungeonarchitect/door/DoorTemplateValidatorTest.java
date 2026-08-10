@@ -36,6 +36,6 @@ final class DoorTemplateValidatorTest {
         var result = new DoorTemplateValidator(null).validate(template);
 
         assertFalse(result.valid());
-        assertTrue(result.errors().stream().anyMatch(error -> error.contains("does not match inferred bounds face DOWN")), result.errors().toString());
+        assertTrue(result.errors().stream().anyMatch(error -> error.contains("bounds touch the DOWN door face")), result.errors().toString());
     }
 }

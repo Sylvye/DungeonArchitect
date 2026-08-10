@@ -7,6 +7,8 @@ import com.dungeonarchitect.domain.FeatureSlotEntry;
 import com.dungeonarchitect.domain.IntVector3;
 import com.dungeonarchitect.domain.RoomFeatureSlot;
 import com.dungeonarchitect.domain.RoomMarker;
+import com.dungeonarchitect.template.StructureSizeReader;
+import com.dungeonarchitect.template.TemplateLoadStatus;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.YamlConfiguration;
 
@@ -26,9 +28,26 @@ public final class DoorTemplateIO {
     }
 
     public static DoorTemplate load(Path doorDirectory) {
+        return loadInternal(doorDirectory, null, null).template();
+    }
+
+    public static TemplateLoadStatus<DoorTemplate> loadRecovering(Path doorDirectory, StructureSizeReader sizeReader) {
+        return loadInternal(doorDirectory, sizeReader, new ArrayList<>());
+    }
+
+    private static TemplateLoadStatus<DoorTemplate> loadInternal(Path doorDirectory, StructureSizeReader sizeReader, List<String> repairs) {
+        List<String> repairLog = repairs == null ? new ArrayList<>() : repairs;
+        List<String> errors = new ArrayList<>();
+        String id = doorDirectory.getFileName().toString();
+        try {
         YamlConfiguration yaml = YamlConfiguration.loadConfiguration(doorDirectory.resolve("door.yml").toFile());
-        String id = yaml.getString("id", doorDirectory.getFileName().toString());
-        IntVector3 size = vector(yaml.getIntegerList("size"));
+        String configuredId = yaml.getString("id");
+        if (configuredId == null || configuredId.isBlank()) {
+            repairLog.add(id + ": repaired missing door id from directory name");
+        } else {
+            id = configuredId;
+        }
+        IntVector3 size = size(yaml, doorDirectory.resolve("door.nbt"), sizeReader, id, "door", repairLog);
         Set<String> tags = new LinkedHashSet<>(yaml.getStringList("tags"));
         DoorGateway gateway = null;
         ConfigurationSection gatewaySection = yaml.getConfigurationSection("gateway");
@@ -52,12 +71,20 @@ public final class DoorTemplateIO {
             featureSlots.add(new RoomFeatureSlot(
                 section.getString("id"),
                 vector(section.getIntegerList("position")),
-                vector(section.getIntegerList("size")),
+                section.isList("size") ? vector(section.getIntegerList("size")) : defaultFeatureSlotSize(id, section.getString("id"), repairLog),
                 enumValue(Direction3.class, section.getString("facing", "NORTH")),
                 entries
             ));
         }
-        return new DoorTemplate(id, size, tags, markers, featureSlots, gateway, doorDirectory.resolve("door.nbt"));
+        DoorTemplate template = new DoorTemplate(id, size, tags, markers, featureSlots, gateway, doorDirectory.resolve("door.nbt"));
+        return new TemplateLoadStatus<>(template, template.id(), doorDirectory, true, errors, repairLog);
+        } catch (RuntimeException ex) {
+            if (repairs == null) {
+                throw ex;
+            }
+            errors.add(id + ": failed to load door metadata: " + ex.getMessage());
+            return new TemplateLoadStatus<>(null, id, doorDirectory, false, errors, repairLog);
+        }
     }
 
     public static void save(DoorTemplate template, Path doorDirectory) throws IOException {
@@ -125,6 +152,31 @@ public final class DoorTemplateIO {
             throw new IllegalArgumentException("Expected vector with 3 integers, got " + values);
         }
         return new IntVector3(values.get(0), values.get(1), values.get(2));
+    }
+
+    private static IntVector3 size(YamlConfiguration yaml, Path structureFile, StructureSizeReader sizeReader, String id, String type, List<String> repairs) {
+        try {
+            if (yaml.isList("size")) {
+                return vector(yaml.getIntegerList("size"));
+            }
+        } catch (IllegalArgumentException ignored) {
+            // Fall through to structure-derived repair.
+        }
+        if (sizeReader == null) {
+            throw new IllegalArgumentException("Expected vector with 3 integers, got " + yaml.getIntegerList("size"));
+        }
+        try {
+            IntVector3 repaired = sizeReader.loadSize(structureFile);
+            repairs.add(id + ": repaired missing or malformed " + type + ".yml size from " + type + ".nbt size " + repaired);
+            return repaired;
+        } catch (Exception ex) {
+            throw new IllegalArgumentException("Unable to repair missing or malformed size from " + type + ".nbt: " + ex.getMessage(), ex);
+        }
+    }
+
+    private static IntVector3 defaultFeatureSlotSize(String templateId, String slotId, List<String> repairs) {
+        repairs.add(templateId + ": repaired missing feature slot size for " + slotId + " to [1,1,1]");
+        return new IntVector3(1, 1, 1);
     }
 
     private static List<Integer> list(IntVector3 vector) {

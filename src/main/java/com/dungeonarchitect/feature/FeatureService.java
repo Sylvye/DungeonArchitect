@@ -9,6 +9,7 @@ import com.dungeonarchitect.domain.RoomTemplate;
 import com.dungeonarchitect.domain.RoomTransform;
 import com.dungeonarchitect.domain.Rotation;
 import com.dungeonarchitect.runtime.RoomStructurePlacer;
+import com.dungeonarchitect.template.DiagnosticText;
 import com.dungeonarchitect.template.RoomStructureService;
 import org.bukkit.Location;
 import org.bukkit.World;
@@ -71,7 +72,7 @@ public final class FeatureService {
         }
         Rotation rotation = FeatureMatcher.rotationFor(slot.size(), feature.size());
         if (rotation == null) {
-            return new FeatureRollResult(slot.id(), slot.entries(), selected.featureId(), selected.weight(), total, FeatureRollStatus.SIZE_MISMATCH, "selected feature " + selected.featureId() + " size " + feature.size() + " does not fit slot size " + slot.size(), null);
+            return new FeatureRollResult(slot.id(), slot.entries(), selected.featureId(), selected.weight(), total, FeatureRollStatus.SIZE_MISMATCH, "selected feature " + selected.featureId() + " is " + DiagnosticText.size(feature.size()) + ", but slot allows " + DiagnosticText.size(slot.size()), null);
         }
         return new FeatureRollResult(slot.id(), slot.entries(), selected.featureId(), selected.weight(), total, FeatureRollStatus.SELECTED, "selected feature " + selected.featureId(), rotation);
     }
@@ -123,7 +124,7 @@ public final class FeatureService {
         Structure structure = structureService.server().getStructureManager().loadStructure(feature.structureFile().toFile());
         IntVector3 nbtSize = new IntVector3(structure.getSize().getBlockX(), structure.getSize().getBlockY(), structure.getSize().getBlockZ());
         if (!nbtSize.equals(feature.size())) {
-            throw new IOException("Feature " + feature.id() + " feature.nbt size " + nbtSize + " does not match feature.yml size " + feature.size() + ". Re-save this feature.");
+            throw new IOException("Feature " + feature.id() + " feature.nbt is " + DiagnosticText.size(nbtSize) + ", but feature.yml says " + DiagnosticText.size(feature.size()) + ". Re-save this feature.");
         }
         Rotation worldRotation = compose(roomTransform.rotation(), featureRotation);
         IntVector3 rotatedFeatureSize = featureRotation.rotateSize(feature.size());

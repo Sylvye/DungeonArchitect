@@ -20,6 +20,8 @@ import com.dungeonarchitect.runtime.PlayerRoomListener;
 import com.dungeonarchitect.runtime.RoomStructurePlacer;
 import com.dungeonarchitect.template.RoomTemplateRegistry;
 import com.dungeonarchitect.template.RoomStructureService;
+import com.dungeonarchitect.template.TemplateDiagnostics;
+import com.dungeonarchitect.template.TemplateValidationResult;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.command.PluginCommand;
@@ -43,16 +45,16 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
         Path dataPath = getDataFolder().toPath();
         RoomStructureService structureService = new RoomStructureService(getServer());
         featureTemplateRegistry = new FeatureTemplateRegistry(dataPath.resolve("features"), structureService);
-        featureTemplateRegistry.reload().errors().forEach(error -> getLogger().warning(error));
+        featureTemplateRegistry.reload();
         doorTemplateRegistry = new DoorTemplateRegistry(dataPath.resolve("doors"), structureService);
-        doorTemplateRegistry.reload().errors().forEach(error -> getLogger().warning(error));
+        doorTemplateRegistry.reload();
         roomTemplateRegistry = new RoomTemplateRegistry(dataPath.resolve("rooms"), structureService, featureTemplateRegistry, doorTemplateRegistry);
-        var validation = roomTemplateRegistry.reload();
-        if (!validation.valid()) {
-            validation.errors().forEach(error -> getLogger().warning(error));
-        }
+        roomTemplateRegistry.reload();
+        logDiagnostics();
 
-        int maxAttempts = getConfig().getInt("generation.max-placement-attempts", 250);
+        int maxSearchSteps = getConfig().contains("generation.max-search-steps")
+            ? getConfig().getInt("generation.max-search-steps", 25_000)
+            : getConfig().getInt("generation.max-placement-attempts", 25_000);
         int spawnY = getConfig().getInt("worlds.spawn-y", 80);
         String worldPrefix = getConfig().getString("worlds.name-prefix", "da_");
         boolean deleteOnDestroy = getConfig().getBoolean("worlds.delete-on-destroy", true);
@@ -64,7 +66,7 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
         dungeonManager = new DungeonManager(
             this,
             roomTemplateRegistry,
-            new DeterministicDungeonGenerator(maxAttempts, spawnY, doorTemplateRegistry::all),
+            new DeterministicDungeonGenerator(maxSearchSteps, spawnY, doorTemplateRegistry::all),
             worldManager,
             structurePlacer
         );
@@ -132,5 +134,20 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
         featureTemplateRegistry.reload();
         doorTemplateRegistry.reload();
         roomTemplateRegistry.reload();
+        logDiagnostics();
+    }
+
+    private void logDiagnostics() {
+        TemplateValidationResult result = TemplateDiagnostics.analyze(roomTemplateRegistry, featureTemplateRegistry, doorTemplateRegistry);
+        int errors = result.errors().size();
+        int warnings = result.warnings().size();
+        if (errors == 0 && warnings == 0 && result.repairs().isEmpty()) {
+            getLogger().info("Template diagnostics OK.");
+            return;
+        }
+        getLogger().warning("Template diagnostics: errors=" + errors + " warnings=" + warnings + " repairs=" + result.repairs().size()
+            + ". Run /da diagnose in game for the full report.");
+        result.repairs().stream().limit(2).forEach(repair -> getLogger().warning("Repair: " + repair));
+        result.diagnostics().stream().limit(3).forEach(diagnostic -> getLogger().warning(diagnostic.severity() + ": " + diagnostic.display()));
     }
 }

@@ -7,13 +7,14 @@ import org.bukkit.util.BlockVector;
 import java.io.IOException;
 import java.nio.file.Path;
 
-public final class RoomStructureService {
+public final class RoomStructureService implements StructureSizeReader {
     private final Server server;
 
     public RoomStructureService(Server server) {
         this.server = server;
     }
 
+    @Override
     public IntVector3 loadSize(Path structureFile) throws IOException {
         BlockVector size = server.getStructureManager().loadStructure(structureFile.toFile()).getSize();
         return new IntVector3(size.getBlockX(), size.getBlockY(), size.getBlockZ());

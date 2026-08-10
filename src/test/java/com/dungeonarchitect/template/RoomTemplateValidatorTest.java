@@ -114,8 +114,8 @@ final class RoomTemplateValidatorTest {
         var result = new RoomTemplateValidator(null, featureRegistry).validate(template);
 
         assertFalse(result.valid());
-        assertTrue(result.errors().stream().anyMatch(error -> error.contains("unknown feature missing")));
-        assertTrue(result.errors().stream().anyMatch(error -> error.contains("does not match feature large")));
+        assertTrue(result.errors().stream().anyMatch(error -> error.contains("missing or invalid feature missing")));
+        assertTrue(result.errors().stream().anyMatch(error -> error.contains("cannot use feature large")));
     }
 
     @Test
@@ -138,6 +138,6 @@ final class RoomTemplateValidatorTest {
         var result = new RoomTemplateValidator().validate(template);
 
         assertFalse(result.valid());
-        assertTrue(result.errors().stream().anyMatch(error -> error.contains("does not match inferred bounds face UP")), result.errors().toString());
+        assertTrue(result.errors().stream().anyMatch(error -> error.contains("bounds touch the UP room face")), result.errors().toString());
     }
 }

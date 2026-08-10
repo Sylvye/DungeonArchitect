@@ -12,6 +12,7 @@ import com.dungeonarchitect.domain.Rotation;
 import com.dungeonarchitect.feature.FeatureService;
 import com.dungeonarchitect.generation.DoorGeometry;
 import com.dungeonarchitect.runtime.RoomStructurePlacer;
+import com.dungeonarchitect.template.DiagnosticText;
 import com.dungeonarchitect.template.RoomStructureService;
 import org.bukkit.Location;
 import org.bukkit.World;
@@ -146,18 +147,17 @@ public final class DoorService {
             logger.warning("Skipped door " + door.id() + " for slot " + slot.id() + ": " + match.reason());
             return;
         }
-        Rotation rotation = DoorGeometry.doorTransform(slot, door, roomTransform).rotation();
-        BoundingBox3i slotBounds = DoorGeometry.transformedBounds(slot, roomTransform);
-        RoomTransform doorTransform = new RoomTransform(slotBounds.min(), rotation, door.size());
+        RoomTransform doorTransform = DoorGeometry.doorTransform(slot, door, roomTransform);
+        Rotation rotation = doorTransform.rotation();
         BoundingBox3i doorBounds = doorTransform.transformedBounds();
         if (!contains(roomBounds, doorBounds)) {
-            logger.warning("Skipped door " + door.id() + " for slot " + slot.id() + ": transformed bounds " + doorBounds + " do not fit room bounds " + roomBounds);
+            logger.warning("Skipped door " + door.id() + " for slot " + slot.id() + ": transformed bounds " + DiagnosticText.box(doorBounds) + " do not fit room bounds " + DiagnosticText.box(roomBounds));
             return;
         }
         Structure structure = structureService.server().getStructureManager().loadStructure(door.structureFile().toFile());
         IntVector3 nbtSize = new IntVector3(structure.getSize().getBlockX(), structure.getSize().getBlockY(), structure.getSize().getBlockZ());
         if (!nbtSize.equals(door.size())) {
-            throw new IOException("Door " + door.id() + " door.nbt size " + nbtSize + " does not match door.yml size " + door.size() + ". Re-save this door.");
+            throw new IOException("Door " + door.id() + " door.nbt is " + DiagnosticText.size(nbtSize) + ", but door.yml says " + DiagnosticText.size(door.size()) + ". Re-save this door.");
         }
         IntVector3 pasteOrigin = RoomStructurePlacer.pasteOrigin(doorTransform);
         structure.place(

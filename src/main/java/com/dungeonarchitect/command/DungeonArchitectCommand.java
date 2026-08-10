@@ -23,6 +23,8 @@ import com.dungeonarchitect.runtime.RoomInstance;
 import com.dungeonarchitect.template.RoomTemplateRegistry;
 import com.dungeonarchitect.template.RoomTemplateValidator;
 import com.dungeonarchitect.template.RoomStructureService;
+import com.dungeonarchitect.template.TemplateDiagnostic;
+import com.dungeonarchitect.template.TemplateDiagnostics;
 import com.dungeonarchitect.template.TemplateValidationResult;
 import net.kyori.adventure.text.Component;
 import org.bukkit.command.Command;
@@ -95,6 +97,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
                 case "door" -> doorCommand(sender, args);
                 case "generate" -> generate(sender, args);
                 case "list" -> list(sender);
+                case "diagnose" -> diagnose(sender, args);
                 case "debug" -> debug(sender, args);
                 case "teleport" -> teleport(sender, args);
                 case "destroy" -> destroy(sender, args);
@@ -119,7 +122,8 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
         sender.sendMessage(Component.text("/da feature rename <oldId> <newId> | duplicate <oldId> <newId> | delete <id>"));
         sender.sendMessage(Component.text("/da room component <select|remove|bounds|rename> [door|marker|feature] [id] [newId]"));
         sender.sendMessage(Component.text("/da room save [id] | inspect <id> | validate <id|all> | delete <id>"));
-        sender.sendMessage(Component.text("/da reload | generate <roomCount> [seed] | list | debug instance [id|#n] | debug room"));
+        sender.sendMessage(Component.text("/da reload | diagnose [room|door|feature] [id|all] | generate <roomCount> [seed]"));
+        sender.sendMessage(Component.text("/da list | debug instance [id|#n] | debug room"));
         sender.sendMessage(Component.text("/da teleport [instance|#n] <roomIndex> | destroy [instance|#n] | exit"));
     }
 
@@ -127,10 +131,17 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
         TemplateValidationResult featureResult = featureRegistry.reload();
         TemplateValidationResult doorResult = doorRegistry.reload();
         TemplateValidationResult result = templateRegistry.reload();
-        sender.sendMessage(Component.text("Loaded " + templateRegistry.all().size() + " room templates, " + featureRegistry.all().size() + " feature templates, and " + doorRegistry.all().size() + " door templates."));
-        sendValidation(sender, result);
-        sendValidation(sender, featureResult);
-        sendValidation(sender, doorResult);
+        sender.sendMessage(Component.text("Loaded rooms valid=" + templateRegistry.all().size() + " invalid=" + templateRegistry.invalidCount() + " unrecoverable=" + templateRegistry.unrecoverableCount()
+            + ", features valid=" + featureRegistry.all().size() + " invalid=" + featureRegistry.invalidCount() + " unrecoverable=" + featureRegistry.unrecoverableCount()
+            + ", doors valid=" + doorRegistry.all().size() + " invalid=" + doorRegistry.invalidCount() + " unrecoverable=" + doorRegistry.unrecoverableCount() + "."));
+        TemplateValidationResult diagnostics = TemplateDiagnostics.analyze(templateRegistry, featureRegistry, doorRegistry);
+        int issueCount = diagnostics.errors().size() + diagnostics.warnings().size();
+        if (issueCount == 0 && result.valid() && featureResult.valid() && doorResult.valid()) {
+            sender.sendMessage(Component.text("Diagnostics OK."));
+        } else {
+            sender.sendMessage(Component.text("Diagnostics found errors=" + diagnostics.errors().size() + " warnings=" + diagnostics.warnings().size() + ". Run /da diagnose for details."));
+            sendTopDiagnostics(sender, diagnostics, 3);
+        }
     }
 
     private void wand(CommandSender sender) {
@@ -209,7 +220,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
 
     private void editRoom(Player player, String[] args) {
         requireArgs(args, 3, "/da room edit <id>");
-        RoomTemplate template = templateRegistry.get(args[2])
+        RoomTemplate template = templateRegistry.getVisible(args[2])
             .orElseThrow(() -> new IllegalArgumentException("Unknown room template " + args[2]));
         player.sendMessage(Component.text("Preparing isolated edit workspace for room " + template.id() + "..."));
         authoringManager.editSession(player, template).whenComplete((session, error) -> {
@@ -270,7 +281,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
                 });
             }
             case "bounds" -> {
-                var bounds = authoringManager.saveCurrentSelectionAsRoomBounds(player);
+                var bounds = authoringManager.saveCurrentSelectionAsFeatureBounds(player);
                 player.sendMessage(Component.text("Feature bounds saved: " + bounds.describe()));
             }
             case "save" -> {
@@ -287,7 +298,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
             }
             case "edit" -> {
                 requireArgs(args, 3, "/da feature edit <id>");
-                FeatureTemplate template = featureRegistry.get(args[2])
+                FeatureTemplate template = featureRegistry.getVisible(args[2])
                     .orElseThrow(() -> new IllegalArgumentException("Unknown feature template " + args[2]));
                 player.sendMessage(Component.text("Preparing isolated edit workspace for feature " + template.id() + "..."));
                 authoringManager.editFeatureSession(player, template).whenComplete((session, error) -> {
@@ -326,7 +337,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
                 });
             }
             case "bounds" -> {
-                var bounds = authoringManager.saveCurrentSelectionAsRoomBounds(player);
+                var bounds = authoringManager.saveCurrentSelectionAsDoorBounds(player);
                 player.sendMessage(Component.text("Door bounds saved: " + bounds.describe()));
             }
             case "gateway" -> {
@@ -363,7 +374,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
             }
             case "edit" -> {
                 requireArgs(args, 3, "/da door edit <id>");
-                DoorTemplate template = doorRegistry.get(args[2])
+                DoorTemplate template = doorRegistry.getVisible(args[2])
                     .orElseThrow(() -> new IllegalArgumentException("Unknown door template " + args[2]));
                 player.sendMessage(Component.text("Preparing isolated edit workspace for door " + template.id() + "..."));
                 authoringManager.editDoorSession(player, template).whenComplete((session, error) -> {
@@ -385,6 +396,9 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
 
     private void component(Player player, String[] args) {
         requireArgs(args, 3, "/da room component <select|remove|bounds|rename> [door|marker|feature] [id] [newId]");
+        if (!authoringManager.hasEditableRoomSession(player)) {
+            throw new IllegalStateException("Save room bounds first with /da room bounds");
+        }
         String action = args[2].toLowerCase(Locale.ROOT);
         if (!List.of("select", "remove", "bounds", "rename").contains(action)) {
             throw new IllegalArgumentException("Usage: /da room component <select|remove|bounds|rename> [door|marker|feature] [id] [newId]");
@@ -443,7 +457,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
             sendValidation(sender, templateRegistry.reload());
             return;
         }
-        RoomTemplate template = templateRegistry.get(args[2])
+        RoomTemplate template = templateRegistry.getVisible(args[2])
             .orElseThrow(() -> new IllegalArgumentException("Unknown room template " + args[2]));
         sender.sendMessage(Component.text("Room " + template.id() + " category=" + template.category() + " size=" + template.size() + " doors=" + template.doors().size()));
         TemplateValidationResult result = validator.validate(template);
@@ -455,7 +469,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
 
     private void inspect(CommandSender sender, String[] args) {
         requireArgs(args, 3, "/da room inspect <id>");
-        RoomTemplate template = templateRegistry.get(args[2])
+        RoomTemplate template = templateRegistry.getVisible(args[2])
             .orElseThrow(() -> new IllegalArgumentException("Unknown room template " + args[2]));
         sender.sendMessage(Component.text("Room " + template.id()));
         sender.sendMessage(Component.text("category=" + template.category() + " weight=" + template.weight() + " tags=" + template.tags()));
@@ -526,7 +540,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
 
     private void inspectFeature(CommandSender sender, String[] args) {
         requireArgs(args, 3, "/da feature inspect <id>");
-        FeatureTemplate template = featureRegistry.get(args[2])
+        FeatureTemplate template = featureRegistry.getVisible(args[2])
             .orElseThrow(() -> new IllegalArgumentException("Unknown feature template " + args[2]));
         sender.sendMessage(Component.text("Feature " + template.id()));
         sender.sendMessage(Component.text("metadata size=" + template.size() + " tags=" + template.tags() + " structure=" + template.structureFile()));
@@ -543,7 +557,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
             sendValidation(sender, featureRegistry.reload());
             return;
         }
-        FeatureTemplate template = featureRegistry.get(args[2])
+        FeatureTemplate template = featureRegistry.getVisible(args[2])
             .orElseThrow(() -> new IllegalArgumentException("Unknown feature template " + args[2]));
         sendValidation(sender, featureValidator.validate(template));
     }
@@ -586,7 +600,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
 
     private void inspectDoor(CommandSender sender, String[] args) {
         requireArgs(args, 3, "/da door inspect <id>");
-        DoorTemplate template = doorRegistry.get(args[2])
+        DoorTemplate template = doorRegistry.getVisible(args[2])
             .orElseThrow(() -> new IllegalArgumentException("Unknown door template " + args[2]));
         sender.sendMessage(Component.text("Door " + template.id()));
         sender.sendMessage(Component.text("metadata size=" + template.size() + " tags=" + template.tags() + " structure=" + template.structureFile()));
@@ -605,7 +619,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
             sendValidation(sender, doorRegistry.reload());
             return;
         }
-        DoorTemplate template = doorRegistry.get(args[2])
+        DoorTemplate template = doorRegistry.getVisible(args[2])
             .orElseThrow(() -> new IllegalArgumentException("Unknown door template " + args[2]));
         sendValidation(sender, doorValidator.validate(template));
     }
@@ -659,6 +673,85 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
             }
             player.sendMessage(Component.text("Generated dungeon #" + dungeonManager.alias(instance).orElse(0) + " seed=" + seed + " rooms=" + instance.rooms().size()));
         });
+    }
+
+    private void diagnose(CommandSender sender, String[] args) {
+        if (templateRegistry == null) {
+            throw new IllegalArgumentException("Template registries are not available");
+        }
+        TemplateValidationResult result = switch (args.length >= 2 ? args[1].toLowerCase(Locale.ROOT) : "all") {
+            case "all" -> TemplateDiagnostics.analyze(templateRegistry, featureRegistry, doorRegistry);
+            case "room" -> diagnoseRoom(args);
+            case "door" -> diagnoseDoor(args);
+            case "feature" -> diagnoseFeature(args);
+            case "generation" -> TemplateDiagnostics.analyze(templateRegistry, featureRegistry, doorRegistry);
+            default -> throw new IllegalArgumentException("Usage: /da diagnose [room|door|feature|generation] [id|all]");
+        };
+        sender.sendMessage(Component.text("Diagnostics: errors=" + result.errors().size() + " warnings=" + result.warnings().size() + " repairs=" + result.repairs().size()));
+        if (result.valid() && result.warnings().isEmpty() && result.repairs().isEmpty()) {
+            sender.sendMessage(Component.text("No known issues."));
+            return;
+        }
+        for (String repair : result.repairs()) {
+            sender.sendMessage(Component.text("Repair: " + repair));
+        }
+        for (TemplateDiagnostic diagnostic : result.diagnostics()) {
+            sender.sendMessage(Component.text("- " + diagnostic.severity() + ": " + diagnostic.display()));
+        }
+    }
+
+    private TemplateValidationResult diagnoseRoom(String[] args) {
+        requireArgs(args, 3, "/da diagnose room <id|all>");
+        if (args[2].equalsIgnoreCase("all")) {
+            return TemplateDiagnostics.analyze(templateRegistry, featureRegistry, doorRegistry);
+        }
+        RoomTemplate template = templateRegistry.getVisible(args[2])
+            .orElseThrow(() -> new IllegalArgumentException("Unknown room template " + args[2]));
+        TemplateValidationResult result = validator.validate(template);
+        result.addDiagnostics(TemplateDiagnostics.analyzeRoom(template, templateRegistry, featureRegistry, doorRegistry).diagnostics());
+        return result;
+    }
+
+    private TemplateValidationResult diagnoseDoor(String[] args) {
+        requireArgs(args, 3, "/da diagnose door <id|all>");
+        if (doorRegistry == null) {
+            throw new IllegalArgumentException("Door registry is not available");
+        }
+        if (args[2].equalsIgnoreCase("all")) {
+            TemplateValidationResult result = new TemplateValidationResult();
+            result.addDiagnostics(doorRegistry.lastValidation().diagnostics());
+            result.addRepairs(doorRegistry.lastValidation().repairs());
+            for (DoorTemplate template : doorRegistry.visible()) {
+                result.addDiagnostics(TemplateDiagnostics.analyzeDoor(template, featureRegistry).diagnostics());
+            }
+            return result;
+        }
+        DoorTemplate template = doorRegistry.getVisible(args[2])
+            .orElseThrow(() -> new IllegalArgumentException("Unknown door template " + args[2]));
+        TemplateValidationResult result = doorValidator.validate(template);
+        result.addDiagnostics(TemplateDiagnostics.analyzeDoor(template, featureRegistry).diagnostics());
+        return result;
+    }
+
+    private TemplateValidationResult diagnoseFeature(String[] args) {
+        requireArgs(args, 3, "/da diagnose feature <id|all>");
+        if (featureRegistry == null) {
+            throw new IllegalArgumentException("Feature registry is not available");
+        }
+        if (args[2].equalsIgnoreCase("all")) {
+            TemplateValidationResult result = new TemplateValidationResult();
+            result.addDiagnostics(featureRegistry.lastValidation().diagnostics());
+            result.addRepairs(featureRegistry.lastValidation().repairs());
+            for (FeatureTemplate template : featureRegistry.visible()) {
+                result.addDiagnostics(TemplateDiagnostics.analyzeFeature(template).diagnostics());
+            }
+            return result;
+        }
+        FeatureTemplate template = featureRegistry.getVisible(args[2])
+            .orElseThrow(() -> new IllegalArgumentException("Unknown feature template " + args[2]));
+        TemplateValidationResult result = featureValidator.validate(template);
+        result.addDiagnostics(TemplateDiagnostics.analyzeFeature(template).diagnostics());
+        return result;
     }
 
     private void exit(CommandSender sender) {
@@ -817,20 +910,61 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
     }
 
     private void sendValidation(CommandSender sender, TemplateValidationResult result) {
-        if (result.valid()) {
+        for (String repair : result.repairs()) {
+            sender.sendMessage(Component.text("Repair: " + repair));
+        }
+        if (result.valid() && result.warnings().isEmpty()) {
             sender.sendMessage(Component.text("Validation OK."));
             return;
         }
-        sender.sendMessage(Component.text("Validation errors:"));
+        if (!result.errors().isEmpty()) {
+            sender.sendMessage(Component.text("Validation errors:"));
+        }
         for (String error : result.errors()) {
             sender.sendMessage(Component.text("- " + error));
+        }
+        for (String warning : result.warnings()) {
+            sender.sendMessage(Component.text("Warning: " + warning));
+        }
+    }
+
+    private void sendTopDiagnostics(CommandSender sender, TemplateValidationResult result, int limit) {
+        int sent = 0;
+        for (TemplateDiagnostic diagnostic : result.diagnostics()) {
+            if (sent++ >= limit) {
+                break;
+            }
+            sender.sendMessage(Component.text("- " + diagnostic.severity() + ": " + diagnostic.display()));
         }
     }
 
     @Override
     public @Nullable List<String> onTabComplete(@NotNull CommandSender sender, @NotNull Command command, @NotNull String label, @NotNull String[] args) {
         if (args.length == 1) {
-            return prefix(args[0], List.of("help", "version", "reload", "wand", "selector", "gui", "rooms", "features", "doors", "config", "dungeons", "exit", "room", "feature", "door", "generate", "list", "debug", "teleport", "destroy"));
+            return prefix(args[0], List.of("help", "version", "reload", "wand", "selector", "gui", "rooms", "features", "doors", "config", "dungeons", "exit", "room", "feature", "door", "generate", "list", "diagnose", "debug", "teleport", "destroy"));
+        }
+        if (args[0].equalsIgnoreCase("diagnose")) {
+            if (args.length == 2) {
+                return prefix(args[1], List.of("all", "room", "door", "feature", "generation"));
+            }
+            if (args.length == 3 && args[1].equalsIgnoreCase("room") && templateRegistry != null) {
+                List<String> ids = new ArrayList<>();
+                ids.add("all");
+                ids.addAll(templateRegistry.visible().stream().map(RoomTemplate::id).toList());
+                return prefix(args[2], ids);
+            }
+            if (args.length == 3 && args[1].equalsIgnoreCase("door") && doorRegistry != null) {
+                List<String> ids = new ArrayList<>();
+                ids.add("all");
+                ids.addAll(doorRegistry.visible().stream().map(DoorTemplate::id).toList());
+                return prefix(args[2], ids);
+            }
+            if (args.length == 3 && args[1].equalsIgnoreCase("feature") && featureRegistry != null) {
+                List<String> ids = new ArrayList<>();
+                ids.add("all");
+                ids.addAll(featureRegistry.visible().stream().map(FeatureTemplate::id).toList());
+                return prefix(args[2], ids);
+            }
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("room")) {
             return prefix(args[1], List.of("create", "edit", "cancel", "bounds", "pos1", "pos2", "door", "marker", "feature", "component", "save", "inspect", "validate", "rename", "duplicate", "delete"));
@@ -840,7 +974,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
                 return prefix(args[1], List.of("edit"));
             }
             if (args.length == 3 && args[1].equalsIgnoreCase("edit")) {
-                List<String> ids = new ArrayList<>(templateRegistry.all().stream().map(RoomTemplate::id).toList());
+                List<String> ids = new ArrayList<>(templateRegistry.visible().stream().map(RoomTemplate::id).toList());
                 if (sender instanceof Player player) {
                     authoringManager.activeRoomId(player).ifPresent(ids::add);
                 }
@@ -848,25 +982,25 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
             }
         }
         if (args.length == 3 && args[0].equalsIgnoreCase("room") && args[1].equalsIgnoreCase("edit")) {
-            return prefix(args[2], templateRegistry.all().stream().map(RoomTemplate::id).toList());
+            return prefix(args[2], templateRegistry.visible().stream().map(RoomTemplate::id).toList());
         }
         if (args.length == 3 && args[0].equalsIgnoreCase("room") && args[1].equalsIgnoreCase("save")) {
-            return prefix(args[2], templateRegistry.all().stream().map(RoomTemplate::id).toList());
+            return prefix(args[2], templateRegistry.visible().stream().map(RoomTemplate::id).toList());
         }
         if (args.length == 3 && args[0].equalsIgnoreCase("room") && args[1].equalsIgnoreCase("validate")) {
             List<String> ids = new ArrayList<>();
             ids.add("all");
-            ids.addAll(templateRegistry.all().stream().map(RoomTemplate::id).toList());
+            ids.addAll(templateRegistry.visible().stream().map(RoomTemplate::id).toList());
             return prefix(args[2], ids);
         }
         if (args.length == 3 && args[0].equalsIgnoreCase("room") && args[1].equalsIgnoreCase("inspect")) {
-            return prefix(args[2], templateRegistry.all().stream().map(RoomTemplate::id).toList());
+            return prefix(args[2], templateRegistry.visible().stream().map(RoomTemplate::id).toList());
         }
         if (args.length == 3 && args[0].equalsIgnoreCase("room") && args[1].equalsIgnoreCase("delete")) {
-            return prefix(args[2], templateRegistry.all().stream().map(RoomTemplate::id).toList());
+            return prefix(args[2], templateRegistry.visible().stream().map(RoomTemplate::id).toList());
         }
         if (args.length == 3 && args[0].equalsIgnoreCase("room") && List.of("rename", "duplicate").contains(args[1].toLowerCase(Locale.ROOT))) {
-            return prefix(args[2], templateRegistry.all().stream().map(RoomTemplate::id).toList());
+            return prefix(args[2], templateRegistry.visible().stream().map(RoomTemplate::id).toList());
         }
         if (args.length == 4 && args[0].equalsIgnoreCase("room") && List.of("rename", "duplicate").contains(args[1].toLowerCase(Locale.ROOT))) {
             return prefix(args[3], List.of("new_id"));
@@ -893,7 +1027,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
             return prefix(args[1], List.of("create", "bounds", "gateway", "marker", "feature", "save", "edit", "inspect", "validate", "rename", "duplicate", "delete"));
         }
         if (args.length == 3 && args[0].equalsIgnoreCase("door") && List.of("edit", "inspect", "delete", "rename", "duplicate").contains(args[1].toLowerCase(Locale.ROOT))) {
-            return prefix(args[2], doorRegistry.all().stream().map(DoorTemplate::id).toList());
+            return prefix(args[2], doorRegistry.visible().stream().map(DoorTemplate::id).toList());
         }
         if (args.length == 4 && args[0].equalsIgnoreCase("door") && List.of("rename", "duplicate").contains(args[1].toLowerCase(Locale.ROOT))) {
             return prefix(args[3], List.of("new_id"));
@@ -901,14 +1035,14 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
         if (args.length == 3 && args[0].equalsIgnoreCase("door") && args[1].equalsIgnoreCase("validate")) {
             List<String> ids = new ArrayList<>();
             ids.add("all");
-            ids.addAll(doorRegistry.all().stream().map(DoorTemplate::id).toList());
+            ids.addAll(doorRegistry.visible().stream().map(DoorTemplate::id).toList());
             return prefix(args[2], ids);
         }
         if (args.length == 3 && args[0].equalsIgnoreCase("door") && args[1].equalsIgnoreCase("marker")) {
             return prefix(args[2], List.of("add"));
         }
         if (args.length == 3 && args[0].equalsIgnoreCase("feature") && List.of("edit", "inspect", "delete", "rename", "duplicate").contains(args[1].toLowerCase(Locale.ROOT))) {
-            return prefix(args[2], featureRegistry.all().stream().map(FeatureTemplate::id).toList());
+            return prefix(args[2], featureRegistry.visible().stream().map(FeatureTemplate::id).toList());
         }
         if (args.length == 4 && args[0].equalsIgnoreCase("feature") && List.of("rename", "duplicate").contains(args[1].toLowerCase(Locale.ROOT))) {
             return prefix(args[3], List.of("new_id"));
@@ -916,7 +1050,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
         if (args.length == 3 && args[0].equalsIgnoreCase("feature") && args[1].equalsIgnoreCase("validate")) {
             List<String> ids = new ArrayList<>();
             ids.add("all");
-            ids.addAll(featureRegistry.all().stream().map(FeatureTemplate::id).toList());
+            ids.addAll(featureRegistry.visible().stream().map(FeatureTemplate::id).toList());
             return prefix(args[2], ids);
         }
         if (args[0].equalsIgnoreCase("room") && args[1].equalsIgnoreCase("component")) {

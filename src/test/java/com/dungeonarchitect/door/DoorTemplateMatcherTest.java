@@ -38,9 +38,15 @@ final class DoorTemplateMatcherTest {
     }
 
     @Test
-    void emptyTagsAreCompatibleButSizeMustMatch() {
+    void emptyTagsAreCompatibleAndDoorMayBeSmallerThanSlot() {
         assertTrue(DoorTemplateMatcher.matches(slot(new IntVector3(3, 4, 1), Set.of()), template(new IntVector3(3, 4, 1), new IntVector3(1, 2, 1), Direction3.NORTH, Set.of("stone"))));
-        DoorTemplateMatcher.DoorTemplateMatchResult result = DoorTemplateMatcher.match(slot(new IntVector3(5, 4, 1), Set.of()), template(new IntVector3(3, 4, 1), new IntVector3(1, 2, 1), Direction3.NORTH, Set.of("stone")));
+        assertTrue(DoorTemplateMatcher.matches(slot(new IntVector3(5, 4, 3), Set.of()), template(new IntVector3(3, 4, 1), new IntVector3(1, 2, 1), Direction3.NORTH, Set.of("stone"))));
+    }
+
+    @Test
+    void rejectsDoorBoundsLargerThanSlot() {
+        DoorTemplateMatcher.DoorTemplateMatchResult result = DoorTemplateMatcher.match(slot(new IntVector3(3, 4, 1), Set.of()), template(new IntVector3(5, 4, 1), new IntVector3(1, 2, 1), Direction3.NORTH, Set.of("stone")));
+
         assertFalse(result.matched());
         assertNotNull(result.reason());
     }

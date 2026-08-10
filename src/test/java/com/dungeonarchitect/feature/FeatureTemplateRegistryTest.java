@@ -34,7 +34,55 @@ final class FeatureTemplateRegistryTest {
         assertFalse(result.valid());
         assertTrue(registry.get("good").isPresent());
         assertTrue(registry.get("GOOD").isPresent());
+        assertTrue(registry.getVisible("bad").isPresent());
+        assertTrue(registry.visible().stream().anyMatch(template -> template.id().equals("bad")));
+        assertFalse(registry.all().stream().anyMatch(template -> template.id().equals("bad")));
         assertTrue(result.errors().stream().anyMatch(error -> error.contains("missing feature.nbt")));
+    }
+
+    @Test
+    void repairsMissingIdFromDirectoryName() throws Exception {
+        Path feature = tempDir.resolve("missing_id");
+        Files.createDirectories(feature);
+        Files.writeString(feature.resolve("feature.nbt"), "fake");
+        Files.writeString(feature.resolve("feature.yml"), "id: ''\nsize: [1, 1, 1]\n");
+
+        FeatureTemplateRegistry registry = new FeatureTemplateRegistry(tempDir, null);
+        var result = registry.reload();
+
+        assertTrue(registry.getVisible("missing_id").isPresent());
+        assertTrue(result.repairs().stream().anyMatch(repair -> repair.contains("repaired missing feature id")));
+    }
+
+    @Test
+    void repairsMissingSizeFromStructureReaderWithoutSavingMetadata() throws Exception {
+        Path feature = tempDir.resolve("size_from_nbt");
+        Files.createDirectories(feature);
+        Files.writeString(feature.resolve("feature.nbt"), "fake");
+        Files.writeString(feature.resolve("feature.yml"), "id: size_from_nbt\n");
+        FeatureTemplateRegistry registry = new FeatureTemplateRegistry(tempDir, structureFile -> new IntVector3(2, 3, 4), true);
+
+        var result = registry.reload();
+
+        assertTrue(registry.get("size_from_nbt").isPresent(), result.errors().toString());
+        assertEquals(new IntVector3(2, 3, 4), registry.getVisible("size_from_nbt").orElseThrow().size());
+        assertTrue(result.repairs().stream().anyMatch(repair -> repair.contains("repaired missing or malformed feature.yml size")));
+        assertFalse(Files.readString(feature.resolve("feature.yml")).contains("size:"));
+    }
+
+    @Test
+    void unrecoverableMetadataGetsStatusInsteadOfDisappearingSilently() throws Exception {
+        Path feature = tempDir.resolve("broken");
+        Files.createDirectories(feature);
+        Files.writeString(feature.resolve("feature.yml"), "id: broken\n");
+        FeatureTemplateRegistry registry = new FeatureTemplateRegistry(tempDir, null);
+
+        var result = registry.reload();
+
+        assertFalse(result.valid());
+        assertTrue(registry.getVisible("broken").isEmpty());
+        assertEquals(1, registry.unrecoverableCount());
+        assertTrue(registry.loadStatuses().stream().anyMatch(status -> status.id().equals("broken") && !status.loadable()));
     }
 
     @Test

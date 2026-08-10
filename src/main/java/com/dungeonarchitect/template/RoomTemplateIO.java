@@ -29,13 +29,30 @@ public final class RoomTemplateIO {
     }
 
     public static RoomTemplate load(Path roomDirectory) {
+        return loadInternal(roomDirectory, null, null).template();
+    }
+
+    public static TemplateLoadStatus<RoomTemplate> loadRecovering(Path roomDirectory, StructureSizeReader sizeReader) {
+        return loadInternal(roomDirectory, sizeReader, new ArrayList<>());
+    }
+
+    private static TemplateLoadStatus<RoomTemplate> loadInternal(Path roomDirectory, StructureSizeReader sizeReader, List<String> repairs) {
+        List<String> repairLog = repairs == null ? new ArrayList<>() : repairs;
+        List<String> errors = new ArrayList<>();
         Path metadataFile = roomDirectory.resolve("room.yml");
         Path structureFile = roomDirectory.resolve("room.nbt");
+        String id = roomDirectory.getFileName().toString();
+        try {
         YamlConfiguration yaml = YamlConfiguration.loadConfiguration(metadataFile.toFile());
-        String id = yaml.getString("id", roomDirectory.getFileName().toString());
+        String configuredId = yaml.getString("id");
+        if (configuredId == null || configuredId.isBlank()) {
+            repairLog.add(id + ": repaired missing room id from directory name");
+        } else {
+            id = configuredId;
+        }
         RoomCategory category = enumValue(RoomCategory.class, yaml.getString("category", "GENERIC"));
         int weight = yaml.getInt("weight", 10);
-        IntVector3 size = vector(yaml.getIntegerList("size"));
+        IntVector3 size = size(yaml, structureFile, sizeReader, id, "room", repairLog);
         IntVector3 spawn = yaml.isList("spawn") ? vector(yaml.getIntegerList("spawn")) : null;
         Set<String> tags = new LinkedHashSet<>(yaml.getStringList("tags"));
 
@@ -78,7 +95,15 @@ public final class RoomTemplateIO {
             ));
         }
 
-        return new RoomTemplate(id, category, weight, tags, size, spawn, doors, markers, featureSlots, structureFile);
+        RoomTemplate template = new RoomTemplate(id, category, weight, tags, size, spawn, doors, markers, featureSlots, structureFile);
+        return new TemplateLoadStatus<>(template, template.id(), roomDirectory, true, errors, repairLog);
+        } catch (RuntimeException ex) {
+            if (repairs == null) {
+                throw ex;
+            }
+            errors.add(id + ": failed to load room metadata: " + ex.getMessage());
+            return new TemplateLoadStatus<>(null, id, roomDirectory, false, errors, repairLog);
+        }
     }
 
     public static void save(RoomTemplate template, Path roomDirectory) throws IOException {
@@ -183,6 +208,26 @@ public final class RoomTemplateIO {
             throw new IllegalArgumentException("Expected vector with 3 integers, got " + values);
         }
         return new IntVector3(values.get(0), values.get(1), values.get(2));
+    }
+
+    private static IntVector3 size(YamlConfiguration yaml, Path structureFile, StructureSizeReader sizeReader, String id, String type, List<String> repairs) {
+        try {
+            if (yaml.isList("size")) {
+                return vector(yaml.getIntegerList("size"));
+            }
+        } catch (IllegalArgumentException ignored) {
+            // Fall through to structure-derived repair.
+        }
+        if (sizeReader == null) {
+            throw new IllegalArgumentException("Expected vector with 3 integers, got " + yaml.getIntegerList("size"));
+        }
+        try {
+            IntVector3 repaired = sizeReader.loadSize(structureFile);
+            repairs.add(id + ": repaired missing or malformed " + type + ".yml size from " + type + ".nbt size " + repaired);
+            return repaired;
+        } catch (Exception ex) {
+            throw new IllegalArgumentException("Unable to repair missing or malformed size from " + type + ".nbt: " + ex.getMessage(), ex);
+        }
     }
 
     private static List<DoorSlotEntry> doorEntries(ConfigurationSection section) {

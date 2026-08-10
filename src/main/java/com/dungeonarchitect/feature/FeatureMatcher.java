@@ -4,6 +4,7 @@ import com.dungeonarchitect.domain.FeatureTemplate;
 import com.dungeonarchitect.domain.IntVector3;
 import com.dungeonarchitect.domain.RoomFeatureSlot;
 import com.dungeonarchitect.domain.Rotation;
+import com.dungeonarchitect.template.DiagnosticText;
 
 import java.util.List;
 
@@ -18,7 +19,8 @@ public final class FeatureMatcher {
     public static FeatureMatchResult match(RoomFeatureSlot slot, FeatureTemplate feature) {
         Rotation rotation = rotationFor(slot.size(), feature.size());
         if (rotation == null) {
-            return FeatureMatchResult.rejected("feature size " + feature.size() + " does not fit slot size " + slot.size() + " with allowed yaw rotations");
+            return FeatureMatchResult.rejected("Feature is " + DiagnosticText.size(feature.size())
+                + ", but slot " + slot.id() + " allows " + DiagnosticText.size(slot.size()) + ".");
         }
         return FeatureMatchResult.matched(rotation, "matched");
     }
@@ -46,7 +48,8 @@ public final class FeatureMatcher {
 
     public static IntVector3 placementOffset(IntVector3 slotSize, IntVector3 rotatedFeatureSize) {
         if (!fitsWithoutRotation(slotSize, rotatedFeatureSize)) {
-            throw new IllegalArgumentException("Feature size " + rotatedFeatureSize + " does not fit slot " + slotSize);
+            throw new IllegalArgumentException("Feature is " + DiagnosticText.size(rotatedFeatureSize)
+                + ", but slot allows " + DiagnosticText.size(slotSize) + ".");
         }
         return new IntVector3(
             (slotSize.x() - rotatedFeatureSize.x()) / 2,

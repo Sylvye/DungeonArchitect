@@ -4,6 +4,7 @@ import com.dungeonarchitect.domain.DoorSocket;
 import com.dungeonarchitect.domain.DoorTemplate;
 import com.dungeonarchitect.domain.IntVector3;
 import com.dungeonarchitect.domain.Rotation;
+import com.dungeonarchitect.template.DiagnosticText;
 
 public final class DoorTemplateMatcher {
     private DoorTemplateMatcher() {
@@ -25,8 +26,9 @@ public final class DoorTemplateMatcher {
             }
             facingCanMatch = true;
             IntVector3 rotatedDoorSize = rotation.rotateSize(template.size());
-            if (!slot.size().equals(rotatedDoorSize)) {
-                lastSizeReason = "door bounds size " + template.size() + " rotates to " + rotatedDoorSize + ", expected slot size " + slot.size();
+            if (!fitsWithin(rotatedDoorSize, slot.size())) {
+                lastSizeReason = "Door footprint is " + DiagnosticText.size(rotatedDoorSize)
+                    + " after rotation, but slot " + slot.id() + " allows " + DiagnosticText.size(slot.size()) + ".";
                 continue;
             }
             if (slot.tags().isEmpty() || template.tags().isEmpty()) {
@@ -34,14 +36,19 @@ public final class DoorTemplateMatcher {
             }
             boolean tagsMatch = slot.tags().stream().anyMatch(tag -> template.tags().stream().anyMatch(tag::equalsIgnoreCase));
             if (!tagsMatch) {
-                return DoorTemplateMatchResult.rejected("tags do not overlap; slot=" + slot.tags() + " door=" + template.tags());
+                return DoorTemplateMatchResult.rejected("Door tags " + template.tags() + " do not overlap slot tags " + slot.tags() + ".");
             }
             return DoorTemplateMatchResult.matched(rotation, "matched");
         }
         if (!facingCanMatch) {
-            return DoorTemplateMatchResult.rejected("gateway facing " + template.gateway().facing() + " cannot rotate around Y to slot facing " + slot.facing());
+            return DoorTemplateMatchResult.rejected("Gateway faces " + template.gateway().facing()
+                + ", but slot faces " + slot.facing() + ". Door templates only rotate around Y.");
         }
         return DoorTemplateMatchResult.rejected(lastSizeReason);
+    }
+
+    private static boolean fitsWithin(IntVector3 size, IntVector3 slotSize) {
+        return size.x() <= slotSize.x() && size.y() <= slotSize.y() && size.z() <= slotSize.z();
     }
 
     public record DoorTemplateMatchResult(boolean matched, Rotation rotation, String reason) {

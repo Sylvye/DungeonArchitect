@@ -22,6 +22,10 @@ import com.dungeonarchitect.feature.FeatureTemplateRegistry;
 import com.dungeonarchitect.runtime.DungeonInstance;
 import com.dungeonarchitect.runtime.DungeonManager;
 import com.dungeonarchitect.template.TemplateValidationResult;
+import com.dungeonarchitect.template.DiagnosticText;
+import com.dungeonarchitect.template.TemplateDiagnostic;
+import com.dungeonarchitect.template.TemplateDiagnostics;
+import com.dungeonarchitect.template.TemplateLoadStatus;
 import com.dungeonarchitect.template.RoomTemplateIO;
 import com.dungeonarchitect.template.RoomTemplateRegistry;
 import com.dungeonarchitect.template.RoomTemplateValidator;
@@ -83,7 +87,39 @@ public final class MenuManager implements Listener {
         button(menu, 12, Material.OAK_DOOR, "Doors", List.of("Edit reusable door templates."), this::openDoors);
         button(menu, 14, Material.STRUCTURE_BLOCK, "Features", List.of("Edit reusable feature templates."), this::openFeatures);
         button(menu, 16, Material.ENDER_PEARL, "Dungeons", List.of("Manage active dungeon instances."), this::openDungeons);
+        button(menu, 18, Material.SPYGLASS, "Diagnostics", diagnosticSummaryLore(), this::openDiagnostics);
         button(menu, 22, Material.COMPARATOR, "Config", List.of("Edit config.yml."), this::openConfig);
+        open(player, menu);
+    }
+
+    public void openDiagnostics(Player player) {
+        openDiagnostics(player, 0);
+    }
+
+    private void openDiagnostics(Player player, int page) {
+        TemplateValidationResult result = TemplateDiagnostics.analyze(templateRegistry, featureRegistry, doorRegistry);
+        List<TemplateDiagnostic> diagnostics = result.diagnostics();
+        Menu menu = menu("da:diagnostics:" + page, 54, "Diagnostics");
+        button(menu, 4, result.valid() ? Material.LIME_CONCRETE : Material.RED_CONCRETE, result.valid() ? "No Blocking Issues" : "Issues Found", List.of("Errors: " + result.errors().size(), "Warnings: " + result.warnings().size(), "Repairs: " + result.repairs().size()), p -> openDiagnostics(p, page));
+        int start = page * 36;
+        int slot = 9;
+        for (int i = start; i < diagnostics.size() && slot < 45; i++) {
+            TemplateDiagnostic diagnostic = diagnostics.get(i);
+            Material material = diagnostic.severity() == com.dungeonarchitect.template.DiagnosticSeverity.ERROR ? Material.RED_CONCRETE : Material.YELLOW_CONCRETE;
+            button(menu, slot++, material, diagnostic.severity() + " " + targetName(diagnostic), diagnosticLore(diagnostic), p -> {
+                p.sendMessage(Component.text(diagnostic.display()));
+                if (diagnostic.suggestion() != null) {
+                    p.sendMessage(Component.text("Fix: " + diagnostic.suggestion()));
+                }
+            });
+        }
+        if (page > 0) {
+            button(menu, 45, Material.ARROW, "Previous", List.of(), p -> openDiagnostics(p, page - 1));
+        }
+        if (diagnostics.size() > start + 36) {
+            button(menu, 53, Material.ARROW, "Next", List.of(), p -> openDiagnostics(p, page + 1));
+        }
+        button(menu, 49, Material.BARRIER, "Back", List.of(), this::openMain);
         open(player, menu);
     }
 
@@ -94,9 +130,10 @@ public final class MenuManager implements Listener {
     public void openRooms(Player player) {
         Menu menu = menu("da:rooms", 54, "DungeonArchitect Rooms");
         int slot = 0;
-        for (RoomTemplate template : templateRegistry.all()) {
+        for (RoomTemplate template : templateRegistry.visible()) {
             int target = slot++;
-            button(menu, target, Material.PAPER, template.id(), List.of("Category: " + template.category(), "Door Slots: " + template.doors().size(), "Click to edit."), p -> openRoom(p, template.id()));
+            TemplateLoadStatus<RoomTemplate> status = templateRegistry.status(template.id()).orElse(null);
+            button(menu, target, statusValid(status) ? Material.PAPER : Material.RED_CONCRETE, template.id(), loadStatusLore(status, "Category: " + template.category(), "Door Slots: " + template.doors().size(), "Click to edit."), p -> openRoom(p, template.id()));
             if (slot >= 45) {
                 break;
             }
@@ -106,15 +143,16 @@ public final class MenuManager implements Listener {
     }
 
     public void openRoom(Player player, String roomId) {
-        RoomTemplate template = templateRegistry.get(roomId)
+        RoomTemplate template = templateRegistry.getVisible(roomId)
             .orElseThrow(() -> new IllegalArgumentException("Unknown room " + roomId));
         Menu menu = menu("da:room:" + roomId, 54, "Room: " + roomId);
+        TemplateLoadStatus<RoomTemplate> status = templateRegistry.status(template.id()).orElse(null);
         var validation = validator.validate(template);
         AuthoringSession activeEdit = authoringManager.editingSession(player, roomId).orElse(null);
         var doors = activeEdit == null ? template.doors() : activeEdit.doors();
         var markers = activeEdit == null ? template.markers() : activeEdit.markers();
         var features = activeEdit == null ? template.featureSlots() : activeEdit.featureSlots();
-        button(menu, 4, validation.valid() ? Material.LIME_CONCRETE : Material.RED_CONCRETE, validation.valid() ? "Validation OK" : "Validation Errors", validation.errors(), p -> openRoom(p, roomId));
+        button(menu, 4, statusValid(status) && validation.valid() ? Material.LIME_CONCRETE : Material.RED_CONCRETE, statusValid(status) && validation.valid() ? "Validation OK" : "Validation Errors", status == null ? validation.errors() : loadStatusLore(status), p -> openRoom(p, roomId));
         button(menu, 10, Material.NAME_TAG, "Category: " + template.category(), enumNames(RoomCategory.class), p -> {
             RoomCategory next = nextCategory(template.category());
             if (activeEdit != null) {
@@ -192,7 +230,7 @@ public final class MenuManager implements Listener {
     }
 
     private void openComponents(Player player, String roomId, String type) {
-        RoomTemplate template = templateRegistry.get(roomId)
+        RoomTemplate template = templateRegistry.getVisible(roomId)
             .orElseThrow(() -> new IllegalArgumentException("Unknown room " + roomId));
         AuthoringSession activeEdit = authoringManager.editingSession(player, roomId).orElse(null);
         Menu menu = menu("da:components:" + roomId + ":" + type, 54, titleCase(type) + "s: " + roomId);
@@ -227,7 +265,7 @@ public final class MenuManager implements Listener {
     }
 
     private void openFeatureSlot(Player player, String roomId, String slotId) {
-        RoomTemplate template = templateRegistry.get(roomId)
+        RoomTemplate template = templateRegistry.getVisible(roomId)
             .orElseThrow(() -> new IllegalArgumentException("Unknown room " + roomId));
         AuthoringSession activeEdit = authoringManager.editingSession(player, roomId).orElse(null);
         List<RoomFeatureSlot> featureSlots = activeEdit == null ? template.featureSlots() : activeEdit.featureSlots();
@@ -262,7 +300,7 @@ public final class MenuManager implements Listener {
     }
 
     private void openDoorSlot(Player player, String roomId, String slotId) {
-        RoomTemplate template = templateRegistry.get(roomId)
+        RoomTemplate template = templateRegistry.getVisible(roomId)
             .orElseThrow(() -> new IllegalArgumentException("Unknown room " + roomId));
         AuthoringSession activeEdit = authoringManager.editingSession(player, roomId).orElse(null);
         List<DoorSocket> doorSlots = activeEdit == null ? template.doors() : activeEdit.doors();
@@ -301,7 +339,7 @@ public final class MenuManager implements Listener {
                 break;
             }
             FeatureMatcher.FeatureMatchResult match = FeatureMatcher.match(featureSlot, feature);
-            button(menu, slot++, Material.GRAY_CONCRETE, feature.id(), List.of("Unavailable: " + match.reason(), "Size: " + feature.size()), p -> p.sendMessage(Component.text("Feature " + feature.id() + " unavailable: " + match.reason())));
+            button(menu, slot++, Material.GRAY_CONCRETE, feature.id(), List.of("Unavailable: " + match.reason(), "Size: " + DiagnosticText.size(feature.size())), p -> p.sendMessage(Component.text("Feature " + feature.id() + " unavailable: " + match.reason())));
         }
         return slot;
     }
@@ -316,7 +354,7 @@ public final class MenuManager implements Listener {
                 break;
             }
             DoorTemplateMatcher.DoorTemplateMatchResult match = DoorTemplateMatcher.match(doorSlot, door);
-            button(menu, slot++, Material.GRAY_CONCRETE, door.id(), List.of("Unavailable: " + match.reason(), "Bounds: " + door.size(), "Gateway: " + (door.gateway() == null ? "unset" : door.gateway().size() + " " + door.gateway().facing())), p -> p.sendMessage(Component.text("Door " + door.id() + " unavailable: " + match.reason())));
+            button(menu, slot++, Material.GRAY_CONCRETE, door.id(), List.of("Unavailable: " + match.reason(), "Bounds: " + DiagnosticText.size(door.size()), "Gateway: " + (door.gateway() == null ? "unset" : DiagnosticText.size(door.gateway().size()) + " " + door.gateway().facing())), p -> p.sendMessage(Component.text("Door " + door.id() + " unavailable: " + match.reason())));
         }
         return slot;
     }
@@ -449,7 +487,7 @@ public final class MenuManager implements Listener {
             if (authoringManager.isEditingRoom(p, roomId)) {
                 removed = authoringManager.removeComponent(p, type, id);
             } else {
-                RoomTemplate template = templateRegistry.get(roomId)
+                RoomTemplate template = templateRegistry.getVisible(roomId)
                     .orElseThrow(() -> new IllegalArgumentException("Unknown room " + roomId));
                 RoomTemplate updated = removeComponent(template, type, id);
                 removed = updated != template;
@@ -472,7 +510,7 @@ public final class MenuManager implements Listener {
                 if (authoringManager.isEditingRoom(player, roomId)) {
                     renamed = authoringManager.renameComponent(player, type, oldId, newId);
                 } else {
-                    RoomTemplate template = templateRegistry.get(roomId)
+                    RoomTemplate template = templateRegistry.getVisible(roomId)
                         .orElseThrow(() -> new IllegalArgumentException("Unknown room " + roomId));
                     RoomTemplate updated = renameComponent(template, type, oldId, newId);
                     renamed = updated != template;
@@ -552,8 +590,9 @@ public final class MenuManager implements Listener {
     public void openDoors(Player player) {
         Menu menu = menu("da:doors", 54, "DungeonArchitect Doors");
         int slot = 0;
-        for (DoorTemplate template : doorRegistry.all()) {
-            button(menu, slot++, Material.OAK_DOOR, template.id(), List.of("Size: " + template.size(), "Tags: " + String.join(",", template.tags()), "Gateway: " + (template.gateway() == null ? "unset" : template.gateway().size()), "Click to edit."), p -> openDoor(p, template.id()));
+        for (DoorTemplate template : doorRegistry.visible()) {
+            TemplateLoadStatus<DoorTemplate> status = doorRegistry.status(template.id()).orElse(null);
+            button(menu, slot++, statusValid(status) ? Material.OAK_DOOR : Material.RED_CONCRETE, template.id(), loadStatusLore(status, "Size: " + template.size(), "Tags: " + String.join(",", template.tags()), "Gateway: " + (template.gateway() == null ? "unset" : template.gateway().size()), "Click to edit."), p -> openDoor(p, template.id()));
             if (slot >= 45) {
                 break;
             }
@@ -563,13 +602,14 @@ public final class MenuManager implements Listener {
     }
 
     public void openDoor(Player player, String doorId) {
-        DoorTemplate template = doorRegistry.get(doorId)
+        DoorTemplate template = doorRegistry.getVisible(doorId)
             .orElseThrow(() -> new IllegalArgumentException("Unknown door " + doorId));
+        TemplateLoadStatus<DoorTemplate> status = doorRegistry.status(template.id()).orElse(null);
         AuthoringSession activeEdit = authoringManager.editingDoorSession(player, doorId).orElse(null);
         var markers = activeEdit == null ? template.markers() : activeEdit.markers();
         var features = activeEdit == null ? template.featureSlots() : activeEdit.featureSlots();
         Menu menu = menu("da:door-template:" + doorId, 54, "Door: " + doorId);
-        button(menu, 4, Material.OAK_DOOR, "Size: " + template.size(), List.of("Captured door footprint."), p -> openDoor(p, doorId));
+        button(menu, 4, statusValid(status) ? Material.OAK_DOOR : Material.RED_CONCRETE, "Size: " + template.size(), loadStatusLore(status, "Captured door footprint."), p -> openDoor(p, doorId));
         button(menu, 10, template.gateway() == null ? Material.RED_CONCRETE : Material.LIME_CONCRETE, "Gateway: " + (template.gateway() == null ? "unset" : template.gateway().size() + " " + template.gateway().facing()), List.of("Set with /da door gateway.", "Right click to select in edit world."), p -> openDoor(p, doorId), p -> selectDoorComponent(p, doorId, "gateway", "gateway"));
         button(menu, 12, Material.OAK_SIGN, "Tags: " + String.join(",", template.tags()), List.of("Comma separated tags."), p -> prompts.prompt(p, "Enter comma-separated tags", value -> {
             Set<String> tags = new LinkedHashSet<>();
@@ -620,7 +660,7 @@ public final class MenuManager implements Listener {
     }
 
     private void openDoorComponents(Player player, String doorId, String type) {
-        DoorTemplate template = doorRegistry.get(doorId)
+        DoorTemplate template = doorRegistry.getVisible(doorId)
             .orElseThrow(() -> new IllegalArgumentException("Unknown door " + doorId));
         AuthoringSession activeEdit = authoringManager.editingDoorSession(player, doorId).orElse(null);
         Menu menu = menu("da:door-components:" + doorId + ":" + type, 54, "Door " + titleCase(type) + "s: " + doorId);
@@ -647,7 +687,7 @@ public final class MenuManager implements Listener {
     }
 
     private void openDoorFeatureSlot(Player player, String doorId, String slotId) {
-        DoorTemplate template = doorRegistry.get(doorId)
+        DoorTemplate template = doorRegistry.getVisible(doorId)
             .orElseThrow(() -> new IllegalArgumentException("Unknown door " + doorId));
         AuthoringSession activeEdit = authoringManager.editingDoorSession(player, doorId).orElse(null);
         List<RoomFeatureSlot> featureSlots = activeEdit == null ? template.featureSlots() : activeEdit.featureSlots();
@@ -735,7 +775,7 @@ public final class MenuManager implements Listener {
             if (activeEdit != null) {
                 removed = type.equals("marker") ? activeEdit.removeMarker(id) : activeEdit.removeFeature(id);
             } else {
-                DoorTemplate template = doorRegistry.get(doorId)
+                DoorTemplate template = doorRegistry.getVisible(doorId)
                     .orElseThrow(() -> new IllegalArgumentException("Unknown door " + doorId));
                 DoorTemplate updated = removeDoorTemplateComponent(template, type, id);
                 removed = updated != template;
@@ -762,7 +802,7 @@ public final class MenuManager implements Listener {
                         authoringManager.selectComponent(player, type, newId);
                     }
                 } else {
-                    DoorTemplate template = doorRegistry.get(doorId)
+                    DoorTemplate template = doorRegistry.getVisible(doorId)
                         .orElseThrow(() -> new IllegalArgumentException("Unknown door " + doorId));
                     DoorTemplate updated = renameDoorTemplateComponent(template, type, oldId, newId);
                     renamed = updated != template;
@@ -941,8 +981,9 @@ public final class MenuManager implements Listener {
     public void openFeatures(Player player) {
         Menu menu = menu("da:features", 54, "DungeonArchitect Features");
         int slot = 0;
-        for (FeatureTemplate template : featureRegistry.all()) {
-            button(menu, slot++, Material.STRUCTURE_BLOCK, template.id(), List.of("Size: " + template.size(), "Tags: " + String.join(",", template.tags()), "Click to edit."), p -> openFeature(p, template.id()));
+        for (FeatureTemplate template : featureRegistry.visible()) {
+            TemplateLoadStatus<FeatureTemplate> status = featureRegistry.status(template.id()).orElse(null);
+            button(menu, slot++, statusValid(status) ? Material.STRUCTURE_BLOCK : Material.RED_CONCRETE, template.id(), loadStatusLore(status, "Size: " + template.size(), "Tags: " + String.join(",", template.tags()), "Click to edit."), p -> openFeature(p, template.id()));
             if (slot >= 45) {
                 break;
             }
@@ -952,10 +993,11 @@ public final class MenuManager implements Listener {
     }
 
     public void openFeature(Player player, String featureId) {
-        FeatureTemplate template = featureRegistry.get(featureId)
+        FeatureTemplate template = featureRegistry.getVisible(featureId)
             .orElseThrow(() -> new IllegalArgumentException("Unknown feature " + featureId));
+        TemplateLoadStatus<FeatureTemplate> status = featureRegistry.status(template.id()).orElse(null);
         Menu menu = menu("da:feature-template:" + featureId, 54, "Feature: " + featureId);
-        button(menu, 4, Material.LIME_CONCRETE, "Size: " + template.size(), List.of("Captured feature footprint."), p -> openFeature(p, featureId));
+        button(menu, 4, statusValid(status) ? Material.LIME_CONCRETE : Material.RED_CONCRETE, "Size: " + template.size(), loadStatusLore(status, "Captured feature footprint."), p -> openFeature(p, featureId));
         button(menu, 12, Material.OAK_SIGN, "Tags: " + String.join(",", template.tags()), List.of("Comma separated tags."), p -> prompts.prompt(p, "Enter comma-separated tags", value -> {
             Set<String> tags = new LinkedHashSet<>();
             for (String tag : value.split(",")) {
@@ -1215,14 +1257,72 @@ public final class MenuManager implements Listener {
     }
 
     private void sendValidation(Player player, TemplateValidationResult result) {
-        if (result.valid()) {
+        for (String repair : result.repairs()) {
+            player.sendMessage(Component.text("Repair: " + repair));
+        }
+        if (result.valid() && result.warnings().isEmpty()) {
             player.sendMessage(Component.text("Validation OK."));
             return;
         }
-        player.sendMessage(Component.text("Validation errors:"));
+        if (!result.errors().isEmpty()) {
+            player.sendMessage(Component.text("Validation errors:"));
+        }
         for (String error : result.errors()) {
             player.sendMessage(Component.text("- " + error));
         }
+        for (String warning : result.warnings()) {
+            player.sendMessage(Component.text("Warning: " + warning));
+        }
+    }
+
+    private boolean statusValid(TemplateLoadStatus<?> status) {
+        return status == null || status.valid();
+    }
+
+    private List<String> loadStatusLore(TemplateLoadStatus<?> status, String... base) {
+        List<String> lore = new ArrayList<>(List.of(base));
+        if (status == null) {
+            return lore;
+        }
+        if (!status.repairs().isEmpty()) {
+            lore.add("Repairs: " + status.repairs().size());
+        }
+        if (!status.errors().isEmpty()) {
+            lore.add("Invalid: " + status.errors().size() + " issue(s)");
+            status.errors().stream().limit(2).forEach(error -> lore.add("- " + error));
+            lore.add("Click to inspect. Use /da diagnose for full details.");
+        }
+        return DiagnosticText.lore(lore);
+    }
+
+    private List<String> diagnosticSummaryLore() {
+        TemplateValidationResult result = TemplateDiagnostics.analyze(templateRegistry, featureRegistry, doorRegistry);
+        if (result.valid() && result.warnings().isEmpty()) {
+            return List.of("No known template issues.");
+        }
+        return List.of("Errors: " + result.errors().size(), "Warnings: " + result.warnings().size(), "Click for full report.");
+    }
+
+    private List<String> diagnosticLore(TemplateDiagnostic diagnostic) {
+        List<String> lore = new ArrayList<>();
+        lore.add(diagnostic.message());
+        if (diagnostic.localPosition() != null) {
+            lore.add("Position: " + DiagnosticText.position(diagnostic.localPosition()));
+        }
+        if (diagnostic.suggestion() != null) {
+            lore.add("Fix: " + diagnostic.suggestion());
+        }
+        return DiagnosticText.lore(lore);
+    }
+
+    private String targetName(TemplateDiagnostic diagnostic) {
+        if (diagnostic.templateId() == null) {
+            return "template";
+        }
+        if (diagnostic.componentId() == null) {
+            return diagnostic.templateId();
+        }
+        return diagnostic.templateId() + "/" + diagnostic.componentId();
     }
 
     private String message(Throwable throwable) {

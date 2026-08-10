@@ -2,15 +2,18 @@ package com.dungeonarchitect.door;
 
 import com.dungeonarchitect.domain.DoorTemplate;
 import com.dungeonarchitect.template.RoomStructureService;
+import com.dungeonarchitect.template.TemplateLoadStatus;
 import com.dungeonarchitect.template.TemplateValidationResult;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -18,6 +21,9 @@ public final class DoorTemplateRegistry {
     private final Path doorsDirectory;
     private final DoorTemplateValidator validator;
     private Map<String, DoorTemplate> templates = Map.of();
+    private Map<String, DoorTemplate> visibleTemplates = Map.of();
+    private Map<String, TemplateLoadStatus<DoorTemplate>> statusById = Map.of();
+    private List<TemplateLoadStatus<DoorTemplate>> loadStatuses = List.of();
     private TemplateValidationResult lastValidation = new TemplateValidationResult();
 
     public DoorTemplateRegistry(Path doorsDirectory, RoomStructureService structureService) {
@@ -25,26 +31,49 @@ public final class DoorTemplateRegistry {
         this.validator = new DoorTemplateValidator(structureService);
     }
 
+    DoorTemplateRegistry(Path doorsDirectory, com.dungeonarchitect.template.StructureSizeReader sizeReader, boolean ignored) {
+        this.doorsDirectory = doorsDirectory;
+        this.validator = new DoorTemplateValidator(sizeReader, true);
+    }
+
     public TemplateValidationResult reload() {
         TemplateValidationResult result = new TemplateValidationResult();
         Map<String, DoorTemplate> loaded = new LinkedHashMap<>();
+        Map<String, DoorTemplate> visible = new LinkedHashMap<>();
+        Map<String, TemplateLoadStatus<DoorTemplate>> statusesById = new LinkedHashMap<>();
+        List<TemplateLoadStatus<DoorTemplate>> statuses = new ArrayList<>();
         try {
             Files.createDirectories(doorsDirectory);
             try (var stream = Files.list(doorsDirectory)) {
                 for (Path directory : stream.filter(Files::isDirectory).sorted(Comparator.comparing(Path::toString)).toList()) {
-                    try {
-                        DoorTemplate template = DoorTemplateIO.load(directory);
-                        if (loaded.containsKey(template.id())) {
-                            result.add("Duplicate door id " + template.id());
-                            continue;
-                        }
-                        TemplateValidationResult templateResult = validator.validate(template);
-                        result.addAll(templateResult.errors());
-                        if (templateResult.valid()) {
-                            loaded.put(template.id(), template);
-                        }
-                    } catch (RuntimeException ex) {
-                        result.add(directory.getFileName() + ": " + ex.getMessage());
+                    TemplateLoadStatus<DoorTemplate> loadedStatus = DoorTemplateIO.loadRecovering(directory, validator.sizeReader());
+                    if (!loadedStatus.loadable()) {
+                        statuses.add(loadedStatus);
+                        result.addAll(loadedStatus.errors());
+                        result.addRepairs(loadedStatus.repairs());
+                        continue;
+                    }
+                    DoorTemplate template = loadedStatus.template();
+                    List<String> errors = new ArrayList<>(loadedStatus.errors());
+                    if (visible.containsKey(template.id())) {
+                        errors.add("Duplicate door id " + template.id());
+                        TemplateLoadStatus<DoorTemplate> duplicate = new TemplateLoadStatus<>(template, template.id(), directory, false, errors, loadedStatus.repairs());
+                        statuses.add(duplicate);
+                        result.addAll(errors);
+                        result.addRepairs(loadedStatus.repairs());
+                        continue;
+                    }
+                    TemplateValidationResult templateResult = validator.validate(template);
+                    errors.addAll(templateResult.errors());
+                    result.addAll(errors);
+                    result.addRepairs(loadedStatus.repairs());
+                    boolean valid = errors.isEmpty();
+                    TemplateLoadStatus<DoorTemplate> status = new TemplateLoadStatus<>(template, template.id(), directory, valid, errors, loadedStatus.repairs());
+                    statuses.add(status);
+                    visible.put(template.id(), template);
+                    statusesById.put(template.id(), status);
+                    if (valid) {
+                        loaded.put(template.id(), template);
                     }
                 }
             }
@@ -52,6 +81,9 @@ public final class DoorTemplateRegistry {
             result.add("Failed to scan doors directory: " + ex.getMessage());
         }
         templates = Map.copyOf(loaded);
+        visibleTemplates = Map.copyOf(visible);
+        statusById = Map.copyOf(statusesById);
+        loadStatuses = List.copyOf(statuses);
         lastValidation = result;
         return result;
     }
@@ -62,6 +94,30 @@ public final class DoorTemplateRegistry {
 
     public Collection<DoorTemplate> all() {
         return templates.values();
+    }
+
+    public Optional<DoorTemplate> getVisible(String id) {
+        return Optional.ofNullable(visibleTemplates.get(id.toLowerCase(java.util.Locale.ROOT)));
+    }
+
+    public Collection<DoorTemplate> visible() {
+        return visibleTemplates.values();
+    }
+
+    public Optional<TemplateLoadStatus<DoorTemplate>> status(String id) {
+        return Optional.ofNullable(statusById.get(id.toLowerCase(java.util.Locale.ROOT)));
+    }
+
+    public List<TemplateLoadStatus<DoorTemplate>> loadStatuses() {
+        return loadStatuses;
+    }
+
+    public long invalidCount() {
+        return loadStatuses.stream().filter(status -> status.loadable() && !status.valid()).count();
+    }
+
+    public long unrecoverableCount() {
+        return loadStatuses.stream().filter(status -> !status.loadable()).count();
     }
 
     public Path doorsDirectory() {
@@ -95,9 +151,9 @@ public final class DoorTemplateRegistry {
         if (Files.exists(target)) {
             throw new IllegalArgumentException("Door template already exists: " + normalizedNewId);
         }
+        DoorTemplate sourceTemplate = loadVisibleTemplateForOperation(oldId, source, "duplication");
         copyDirectory(source, target);
-        DoorTemplate copied = DoorTemplateIO.load(target);
-        DoorTemplate renamed = new DoorTemplate(normalizedNewId, copied.size(), copied.tags(), copied.markers(), copied.featureSlots(), copied.gateway(), target.resolve("door.nbt"));
+        DoorTemplate renamed = new DoorTemplate(normalizedNewId, sourceTemplate.size(), sourceTemplate.tags(), sourceTemplate.markers(), sourceTemplate.featureSlots(), sourceTemplate.gateway(), target.resolve("door.nbt"));
         DoorTemplateIO.save(renamed, target);
         reload();
         return renamed;
@@ -113,9 +169,9 @@ public final class DoorTemplateRegistry {
         if (Files.exists(target)) {
             throw new IllegalArgumentException("Door template already exists: " + normalizedNewId);
         }
+        DoorTemplate sourceTemplate = loadVisibleTemplateForOperation(oldId, source, "rename");
         Files.move(source, target);
-        DoorTemplate moved = DoorTemplateIO.load(target);
-        DoorTemplate renamed = new DoorTemplate(normalizedNewId, moved.size(), moved.tags(), moved.markers(), moved.featureSlots(), moved.gateway(), target.resolve("door.nbt"));
+        DoorTemplate renamed = new DoorTemplate(normalizedNewId, sourceTemplate.size(), sourceTemplate.tags(), sourceTemplate.markers(), sourceTemplate.featureSlots(), sourceTemplate.gateway(), target.resolve("door.nbt"));
         DoorTemplateIO.save(renamed, target);
         reload();
         return renamed;
@@ -129,6 +185,18 @@ public final class DoorTemplateRegistry {
             throw new IllegalArgumentException("Invalid door id " + doorId);
         }
         return directory;
+    }
+
+    private DoorTemplate loadVisibleTemplateForOperation(String doorId, Path directory, String operation) {
+        DoorTemplate visible = getVisible(doorId).orElse(null);
+        if (visible != null) {
+            return visible;
+        }
+        TemplateLoadStatus<DoorTemplate> status = DoorTemplateIO.loadRecovering(directory, validator.sizeReader());
+        if (!status.loadable()) {
+            throw new IllegalArgumentException("Door template cannot be loaded for " + operation + ": " + doorId);
+        }
+        return status.template();
     }
 
     private String normalizeId(String doorId) {

@@ -42,7 +42,10 @@ public final class DoorGeometry {
             throw new IllegalArgumentException("Door " + door.id() + " does not match slot " + slot.id() + ": " + match.reason());
         }
         Rotation rotation = match.rotation();
-        return new RoomTransform(slotBounds.min(), rotation, door.size());
+        BoundingBox3i relativeDoorBounds = transformedBounds(BoundingBox3i.fromMinAndSize(IntVector3.ZERO, door.size()), new RoomTransform(IntVector3.ZERO, rotation, door.size()));
+        BoundingBox3i relativeGatewayBounds = transformedBounds(door.gateway(), new RoomTransform(IntVector3.ZERO, rotation, door.size()));
+        IntVector3 origin = alignedOrigin(slotBounds, transformedSlotFacing, relativeDoorBounds, relativeGatewayBounds);
+        return new RoomTransform(origin, rotation, door.size());
     }
 
     public static BoundingBox3i gatewayBounds(DoorSocket slot, DoorTemplate door, RoomTransform roomTransform) {
@@ -100,5 +103,25 @@ public final class DoorGeometry {
             + ","
             + (bounds.min().z() + bounds.max().z()) / 2.0
             + ")";
+    }
+
+    private static IntVector3 alignedOrigin(BoundingBox3i slotBounds, Direction3 facing, BoundingBox3i relativeDoorBounds, BoundingBox3i relativeGatewayBounds) {
+        return switch (facing) {
+            case NORTH -> new IntVector3(centeredAxisOrigin(slotBounds.min().x(), slotBounds.max().x(), relativeDoorBounds.min().x(), relativeDoorBounds.max().x(), relativeGatewayBounds.min().x(), relativeGatewayBounds.max().x()), centeredAxisOrigin(slotBounds.min().y(), slotBounds.max().y(), relativeDoorBounds.min().y(), relativeDoorBounds.max().y(), relativeGatewayBounds.min().y(), relativeGatewayBounds.max().y()), slotBounds.min().z() - relativeGatewayBounds.min().z());
+            case SOUTH -> new IntVector3(centeredAxisOrigin(slotBounds.min().x(), slotBounds.max().x(), relativeDoorBounds.min().x(), relativeDoorBounds.max().x(), relativeGatewayBounds.min().x(), relativeGatewayBounds.max().x()), centeredAxisOrigin(slotBounds.min().y(), slotBounds.max().y(), relativeDoorBounds.min().y(), relativeDoorBounds.max().y(), relativeGatewayBounds.min().y(), relativeGatewayBounds.max().y()), slotBounds.max().z() - relativeGatewayBounds.max().z());
+            case EAST -> new IntVector3(slotBounds.max().x() - relativeGatewayBounds.max().x(), centeredAxisOrigin(slotBounds.min().y(), slotBounds.max().y(), relativeDoorBounds.min().y(), relativeDoorBounds.max().y(), relativeGatewayBounds.min().y(), relativeGatewayBounds.max().y()), centeredAxisOrigin(slotBounds.min().z(), slotBounds.max().z(), relativeDoorBounds.min().z(), relativeDoorBounds.max().z(), relativeGatewayBounds.min().z(), relativeGatewayBounds.max().z()));
+            case WEST -> new IntVector3(slotBounds.min().x() - relativeGatewayBounds.min().x(), centeredAxisOrigin(slotBounds.min().y(), slotBounds.max().y(), relativeDoorBounds.min().y(), relativeDoorBounds.max().y(), relativeGatewayBounds.min().y(), relativeGatewayBounds.max().y()), centeredAxisOrigin(slotBounds.min().z(), slotBounds.max().z(), relativeDoorBounds.min().z(), relativeDoorBounds.max().z(), relativeGatewayBounds.min().z(), relativeGatewayBounds.max().z()));
+            case UP -> new IntVector3(centeredAxisOrigin(slotBounds.min().x(), slotBounds.max().x(), relativeDoorBounds.min().x(), relativeDoorBounds.max().x(), relativeGatewayBounds.min().x(), relativeGatewayBounds.max().x()), slotBounds.max().y() - relativeGatewayBounds.max().y(), centeredAxisOrigin(slotBounds.min().z(), slotBounds.max().z(), relativeDoorBounds.min().z(), relativeDoorBounds.max().z(), relativeGatewayBounds.min().z(), relativeGatewayBounds.max().z()));
+            case DOWN -> new IntVector3(centeredAxisOrigin(slotBounds.min().x(), slotBounds.max().x(), relativeDoorBounds.min().x(), relativeDoorBounds.max().x(), relativeGatewayBounds.min().x(), relativeGatewayBounds.max().x()), slotBounds.min().y() - relativeGatewayBounds.min().y(), centeredAxisOrigin(slotBounds.min().z(), slotBounds.max().z(), relativeDoorBounds.min().z(), relativeDoorBounds.max().z(), relativeGatewayBounds.min().z(), relativeGatewayBounds.max().z()));
+        };
+    }
+
+    private static int centeredAxisOrigin(int slotMin, int slotMax, int doorMin, int doorMax, int gatewayMin, int gatewayMax) {
+        int gatewaySize = gatewayMax - gatewayMin + 1;
+        int desiredGatewayMin = slotMin + ((slotMax - slotMin + 1) - gatewaySize) / 2;
+        int origin = desiredGatewayMin - gatewayMin;
+        int minOrigin = slotMin - doorMin;
+        int maxOrigin = slotMax - doorMax;
+        return Math.max(minOrigin, Math.min(maxOrigin, origin));
     }
 }

@@ -24,6 +24,8 @@ import java.util.Set;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class AuthoringManagerComponentSelectionTest {
     @Test
@@ -91,6 +93,42 @@ final class AuthoringManagerComponentSelectionTest {
 
         AuthoringManager.ComponentSelection gateway = manager.selectComponent(player, "gateway", "gateway");
         assertEquals(SelectionBounds.between(new IntVector3(102, 81, 100), new IntVector3(104, 84, 100)), gateway.worldBounds());
+    }
+
+    @Test
+    void roomCommandsRejectFeatureAndDoorSessionsBeforeSaving() {
+        Player player = fakePlayer();
+        AuthoringManager manager = manager();
+        AuthoringSession session = manager.session(player);
+
+        session.featureSession(true);
+        assertThrows(IllegalStateException.class, () -> manager.saveCurrentSelectionAsRoomBounds(player));
+        assertThrows(IllegalStateException.class, () -> manager.save(player, null));
+        assertThrows(IllegalStateException.class, () -> manager.createDoorFromSelection(player, null, SocketType.STANDARD, Direction3.NORTH));
+        assertThrows(IllegalStateException.class, () -> manager.createFeatureSlotFromSelection(player, null));
+
+        session.doorSession(true);
+        assertThrows(IllegalStateException.class, () -> manager.saveCurrentSelectionAsRoomBounds(player));
+        assertThrows(IllegalStateException.class, () -> manager.save(player, null));
+        assertThrows(IllegalStateException.class, () -> manager.createDoorFromSelection(player, null, SocketType.STANDARD, Direction3.NORTH));
+        assertThrows(IllegalStateException.class, () -> manager.createFeatureSlotFromSelection(player, null));
+        assertTrue(manager.activeRoomId(player).isEmpty());
+    }
+
+    @Test
+    void boundsCommandsRejectWrongPrefabType() {
+        Player player = fakePlayer();
+        AuthoringManager manager = manager();
+        AuthoringSession session = manager.session(player);
+
+        assertThrows(IllegalStateException.class, () -> manager.saveCurrentSelectionAsFeatureBounds(player));
+        assertThrows(IllegalStateException.class, () -> manager.saveCurrentSelectionAsDoorBounds(player));
+
+        session.featureSession(true);
+        assertThrows(IllegalStateException.class, () -> manager.saveCurrentSelectionAsDoorBounds(player));
+
+        session.doorSession(true);
+        assertThrows(IllegalStateException.class, () -> manager.saveCurrentSelectionAsFeatureBounds(player));
     }
 
     private AuthoringManager manager() {

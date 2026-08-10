@@ -24,6 +24,7 @@ import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class DeterministicDungeonGeneratorTest {
@@ -177,6 +178,27 @@ final class DeterministicDungeonGeneratorTest {
     }
 
     @Test
+    void templateDoorModeAllowsDoorBoundsSmallerThanSlotsWhenGatewaysAlign() {
+        DoorTemplate arch = doorTemplate("arch", new IntVector3(3, 4, 2), new IntVector3(1, 1, 0), new IntVector3(1, 2, 1), Direction3.NORTH);
+        RoomTemplate start = largeRoom("start", RoomCategory.START, new DoorSocket("north", new IntVector3(8, 3, 0), new IntVector3(5, 4, 3), Direction3.NORTH, Set.of(), List.of(new DoorSlotEntry("arch", 1))));
+        RoomTemplate combat = largeRoom("combat", RoomCategory.COMBAT, new DoorSocket("south", new IntVector3(8, 3, 18), new IntVector3(5, 4, 3), Direction3.SOUTH, Set.of(), List.of(new DoorSlotEntry("arch", 1))));
+        DeterministicDungeonGenerator generator = new DeterministicDungeonGenerator(100, 80, () -> List.of(arch));
+
+        var result = generator.generate(List.of(start, combat), new DungeonGenerationRequest(2, 12L));
+
+        assertTrue(result.successful(), result.errors().toString());
+        DungeonEdge edge = result.graph().edges().getFirst();
+        DungeonNode from = result.graph().nodes().get(edge.fromNode());
+        DungeonNode to = result.graph().nodes().get(edge.toNode());
+        var fromDoorTransform = DoorGeometry.doorTransform(start.doors().getFirst(), arch, from.transform());
+        var toDoorTransform = DoorGeometry.doorTransform(combat.doors().getFirst(), arch, to.transform());
+        var fromGateway = DoorGeometry.transformedBounds(arch.gateway(), fromDoorTransform);
+        var toGateway = DoorGeometry.transformedBounds(arch.gateway(), toDoorTransform);
+
+        assertEquals(DoorGeometry.shifted(fromGateway, DoorGeometry.gatewayFacing(arch, fromDoorTransform).vector()), toGateway);
+    }
+
+    @Test
     void templateDoorModeRejectsIncompatibleGatewaySizes() {
         DoorTemplate small = doorTemplate("small", new IntVector3(3, 4, 3), new IntVector3(1, 1, 0), new IntVector3(1, 2, 1), Direction3.NORTH);
         DoorTemplate wide = doorTemplate("wide", new IntVector3(3, 4, 3), new IntVector3(0, 1, 0), new IntVector3(3, 2, 1), Direction3.NORTH);
@@ -298,7 +320,7 @@ final class DeterministicDungeonGeneratorTest {
 
         var errors = new DungeonGraphValidator().validate(graph, List.of(start, combat));
 
-        assertTrue(errors.stream().anyMatch(error -> error.contains("door rectangles are not aligned") && error.contains("delta=")), errors.toString());
+        assertTrue(errors.stream().anyMatch(error -> error.contains("door rectangles are not aligned") && error.contains("delta ")), errors.toString());
     }
 
     @Test
@@ -315,7 +337,7 @@ final class DeterministicDungeonGeneratorTest {
 
         var errors = new DungeonGraphValidator().validate(graph, List.of(start, combat));
 
-        assertTrue(errors.stream().anyMatch(error -> error.contains("mismatched door aperture sizes")), errors.toString());
+        assertTrue(errors.stream().anyMatch(error -> error.contains("mismatched aperture sizes")), errors.toString());
     }
 
     @Test
@@ -333,6 +355,93 @@ final class DeterministicDungeonGeneratorTest {
         var errors = new DungeonGraphValidator().validate(graph, List.of(start, combat));
 
         assertTrue(errors.stream().anyMatch(error -> error.contains("Room bounds overlap")), errors.toString());
+    }
+
+    @Test
+    void generatesExactLargeDungeonWithManyOpenDoors() {
+        DeterministicDungeonGenerator generator = new DeterministicDungeonGenerator(25_000, 80);
+        List<RoomTemplate> templates = List.of(
+            multiDoorRoom("start", RoomCategory.START, 1),
+            multiDoorRoom("combat_a", RoomCategory.COMBAT, 10),
+            multiDoorRoom("combat_b", RoomCategory.COMBAT, 7)
+        );
+
+        var result = generator.generate(templates, new DungeonGenerationRequest(120, 42L));
+
+        assertTrue(result.successful(), result.errors().toString());
+        assertEquals(120, result.graph().nodes().size());
+    }
+
+    @Test
+    void exhaustsDeadOpenDoorsAndContinuesThroughOtherFrontierDoors() {
+        DeterministicDungeonGenerator generator = new DeterministicDungeonGenerator(200, 80);
+        RoomTemplate start = compactRoom("start", RoomCategory.START, 1, List.of(
+            taggedDoor("dead", new IntVector3(2, 1, 0), Direction3.NORTH, "dead"),
+            taggedDoor("ok", new IntVector3(2, 1, 4), Direction3.SOUTH, "ok")
+        ));
+        RoomTemplate hall = compactRoom("hall", RoomCategory.COMBAT, 1, List.of(
+            taggedDoor("north", new IntVector3(2, 1, 0), Direction3.NORTH, "ok"),
+            taggedDoor("south", new IntVector3(2, 1, 4), Direction3.SOUTH, "ok")
+        ));
+
+        var result = generator.generate(List.of(start, hall), new DungeonGenerationRequest(2, 1L));
+
+        assertTrue(result.successful(), result.errors().toString());
+        assertEquals(2, result.graph().nodes().size());
+    }
+
+    @Test
+    void differentSeedsCanProduceDifferentGraphs() {
+        DeterministicDungeonGenerator generator = new DeterministicDungeonGenerator(25_000, 80);
+        List<RoomTemplate> templates = List.of(
+            multiDoorRoom("start", RoomCategory.START, 1),
+            multiDoorRoom("combat_a", RoomCategory.COMBAT, 10),
+            multiDoorRoom("combat_b", RoomCategory.COMBAT, 10)
+        );
+
+        var first = generator.generate(templates, new DungeonGenerationRequest(10, 1L));
+        var second = generator.generate(templates, new DungeonGenerationRequest(10, 2L));
+
+        assertTrue(first.successful(), first.errors().toString());
+        assertTrue(second.successful(), second.errors().toString());
+        assertNotEquals(first.graph(), second.graph());
+    }
+
+    @Test
+    void backtracksFromDeadEndCandidateToCompleteExactRoomCount() {
+        DeterministicDungeonGenerator generator = new DeterministicDungeonGenerator(1_000, 80);
+        RoomTemplate start = compactRoom("start", RoomCategory.START, 1, List.of(
+            new DoorSocket("north", new IntVector3(2, 1, 0), Direction3.NORTH, SocketType.STANDARD, 1, 2)
+        ));
+        RoomTemplate deadEnd = compactRoom("dead_end", RoomCategory.COMBAT, 500, List.of(
+            new DoorSocket("south", new IntVector3(2, 1, 4), Direction3.SOUTH, SocketType.STANDARD, 1, 2)
+        ));
+        RoomTemplate passThrough = compactRoom("pass_through", RoomCategory.COMBAT, 1, List.of(
+            new DoorSocket("south", new IntVector3(2, 1, 4), Direction3.SOUTH, SocketType.STANDARD, 1, 2),
+            new DoorSocket("north", new IntVector3(2, 1, 0), Direction3.NORTH, SocketType.STANDARD, 1, 2)
+        ));
+
+        var result = generator.generate(List.of(start, deadEnd, passThrough), new DungeonGenerationRequest(3, 3L));
+
+        assertTrue(result.successful(), result.errors().toString());
+        assertEquals(3, result.graph().nodes().size());
+    }
+
+    @Test
+    void budgetFailureReportsUsefulDiagnostics() {
+        DeterministicDungeonGenerator generator = new DeterministicDungeonGenerator(1, 80);
+
+        var result = generator.generate(List.of(startRoom(), combatRoom("combat", 1)), new DungeonGenerationRequest(5, 99L));
+
+        assertFalse(result.successful());
+        String error = result.errors().getFirst();
+        assertTrue(error.contains("Search budget exhausted"), error);
+        assertTrue(error.contains("rooms placed="), error);
+        assertTrue(error.contains("open doors="), error);
+        assertTrue(error.contains("exhausted doors="), error);
+        assertTrue(error.contains("collision rejects="), error);
+        assertTrue(error.contains("compatibility rejects="), error);
+        assertTrue(error.contains("search steps="), error);
     }
 
     private RoomTemplate startRoom() {
@@ -381,6 +490,45 @@ final class DeterministicDungeonGeneratorTest {
             List.of(),
             Path.of(id + ".nbt")
         );
+    }
+
+    private RoomTemplate compactRoom(String id, RoomCategory category, int weight, List<DoorSocket> doors) {
+        return new RoomTemplate(
+            id,
+            category,
+            weight,
+            Set.of(),
+            new IntVector3(5, 4, 5),
+            category == RoomCategory.START ? new IntVector3(2, 1, 2) : null,
+            doors,
+            List.of(),
+            List.of(),
+            Path.of(id + ".nbt")
+        );
+    }
+
+    private RoomTemplate multiDoorRoom(String id, RoomCategory category, int weight) {
+        return new RoomTemplate(
+            id,
+            category,
+            weight,
+            Set.of(),
+            new IntVector3(7, 4, 7),
+            category == RoomCategory.START ? new IntVector3(3, 1, 3) : null,
+            List.of(
+                new DoorSocket("north", new IntVector3(3, 1, 0), Direction3.NORTH, SocketType.STANDARD, 1, 2),
+                new DoorSocket("south", new IntVector3(3, 1, 6), Direction3.SOUTH, SocketType.STANDARD, 1, 2),
+                new DoorSocket("east", new IntVector3(6, 1, 3), Direction3.EAST, SocketType.STANDARD, 1, 2),
+                new DoorSocket("west", new IntVector3(0, 1, 3), Direction3.WEST, SocketType.STANDARD, 1, 2)
+            ),
+            List.of(),
+            List.of(),
+            Path.of(id + ".nbt")
+        );
+    }
+
+    private DoorSocket taggedDoor(String id, IntVector3 position, Direction3 facing, String tag) {
+        return new DoorSocket(id, position, facing, SocketType.STANDARD, 1, 2).withTags(Set.of(tag));
     }
 
     private DoorTemplate doorTemplate(String id, IntVector3 size, IntVector3 gatewayPosition, IntVector3 gatewaySize, Direction3 gatewayFacing) {

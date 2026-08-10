@@ -91,6 +91,10 @@ public final class AuthoringSession {
         return editingExistingRoom;
     }
 
+    public boolean roomSession() {
+        return !featureSession && !doorSession;
+    }
+
     public boolean featureSession() {
         return featureSession;
     }
