@@ -132,12 +132,12 @@ public final class DeterministicDungeonGenerator {
                         continue;
                     }
                     if (!templateDoorMode) {
-                        if (!DoorGeometry.sameAperture(existing.door, candidateDoor)) {
-                            continue;
-                        }
                         BoundingBox3i existingDoorBounds = DoorGeometry.transformedBounds(existing.door, existing.transform);
                         BoundingBox3i targetDoorBounds = DoorGeometry.shifted(existingDoorBounds, existingFacing.vector());
                         BoundingBox3i candidateRelativeBounds = DoorGeometry.relativeBounds(candidateDoor, rotation, template.size());
+                        if (!candidateRelativeBounds.size().equals(existingDoorBounds.size())) {
+                            continue;
+                        }
                         RoomTransform transform = new RoomTransform(targetDoorBounds.min().subtract(candidateRelativeBounds.min()), rotation, template.size());
                         if (!collides(nodes, transform.transformedBounds())) {
                             return new Placement(template, candidateDoor, transform, null, null);

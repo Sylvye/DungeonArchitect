@@ -51,4 +51,17 @@ final class SelectionOutlinePlannerTest {
         assertEquals(new Vector(13.035, 82.0, 21.5), east.getFirst());
         assertEquals(new Vector(15.035, 82.0, 21.5), east.getLast());
     }
+
+    @Test
+    void verticalFacingLinesStartAtVerticalFaceAndExtendOutward() {
+        SelectionBounds bounds = SelectionBounds.between(new IntVector3(10, 80, 20), new IntVector3(12, 83, 22));
+
+        List<Vector> up = SelectionOutlinePlanner.facingLinePoints(bounds, Direction3.UP, 1.0, 2.0, SelectionOutlinePlanner.Offset.ZERO);
+        List<Vector> down = SelectionOutlinePlanner.facingLinePoints(bounds, Direction3.DOWN, 1.0, 2.0, SelectionOutlinePlanner.Offset.ZERO);
+
+        assertEquals(new Vector(11.5, 84.0, 21.5), up.getFirst());
+        assertEquals(new Vector(11.5, 86.0, 21.5), up.getLast());
+        assertEquals(new Vector(11.5, 80.0, 21.5), down.getFirst());
+        assertEquals(new Vector(11.5, 78.0, 21.5), down.getLast());
+    }
 }

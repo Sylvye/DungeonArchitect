@@ -197,7 +197,7 @@ public final class RoomTemplateIO {
         return switch (facing) {
             case NORTH, SOUTH -> new IntVector3(width, height, 1);
             case EAST, WEST -> new IntVector3(1, height, width);
-            default -> throw new IllegalArgumentException("Door facing must be horizontal");
+            case UP, DOWN -> new IntVector3(width, 1, height);
         };
     }
 

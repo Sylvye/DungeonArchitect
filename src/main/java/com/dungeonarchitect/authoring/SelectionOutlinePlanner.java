@@ -64,7 +64,7 @@ public final class SelectionOutlinePlanner {
         if (length <= 0) {
             throw new IllegalArgumentException("length must be positive");
         }
-        if (facing == null || facing == Direction3.UP || facing == Direction3.DOWN) {
+        if (facing == null) {
             return List.of();
         }
         var min = bounds.min();
@@ -77,7 +77,8 @@ public final class SelectionOutlinePlanner {
             case SOUTH -> new Vector(centerX, centerY, max.z());
             case EAST -> new Vector(max.x(), centerY, centerZ);
             case WEST -> new Vector(min.x(), centerY, centerZ);
-            default -> throw new IllegalArgumentException("Facing must be horizontal");
+            case UP -> new Vector(centerX, max.y(), centerZ);
+            case DOWN -> new Vector(centerX, min.y(), centerZ);
         };
         Vector direction = new Vector(facing.vector().x(), facing.vector().y(), facing.vector().z());
         List<Vector> points = new ArrayList<>();

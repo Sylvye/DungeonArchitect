@@ -21,8 +21,8 @@ public record DoorSocket(
         if (position == null) {
             throw new IllegalArgumentException("Door position is required");
         }
-        if (facing == null || facing == Direction3.UP || facing == Direction3.DOWN) {
-            throw new IllegalArgumentException("Door facing must be horizontal");
+        if (facing == null) {
+            throw new IllegalArgumentException("Door facing is required");
         }
         if (width <= 0 || height <= 0) {
             throw new IllegalArgumentException("Door dimensions must be positive");
@@ -39,7 +39,7 @@ public record DoorSocket(
     }
 
     public DoorSocket(String id, IntVector3 position, IntVector3 size, Direction3 facing, Set<String> tags, List<DoorSlotEntry> entries) {
-        this(id, position, facing, SocketType.STANDARD, horizontalWidth(facing, size), size.y(), size, tags, entries);
+        this(id, position, facing, SocketType.STANDARD, displayWidth(facing, size), displayHeight(facing, size), size, tags, entries);
     }
 
     public boolean compatibleWith(DoorSocket other) {
@@ -64,15 +64,22 @@ public record DoorSocket(
         return switch (facing) {
             case NORTH, SOUTH -> new IntVector3(width, height, 1);
             case EAST, WEST -> new IntVector3(1, height, width);
-            default -> throw new IllegalArgumentException("Door facing must be horizontal");
+            case UP, DOWN -> new IntVector3(width, 1, height);
         };
     }
 
-    private static int horizontalWidth(Direction3 facing, IntVector3 size) {
+    private static int displayWidth(Direction3 facing, IntVector3 size) {
         return switch (facing) {
             case NORTH, SOUTH -> size.x();
             case EAST, WEST -> size.z();
-            default -> throw new IllegalArgumentException("Door facing must be horizontal");
+            case UP, DOWN -> size.x();
+        };
+    }
+
+    private static int displayHeight(Direction3 facing, IntVector3 size) {
+        return switch (facing) {
+            case NORTH, SOUTH, EAST, WEST -> size.y();
+            case UP, DOWN -> size.z();
         };
     }
 }

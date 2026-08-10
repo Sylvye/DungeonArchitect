@@ -21,4 +21,16 @@ final class DoorGeometryTest {
             DoorGeometry.localBounds(new DoorSocket("east", new IntVector3(0, 1, 5), Direction3.EAST, SocketType.STANDARD, 3, 4))
         );
     }
+
+    @Test
+    void computesFullVerticalDoorApertures() {
+        assertEquals(
+            new BoundingBox3i(new IntVector3(5, 0, 6), new IntVector3(7, 0, 9)),
+            DoorGeometry.localBounds(new DoorSocket("floor", new IntVector3(5, 0, 6), Direction3.DOWN, SocketType.STANDARD, 3, 4))
+        );
+        assertEquals(
+            new BoundingBox3i(new IntVector3(5, 9, 6), new IntVector3(7, 9, 9)),
+            DoorGeometry.localBounds(new DoorSocket("ceiling", new IntVector3(5, 9, 6), Direction3.UP, SocketType.STANDARD, 3, 4))
+        );
+    }
 }

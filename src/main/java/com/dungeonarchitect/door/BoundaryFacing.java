@@ -33,15 +33,21 @@ public final class BoundaryFacing {
         if (min.x() == parentMin.x()) {
             matches.add(new FaceCoverage(Direction3.WEST, size.z() * size.y()));
         }
+        if (max.y() == parentMax.y()) {
+            matches.add(new FaceCoverage(Direction3.UP, size.x() * size.z()));
+        }
+        if (min.y() == parentMin.y()) {
+            matches.add(new FaceCoverage(Direction3.DOWN, size.x() * size.z()));
+        }
         if (matches.isEmpty()) {
-            throw new IllegalArgumentException(label + " must touch a horizontal bounds face");
+            throw new IllegalArgumentException(label + " must touch a bounds face");
         }
         FaceCoverage best = matches.stream()
             .max(java.util.Comparator.comparingInt(FaceCoverage::coverage))
             .orElseThrow();
         long tied = matches.stream().filter(match -> match.coverage() == best.coverage()).count();
         if (tied > 1) {
-            throw new IllegalArgumentException(label + " must have one dominant horizontal bounds face");
+            throw new IllegalArgumentException(label + " must have one dominant bounds face");
         }
         return best.direction();
     }

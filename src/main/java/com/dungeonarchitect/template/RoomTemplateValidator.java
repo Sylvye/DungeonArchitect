@@ -81,7 +81,10 @@ public final class RoomTemplateValidator {
                 result.add(template.id() + ": door " + door.id() + " extends outside room bounds", door.position());
             } else {
                 try {
-                    BoundaryFacing.infer(SelectionBounds.between(door.position(), max), SelectionBounds.between(bounds.min(), bounds.max()), "Door " + door.id());
+                    var inferred = BoundaryFacing.infer(SelectionBounds.between(door.position(), max), SelectionBounds.between(bounds.min(), bounds.max()), "Door " + door.id());
+                    if (door.facing() != inferred) {
+                        result.add(template.id() + ": door " + door.id() + " facing " + door.facing() + " does not match inferred bounds face " + inferred, door.position());
+                    }
                 } catch (IllegalArgumentException ex) {
                     result.add(template.id() + ": " + ex.getMessage(), door.position());
                 }

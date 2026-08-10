@@ -203,6 +203,88 @@ final class DeterministicDungeonGeneratorTest {
     }
 
     @Test
+    void connectsFloorToCeilingDoorRectangles() {
+        DeterministicDungeonGenerator generator = new DeterministicDungeonGenerator(100, 80);
+        RoomTemplate start = largeRoom("start", RoomCategory.START, new DoorSocket("floor", new IntVector3(9, 0, 9), new IntVector3(3, 1, 3), Direction3.DOWN, Set.of(), List.of()));
+        RoomTemplate combat = largeRoom("combat", RoomCategory.COMBAT, new DoorSocket("ceiling", new IntVector3(9, 9, 9), new IntVector3(3, 1, 3), Direction3.UP, Set.of(), List.of()));
+
+        var result = generator.generate(List.of(start, combat), new DungeonGenerationRequest(2, 7L));
+
+        assertTrue(result.successful(), result.errors().toString());
+        DungeonEdge edge = result.graph().edges().getFirst();
+        DungeonNode from = result.graph().nodes().get(edge.fromNode());
+        DungeonNode to = result.graph().nodes().get(edge.toNode());
+        var fromFacing = from.transform().transformFacing(start.doors().getFirst().facing());
+        assertEquals(Direction3.DOWN, fromFacing);
+        assertEquals(DoorGeometry.shifted(DoorGeometry.transformedBounds(start.doors().getFirst(), from.transform()), fromFacing.vector()), DoorGeometry.transformedBounds(combat.doors().getFirst(), to.transform()));
+        assertEquals(from.transform().transformedBounds().min().y() - 1, to.transform().transformedBounds().max().y());
+    }
+
+    @Test
+    void connectsCeilingToFloorDoorRectangles() {
+        DeterministicDungeonGenerator generator = new DeterministicDungeonGenerator(100, 80);
+        RoomTemplate start = largeRoom("start", RoomCategory.START, new DoorSocket("ceiling", new IntVector3(9, 9, 9), new IntVector3(3, 1, 3), Direction3.UP, Set.of(), List.of()));
+        RoomTemplate combat = largeRoom("combat", RoomCategory.COMBAT, new DoorSocket("floor", new IntVector3(9, 0, 9), new IntVector3(3, 1, 3), Direction3.DOWN, Set.of(), List.of()));
+
+        var result = generator.generate(List.of(start, combat), new DungeonGenerationRequest(2, 8L));
+
+        assertTrue(result.successful(), result.errors().toString());
+        DungeonEdge edge = result.graph().edges().getFirst();
+        DungeonNode from = result.graph().nodes().get(edge.fromNode());
+        DungeonNode to = result.graph().nodes().get(edge.toNode());
+        var fromFacing = from.transform().transformFacing(start.doors().getFirst().facing());
+        assertEquals(Direction3.UP, fromFacing);
+        assertEquals(DoorGeometry.shifted(DoorGeometry.transformedBounds(start.doors().getFirst(), from.transform()), fromFacing.vector()), DoorGeometry.transformedBounds(combat.doors().getFirst(), to.transform()));
+        assertEquals(from.transform().transformedBounds().max().y() + 1, to.transform().transformedBounds().min().y());
+    }
+
+    @Test
+    void templateDoorModeConnectsVerticalGateways() {
+        DoorTemplate floorHatch = doorTemplate("floor_hatch", new IntVector3(3, 1, 5), new IntVector3(1, 0, 2), new IntVector3(1, 1, 1), Direction3.DOWN);
+        DoorTemplate ceilingHatch = doorTemplate("ceiling_hatch", new IntVector3(3, 1, 5), new IntVector3(1, 0, 2), new IntVector3(1, 1, 1), Direction3.UP);
+        RoomTemplate start = largeRoom("start", RoomCategory.START, new DoorSocket("floor", new IntVector3(9, 0, 8), new IntVector3(3, 1, 5), Direction3.DOWN, Set.of(), List.of(new DoorSlotEntry("floor_hatch", 1))));
+        RoomTemplate combat = largeRoom("combat", RoomCategory.COMBAT, new DoorSocket("ceiling", new IntVector3(9, 9, 8), new IntVector3(3, 1, 5), Direction3.UP, Set.of(), List.of(new DoorSlotEntry("ceiling_hatch", 1))));
+        DeterministicDungeonGenerator generator = new DeterministicDungeonGenerator(100, 80, () -> List.of(floorHatch, ceilingHatch));
+
+        var result = generator.generate(List.of(start, combat), new DungeonGenerationRequest(2, 9L));
+
+        assertTrue(result.successful(), result.errors().toString());
+        DungeonEdge edge = result.graph().edges().getFirst();
+        assertEquals("floor_hatch", edge.fromDoorTemplateId());
+        assertEquals("ceiling_hatch", edge.toDoorTemplateId());
+        DungeonNode from = result.graph().nodes().get(edge.fromNode());
+        DungeonNode to = result.graph().nodes().get(edge.toNode());
+        var fromDoorTransform = DoorGeometry.doorTransform(start.doors().getFirst(), floorHatch, from.transform());
+        var toDoorTransform = DoorGeometry.doorTransform(combat.doors().getFirst(), ceilingHatch, to.transform());
+        var fromGateway = DoorGeometry.transformedBounds(floorHatch.gateway(), fromDoorTransform);
+        var toGateway = DoorGeometry.transformedBounds(ceilingHatch.gateway(), toDoorTransform);
+
+        assertEquals(DoorGeometry.shifted(fromGateway, DoorGeometry.gatewayFacing(floorHatch, fromDoorTransform).vector()), toGateway);
+    }
+
+    @Test
+    void sameDirectionVerticalDoorPairDoesNotConnect() {
+        DeterministicDungeonGenerator generator = new DeterministicDungeonGenerator(20, 80);
+        RoomTemplate start = largeRoom("start", RoomCategory.START, new DoorSocket("floor", new IntVector3(9, 0, 9), new IntVector3(3, 1, 3), Direction3.DOWN, Set.of(), List.of()));
+        RoomTemplate combat = largeRoom("combat", RoomCategory.COMBAT, new DoorSocket("floor", new IntVector3(9, 0, 9), new IntVector3(3, 1, 3), Direction3.DOWN, Set.of(), List.of()));
+
+        var result = generator.generate(List.of(start, combat), new DungeonGenerationRequest(2, 10L));
+
+        assertFalse(result.successful());
+    }
+
+    @Test
+    void verticalPlacementStillRejectsRoomBoundsCollisions() {
+        DeterministicDungeonGenerator generator = new DeterministicDungeonGenerator(20, 80);
+        RoomTemplate start = largeRoom("start", RoomCategory.START, new DoorSocket("floor", new IntVector3(9, 5, 9), new IntVector3(3, 1, 3), Direction3.DOWN, Set.of(), List.of()));
+        RoomTemplate combat = largeRoom("combat", RoomCategory.COMBAT, new DoorSocket("ceiling", new IntVector3(9, 9, 9), new IntVector3(3, 1, 3), Direction3.UP, Set.of(), List.of()));
+
+        var result = generator.generate(List.of(start, combat), new DungeonGenerationRequest(2, 11L));
+
+        assertFalse(result.successful());
+    }
+
+    @Test
     void graphValidatorRejectsSinglePointAdjacentButRectangleOffset() {
         RoomTemplate start = largeRoom("start", RoomCategory.START, new DoorSocket("north", new IntVector3(9, 3, 0), Direction3.NORTH, SocketType.STANDARD, 3, 4));
         RoomTemplate combat = largeRoom("combat", RoomCategory.COMBAT, new DoorSocket("north", new IntVector3(9, 3, 0), Direction3.NORTH, SocketType.STANDARD, 3, 4));
@@ -217,6 +299,40 @@ final class DeterministicDungeonGeneratorTest {
         var errors = new DungeonGraphValidator().validate(graph, List.of(start, combat));
 
         assertTrue(errors.stream().anyMatch(error -> error.contains("door rectangles are not aligned") && error.contains("delta=")), errors.toString());
+    }
+
+    @Test
+    void graphValidatorRejectsMismatchedVerticalApertures() {
+        RoomTemplate start = largeRoom("start", RoomCategory.START, new DoorSocket("floor", new IntVector3(9, 0, 9), new IntVector3(3, 1, 3), Direction3.DOWN, Set.of(), List.of()));
+        RoomTemplate combat = largeRoom("combat", RoomCategory.COMBAT, new DoorSocket("ceiling", new IntVector3(9, 9, 9), new IntVector3(5, 1, 3), Direction3.UP, Set.of(), List.of()));
+        var graph = new com.dungeonarchitect.domain.DungeonGraph(
+            List.of(
+                new DungeonNode(0, "start", RoomCategory.START, 0, new RoomTransform(new IntVector3(0, 80, 0), Rotation.NONE, new IntVector3(21, 10, 21))),
+                new DungeonNode(1, "combat", RoomCategory.COMBAT, 1, new RoomTransform(new IntVector3(0, 70, 0), Rotation.NONE, new IntVector3(21, 10, 21)))
+            ),
+            List.of(new DungeonEdge(0, "floor", 1, "ceiling"))
+        );
+
+        var errors = new DungeonGraphValidator().validate(graph, List.of(start, combat));
+
+        assertTrue(errors.stream().anyMatch(error -> error.contains("mismatched door aperture sizes")), errors.toString());
+    }
+
+    @Test
+    void graphValidatorRejectsOverlappingStackedRooms() {
+        RoomTemplate start = largeRoom("start", RoomCategory.START, new DoorSocket("floor", new IntVector3(9, 0, 9), new IntVector3(3, 1, 3), Direction3.DOWN, Set.of(), List.of()));
+        RoomTemplate combat = largeRoom("combat", RoomCategory.COMBAT, new DoorSocket("ceiling", new IntVector3(9, 9, 9), new IntVector3(3, 1, 3), Direction3.UP, Set.of(), List.of()));
+        var graph = new com.dungeonarchitect.domain.DungeonGraph(
+            List.of(
+                new DungeonNode(0, "start", RoomCategory.START, 0, new RoomTransform(new IntVector3(0, 80, 0), Rotation.NONE, new IntVector3(21, 10, 21))),
+                new DungeonNode(1, "combat", RoomCategory.COMBAT, 1, new RoomTransform(new IntVector3(0, 75, 0), Rotation.NONE, new IntVector3(21, 10, 21)))
+            ),
+            List.of(new DungeonEdge(0, "floor", 1, "ceiling"))
+        );
+
+        var errors = new DungeonGraphValidator().validate(graph, List.of(start, combat));
+
+        assertTrue(errors.stream().anyMatch(error -> error.contains("Room bounds overlap")), errors.toString());
     }
 
     private RoomTemplate startRoom() {

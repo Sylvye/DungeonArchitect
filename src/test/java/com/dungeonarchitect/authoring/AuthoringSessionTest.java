@@ -135,6 +135,18 @@ final class AuthoringSessionTest {
     }
 
     @Test
+    void sizeBasedDoorSlotsPreserveSocketType() {
+        AuthoringSession session = new AuthoringSession("room");
+
+        session.addDoorSlot("stairs", new IntVector3(1, 0, 1), new IntVector3(3, 1, 4), Direction3.DOWN, SocketType.STAIRS_DOWN);
+
+        DoorSocket door = session.doors().getFirst();
+        assertEquals(SocketType.STAIRS_DOWN, door.socketType());
+        assertEquals(3, door.width());
+        assertEquals(4, door.height());
+    }
+
+    @Test
     void loadTemplateForEditCopiesMetadataAndWorldBounds() {
         RoomTemplate template = new RoomTemplate(
             "edit_room",

@@ -46,7 +46,10 @@ public final class DoorTemplateValidator {
                     result.add(template.id() + ": gateway is outside door bounds", template.gateway().position());
                 } else {
                     try {
-                        BoundaryFacing.infer(gatewayBounds, templateBounds, "Gateway");
+                        var inferred = BoundaryFacing.infer(gatewayBounds, templateBounds, "Gateway");
+                        if (template.gateway().facing() != inferred) {
+                            result.add(template.id() + ": gateway facing " + template.gateway().facing() + " does not match inferred bounds face " + inferred, template.gateway().position());
+                        }
                     } catch (IllegalArgumentException ex) {
                         result.add(template.id() + ": " + ex.getMessage(), template.gateway().position());
                     }

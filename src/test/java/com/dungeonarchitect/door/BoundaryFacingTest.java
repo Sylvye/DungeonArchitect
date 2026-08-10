@@ -26,10 +26,21 @@ final class BoundaryFacingTest {
     }
 
     @Test
-    void rejectsNonTouchingTiedCornerAndVerticalOnlySelections() {
+    void infersVerticalFaces() {
+        assertEquals(Direction3.UP, BoundaryFacing.infer(bounds(8, 9, 8, 10, 9, 10), PARENT, "Door slot"));
+        assertEquals(Direction3.DOWN, BoundaryFacing.infer(bounds(8, 0, 8, 10, 0, 10), PARENT, "Door slot"));
+    }
+
+    @Test
+    void dominantVerticalFaceCanWinWhenTouchingACorner() {
+        assertEquals(Direction3.DOWN, BoundaryFacing.infer(bounds(0, 0, 0, 2, 0, 8), PARENT, "Door slot"));
+    }
+
+    @Test
+    void rejectsNonTouchingAndTiedSelections() {
         assertThrows(IllegalArgumentException.class, () -> BoundaryFacing.infer(bounds(8, 2, 8, 10, 5, 8), PARENT, "Door slot"));
         assertThrows(IllegalArgumentException.class, () -> BoundaryFacing.infer(bounds(0, 2, 0, 2, 5, 2), PARENT, "Door slot"));
-        assertThrows(IllegalArgumentException.class, () -> BoundaryFacing.infer(bounds(8, 9, 8, 10, 9, 10), PARENT, "Door slot"));
+        assertThrows(IllegalArgumentException.class, () -> BoundaryFacing.infer(bounds(0, 0, 0, 2, 2, 2), PARENT, "Door slot"));
     }
 
     private static SelectionBounds bounds(int minX, int minY, int minZ, int maxX, int maxY, int maxZ) {

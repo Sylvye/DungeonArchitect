@@ -62,6 +62,28 @@ final class DoorTemplateMatcherTest {
         assertTrue(result.reason().contains("gateway"));
     }
 
+    @Test
+    void matchesVerticalDoorTemplates() {
+        DoorSocket slot = new DoorSocket("ceiling", new IntVector3(8, 9, 7), new IntVector3(3, 1, 5), Direction3.UP, Set.of("hatch"), List.of());
+        DoorTemplate template = template(new IntVector3(3, 1, 5), new IntVector3(1, 1, 1), Direction3.UP, Set.of("hatch"));
+
+        DoorTemplateMatcher.DoorTemplateMatchResult result = DoorTemplateMatcher.match(slot, template);
+
+        assertTrue(result.matched());
+        assertEquals(Rotation.NONE, result.rotation());
+    }
+
+    @Test
+    void yawRotatesVerticalDoorTemplatesToRectangularSlots() {
+        DoorSocket slot = new DoorSocket("ceiling", new IntVector3(8, 9, 7), new IntVector3(5, 1, 3), Direction3.UP, Set.of(), List.of());
+        DoorTemplate template = template(new IntVector3(3, 1, 5), new IntVector3(1, 1, 1), Direction3.UP, Set.of());
+
+        DoorTemplateMatcher.DoorTemplateMatchResult result = DoorTemplateMatcher.match(slot, template);
+
+        assertTrue(result.matched());
+        assertEquals(Rotation.CLOCKWISE_90, result.rotation());
+    }
+
     private static DoorSocket slot(IntVector3 size, Set<String> tags) {
         return new DoorSocket("door_1", new IntVector3(8, 2, 0), size, Direction3.NORTH, tags, List.of());
     }

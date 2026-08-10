@@ -259,8 +259,12 @@ public final class AuthoringSession {
     }
 
     public void addDoorSlot(String id, IntVector3 localPosition, IntVector3 size, Direction3 facing) {
+        addDoorSlot(id, localPosition, size, facing, SocketType.STANDARD);
+    }
+
+    public void addDoorSlot(String id, IntVector3 localPosition, IntVector3 size, Direction3 facing, SocketType socketType) {
         doors.removeIf(door -> door.id().equalsIgnoreCase(id));
-        doors.add(new DoorSocket(id, localPosition, size, facing, java.util.Set.of(), java.util.List.of()));
+        doors.add(new DoorSocket(id, localPosition, facing, socketType, displayWidth(facing, size), displayHeight(facing, size), size, java.util.Set.of(), java.util.List.of()));
     }
 
     public void addDoorSlot(DoorSocket slot) {
@@ -295,8 +299,15 @@ public final class AuthoringSession {
 
     public boolean updateDoorBounds(String id, SelectionBounds localBounds, Direction3 facing) {
         IntVector3 size = localBounds.size();
-        int width = Math.max(size.x(), size.z());
-        int height = size.y();
+        int width = switch (facing) {
+            case NORTH, SOUTH -> size.x();
+            case EAST, WEST -> size.z();
+            case UP, DOWN -> size.x();
+        };
+        int height = switch (facing) {
+            case NORTH, SOUTH, EAST, WEST -> size.y();
+            case UP, DOWN -> size.z();
+        };
         for (int i = 0; i < doors.size(); i++) {
             DoorSocket door = doors.get(i);
             if (door.id().equalsIgnoreCase(id)) {
@@ -411,6 +422,21 @@ public final class AuthoringSession {
         if (selectedComponent.type().equalsIgnoreCase(type) && selectedComponent.id().equalsIgnoreCase(id)) {
             selectedComponent = null;
         }
+    }
+
+    private static int displayWidth(Direction3 facing, IntVector3 size) {
+        return switch (facing) {
+            case NORTH, SOUTH -> size.x();
+            case EAST, WEST -> size.z();
+            case UP, DOWN -> size.x();
+        };
+    }
+
+    private static int displayHeight(Direction3 facing, IntVector3 size) {
+        return switch (facing) {
+            case NORTH, SOUTH, EAST, WEST -> size.y();
+            case UP, DOWN -> size.z();
+        };
     }
 
     public record Bounds(IntVector3 min, IntVector3 max, IntVector3 size) {

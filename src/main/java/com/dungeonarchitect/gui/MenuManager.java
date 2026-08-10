@@ -612,6 +612,9 @@ public final class MenuManager implements Listener {
         });
         button(menu, 28, Material.REDSTONE_TORCH, "Markers: " + markers.size(), markers.stream().map(marker -> marker.name() + " " + marker.type()).toList(), p -> openDoorComponents(p, doorId, "marker"));
         button(menu, 30, Material.CHEST, "Feature Slots: " + features.size(), features.stream().map(slot -> slot.id() + " size=" + slot.size()).toList(), p -> openDoorComponents(p, doorId, "feature"));
+        button(menu, 36, Material.NAME_TAG, "Rename Door", List.of("Move this door template to a new id."), p -> promptRenameDoor(p, template.id()));
+        button(menu, 38, Material.MAP, "Duplicate Door", List.of("Copy this door template to a new id."), p -> promptDuplicateDoor(p, template.id()));
+        button(menu, 40, Material.RED_CONCRETE, "Delete Door", List.of("Permanently delete this door template."), p -> openDeleteDoorConfirm(p, template.id()));
         button(menu, 49, Material.ARROW, "Back", List.of(), this::openDoors);
         open(player, menu);
     }
@@ -890,6 +893,35 @@ public final class MenuManager implements Listener {
         });
     }
 
+    private void promptRenameDoor(Player player, String doorId) {
+        prompts.prompt(player, "Enter new door id", value -> {
+            try {
+                var renamed = doorRegistry.renameDoor(doorId, value.trim());
+                templateRegistry.replaceDoorReferences(doorId, renamed.id());
+                authoringManager.renameActiveDoorId(player, doorId, renamed.id());
+                player.sendMessage(Component.text("Renamed door " + doorId + " to " + renamed.id() + "."));
+                openDoor(player, renamed.id());
+            } catch (Exception ex) {
+                player.sendMessage(Component.text("Rename failed: " + ex.getMessage()));
+                openDoor(player, doorId);
+            }
+        });
+    }
+
+    private void promptDuplicateDoor(Player player, String doorId) {
+        prompts.prompt(player, "Enter duplicate door id", value -> {
+            try {
+                var duplicated = doorRegistry.duplicateDoor(doorId, value.trim());
+                templateRegistry.reload();
+                player.sendMessage(Component.text("Duplicated door " + doorId + " to " + duplicated.id() + "."));
+                openDoor(player, duplicated.id());
+            } catch (Exception ex) {
+                player.sendMessage(Component.text("Duplicate failed: " + ex.getMessage()));
+                openDoor(player, doorId);
+            }
+        });
+    }
+
     private void openDeleteRoomConfirm(Player player, String roomId) {
         Menu menu = menu("da:delete-room:" + roomId, 27, "Delete Room?");
         button(menu, 11, Material.RED_CONCRETE, "Confirm Delete", List.of("Permanently deletes " + roomId), p -> {
@@ -984,6 +1016,23 @@ public final class MenuManager implements Listener {
             }
         });
         button(menu, 15, Material.GRAY_CONCRETE, "Cancel", List.of(), p -> openFeature(p, featureId));
+        open(player, menu);
+    }
+
+    private void openDeleteDoorConfirm(Player player, String doorId) {
+        Menu menu = menu("da:delete-door:" + doorId, 27, "Delete Door?");
+        button(menu, 11, Material.RED_CONCRETE, "Confirm Delete", List.of("Permanently deletes " + doorId), p -> {
+            try {
+                doorRegistry.deleteDoor(doorId);
+                templateRegistry.reload();
+                p.sendMessage(Component.text("Deleted door " + doorId));
+                openDoors(p);
+            } catch (IOException ex) {
+                p.sendMessage(Component.text("Delete failed: " + ex.getMessage()));
+                openDoor(p, doorId);
+            }
+        });
+        button(menu, 15, Material.GRAY_CONCRETE, "Cancel", List.of(), p -> openDoor(p, doorId));
         open(player, menu);
     }
 

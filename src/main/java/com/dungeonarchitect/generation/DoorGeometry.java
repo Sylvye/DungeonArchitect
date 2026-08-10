@@ -8,6 +8,7 @@ import com.dungeonarchitect.domain.DoorTemplate;
 import com.dungeonarchitect.domain.IntVector3;
 import com.dungeonarchitect.domain.RoomTransform;
 import com.dungeonarchitect.domain.Rotation;
+import com.dungeonarchitect.door.DoorTemplateMatcher;
 
 import java.util.Comparator;
 import java.util.List;
@@ -33,8 +34,14 @@ public final class DoorGeometry {
     }
 
     public static RoomTransform doorTransform(DoorSocket slot, DoorTemplate door, RoomTransform roomTransform) {
-        Rotation rotation = rotationTo(door.gateway().facing(), roomTransform.transformFacing(slot.facing()));
+        Direction3 transformedSlotFacing = roomTransform.transformFacing(slot.facing());
         BoundingBox3i slotBounds = transformedBounds(slot, roomTransform);
+        DoorSocket transformedSlot = new DoorSocket(slot.id(), slotBounds.min(), slotBounds.size(), transformedSlotFacing, slot.tags(), slot.entries());
+        DoorTemplateMatcher.DoorTemplateMatchResult match = DoorTemplateMatcher.match(transformedSlot, door);
+        if (!match.matched()) {
+            throw new IllegalArgumentException("Door " + door.id() + " does not match slot " + slot.id() + ": " + match.reason());
+        }
+        Rotation rotation = match.rotation();
         return new RoomTransform(slotBounds.min(), rotation, door.size());
     }
 
@@ -93,14 +100,5 @@ public final class DoorGeometry {
             + ","
             + (bounds.min().z() + bounds.max().z()) / 2.0
             + ")";
-    }
-
-    private static Rotation rotationTo(Direction3 from, Direction3 to) {
-        for (Rotation rotation : Rotation.values()) {
-            if (from.rotateY(rotation) == to) {
-                return rotation;
-            }
-        }
-        throw new IllegalArgumentException("Cannot rotate " + from + " to " + to);
     }
 }

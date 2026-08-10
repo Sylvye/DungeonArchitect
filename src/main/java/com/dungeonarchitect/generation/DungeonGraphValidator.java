@@ -6,6 +6,7 @@ import com.dungeonarchitect.domain.DungeonEdge;
 import com.dungeonarchitect.domain.DungeonGraph;
 import com.dungeonarchitect.domain.DungeonNode;
 import com.dungeonarchitect.domain.RoomTemplate;
+import com.dungeonarchitect.door.DoorTemplateMatcher;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -59,12 +60,12 @@ public final class DungeonGraphValidator {
             if (toFacing != fromFacing.opposite()) {
                 errors.add("Edge " + edge + " has non-opposite facings: " + fromFacing + " and " + toFacing);
             }
-            if (!DoorGeometry.sameAperture(fromDoor, toDoor)) {
-                errors.add("Edge " + edge + " has mismatched door aperture sizes: " + fromDoor.width() + "x" + fromDoor.height() + " and " + toDoor.width() + "x" + toDoor.height());
-                continue;
-            }
             var fromBounds = DoorGeometry.transformedBounds(fromDoor, from.transform());
             var toBounds = DoorGeometry.transformedBounds(toDoor, to.transform());
+            if (!fromBounds.size().equals(toBounds.size())) {
+                errors.add("Edge " + edge + " has mismatched door aperture sizes: " + fromBounds.size() + " and " + toBounds.size());
+                continue;
+            }
             var expectedToBounds = DoorGeometry.shifted(fromBounds, fromFacing.vector());
             if (!toBounds.equals(expectedToBounds)) {
                 errors.add("Edge " + edge + " door rectangles are not aligned: expected " + expectedToBounds + " actual " + toBounds + " delta=" + DoorGeometry.delta(expectedToBounds, toBounds));
@@ -77,6 +78,16 @@ public final class DungeonGraphValidator {
         DoorTemplate toTemplate = doorTemplates.get(edge.toDoorTemplateId());
         if (fromTemplate == null || toTemplate == null) {
             errors.add("Edge references missing door template: " + edge);
+            return;
+        }
+        var fromMatch = DoorTemplateMatcher.match(fromDoor, fromTemplate);
+        if (!fromMatch.matched()) {
+            errors.add("Edge " + edge + " from door template " + fromTemplate.id() + " does not match slot " + fromDoor.id() + ": " + fromMatch.reason());
+            return;
+        }
+        var toMatch = DoorTemplateMatcher.match(toDoor, toTemplate);
+        if (!toMatch.matched()) {
+            errors.add("Edge " + edge + " to door template " + toTemplate.id() + " does not match slot " + toDoor.id() + ": " + toMatch.reason());
             return;
         }
         var fromDoorTransform = DoorGeometry.doorTransform(fromDoor, fromTemplate, from.transform());

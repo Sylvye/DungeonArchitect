@@ -35,7 +35,10 @@ final class RoomTemplateIOTest {
             Set.of("crypt", "start"),
             new IntVector3(9, 6, 9),
             new IntVector3(4, 1, 4),
-            List.of(new DoorSocket("door_1", new IntVector3(4, 1, 0), Direction3.NORTH, SocketType.STANDARD, 3, 3)),
+            List.of(
+                new DoorSocket("door_1", new IntVector3(4, 1, 0), Direction3.NORTH, SocketType.STANDARD, 3, 3),
+                new DoorSocket("ceiling", new IntVector3(2, 5, 2), Direction3.UP, SocketType.STANDARD, 3, 4)
+            ),
             List.of(new RoomMarker("reward", "generic", new IntVector3(4, 1, 4))),
             List.of(new RoomFeatureSlot(
                 "slot_1",

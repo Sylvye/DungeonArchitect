@@ -1,6 +1,8 @@
 package com.dungeonarchitect.template;
 
 import com.dungeonarchitect.domain.Direction3;
+import com.dungeonarchitect.domain.DoorSlotEntry;
+import com.dungeonarchitect.domain.DoorSocket;
 import com.dungeonarchitect.domain.FeatureSlotEntry;
 import com.dungeonarchitect.domain.IntVector3;
 import com.dungeonarchitect.domain.RoomCategory;
@@ -74,6 +76,31 @@ final class RoomTemplateRegistryTest {
         registry.replaceFeatureReferences("old_feature", "new_feature");
 
         assertEquals("new_feature", RoomTemplateIO.load(room).featureSlots().getFirst().entries().getFirst().featureId());
+    }
+
+    @Test
+    void replacesDoorReferencesAcrossRooms() throws Exception {
+        Path rooms = tempDir.resolve("rooms");
+        Path room = rooms.resolve("room");
+        Files.createDirectories(room);
+        Files.writeString(room.resolve("room.nbt"), "fake");
+        RoomTemplateIO.save(new RoomTemplate(
+            "room",
+            RoomCategory.GENERIC,
+            1,
+            Set.of(),
+            new IntVector3(5, 5, 5),
+            null,
+            List.of(new DoorSocket("slot", new IntVector3(1, 1, 0), new IntVector3(1, 2, 1), Direction3.NORTH, Set.of(), List.of(new DoorSlotEntry("old_door", 3)))),
+            List.of(),
+            List.of(),
+            room.resolve("room.nbt")
+        ), room);
+
+        RoomTemplateRegistry registry = new RoomTemplateRegistry(rooms);
+        registry.replaceDoorReferences("old_door", "new_door");
+
+        assertEquals("new_door", RoomTemplateIO.load(room).doors().getFirst().entries().getFirst().doorId());
     }
 
     private void saveRoom(Path room, String id) throws Exception {

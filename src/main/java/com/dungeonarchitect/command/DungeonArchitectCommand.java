@@ -24,7 +24,6 @@ import com.dungeonarchitect.template.RoomTemplateRegistry;
 import com.dungeonarchitect.template.RoomTemplateValidator;
 import com.dungeonarchitect.template.RoomStructureService;
 import com.dungeonarchitect.template.TemplateValidationResult;
-import com.dungeonarchitect.util.BukkitVectors;
 import net.kyori.adventure.text.Component;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
@@ -110,11 +109,14 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
     private void help(CommandSender sender) {
         sender.sendMessage(Component.text("/da | /da help"));
         sender.sendMessage(Component.text("/da wand | /da selector"));
-        sender.sendMessage(Component.text("/da gui | rooms | rooms edit [room] | features | config | dungeons"));
-        sender.sendMessage(Component.text("/da room create <id> | edit <id> | cancel | bounds | door [slotName]"));
-        sender.sendMessage(Component.text("/da room marker add <name> [type] | feature [slotName]"));
-        sender.sendMessage(Component.text("/da door create <id> | bounds | gateway | marker add <name> [type] | feature [slotName] | save [id] | edit <id> | inspect <id> | validate <id|all> | delete <id>"));
-        sender.sendMessage(Component.text("/da feature create <id> | bounds | save [id] | edit <id> | inspect <id> | validate <id|all> | delete <id>"));
+        sender.sendMessage(Component.text("/da gui | rooms | rooms edit [room] | features | doors | config | dungeons"));
+        sender.sendMessage(Component.text("/da room create <id> | edit <id> | cancel | bounds | door [slotName] [socketType] [facing]"));
+        sender.sendMessage(Component.text("/da room marker add <name> [type] | feature [slotName] | save [id] | inspect <id> | validate <id|all>"));
+        sender.sendMessage(Component.text("/da room rename <oldId> <newId> | duplicate <oldId> <newId> | delete <id>"));
+        sender.sendMessage(Component.text("/da door create <id> | bounds | gateway | marker add <name> [type] | feature [slotName] | save [id] | edit <id> | inspect <id> | validate <id|all>"));
+        sender.sendMessage(Component.text("/da door rename <oldId> <newId> | duplicate <oldId> <newId> | delete <id>"));
+        sender.sendMessage(Component.text("/da feature create <id> | bounds | save [id] | edit <id> | inspect <id> | validate <id|all>"));
+        sender.sendMessage(Component.text("/da feature rename <oldId> <newId> | duplicate <oldId> <newId> | delete <id>"));
         sender.sendMessage(Component.text("/da room component <select|remove|bounds|rename> [door|marker|feature] [id] [newId]"));
         sender.sendMessage(Component.text("/da room save [id] | inspect <id> | validate <id|all> | delete <id>"));
         sender.sendMessage(Component.text("/da reload | generate <roomCount> [seed] | list | debug instance [id|#n] | debug room"));
@@ -146,7 +148,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
     private void room(CommandSender sender, String[] args) {
         Player player = requirePlayer(sender);
         if (args.length < 2) {
-            throw new IllegalArgumentException("Usage: /da room <create|bounds|pos1|pos2|door|marker|feature|save|validate>");
+            throw new IllegalArgumentException("Usage: /da room <create|edit|cancel|bounds|pos1|pos2|door|marker|feature|component|save|inspect|validate|rename|duplicate|delete>");
         }
         switch (args[1].toLowerCase(Locale.ROOT)) {
             case "create" -> {
@@ -183,6 +185,8 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
             case "save" -> save(player, args);
             case "inspect" -> inspect(sender, args);
             case "validate" -> validate(sender, args);
+            case "rename" -> renameRoom(sender, args);
+            case "duplicate" -> duplicateRoom(sender, args);
             case "delete" -> deleteRoom(sender, args);
             default -> throw new IllegalArgumentException("Unknown room command " + args[1]);
         }
@@ -224,8 +228,8 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
     }
 
     private void door(Player player, String[] args) {
-        String id = args.length >= 3 && !args[2].equalsIgnoreCase("add") ? args[2] : args.length >= 4 ? args[3] : null;
-        var created = authoringManager.createDoorFromSelection(player, id, SocketType.STANDARD, BukkitVectors.direction(player.getFacing()));
+        DoorSlotCommandOptions options = DoorSlotCommandOptions.parse(args, 2);
+        var created = authoringManager.createDoorFromSelection(player, options.id(), options.socketType(), options.facing());
         player.sendMessage(Component.text("Added door slot " + created.id() + " bounds=" + created.localBounds().describe()));
     }
 
@@ -250,7 +254,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
     private void featureCommand(CommandSender sender, String[] args) {
         Player player = requirePlayer(sender);
         if (args.length < 2) {
-            throw new IllegalArgumentException("Usage: /da feature <create|bounds|save|edit|inspect|validate|delete>");
+            throw new IllegalArgumentException("Usage: /da feature <create|bounds|save|edit|inspect|validate|rename|duplicate|delete>");
         }
         switch (args[1].toLowerCase(Locale.ROOT)) {
             case "create" -> {
@@ -296,6 +300,8 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
             }
             case "inspect" -> inspectFeature(sender, args);
             case "validate" -> validateFeature(sender, args);
+            case "rename" -> renameFeature(sender, args);
+            case "duplicate" -> duplicateFeature(sender, args);
             case "delete" -> deleteFeature(sender, args);
             default -> throw new IllegalArgumentException("Unknown feature command " + args[1]);
         }
@@ -304,7 +310,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
     private void doorCommand(CommandSender sender, String[] args) {
         Player player = requirePlayer(sender);
         if (args.length < 2) {
-            throw new IllegalArgumentException("Usage: /da door <create|bounds|gateway|marker|feature|save|edit|inspect|validate|delete>");
+            throw new IllegalArgumentException("Usage: /da door <create|bounds|gateway|marker|feature|save|edit|inspect|validate|rename|duplicate|delete>");
         }
         switch (args[1].toLowerCase(Locale.ROOT)) {
             case "create" -> {
@@ -370,6 +376,8 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
             }
             case "inspect" -> inspectDoor(sender, args);
             case "validate" -> validateDoor(sender, args);
+            case "rename" -> renameDoor(sender, args);
+            case "duplicate" -> duplicateDoor(sender, args);
             case "delete" -> deleteDoor(sender, args);
             default -> throw new IllegalArgumentException("Unknown door command " + args[1]);
         }
@@ -493,6 +501,29 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
         }
     }
 
+    private void renameRoom(CommandSender sender, String[] args) {
+        requireArgs(args, 4, "/da room rename <oldId> <newId>");
+        try {
+            RoomTemplate renamed = templateRegistry.renameRoom(args[2], args[3]);
+            if (sender instanceof Player player) {
+                authoringManager.renameActiveRoomId(player, args[2], renamed.id());
+            }
+            sender.sendMessage(Component.text("Renamed room " + args[2] + " to " + renamed.id() + "."));
+        } catch (Exception ex) {
+            throw new IllegalArgumentException("Failed to rename room: " + ex.getMessage(), ex);
+        }
+    }
+
+    private void duplicateRoom(CommandSender sender, String[] args) {
+        requireArgs(args, 4, "/da room duplicate <oldId> <newId>");
+        try {
+            RoomTemplate duplicated = templateRegistry.duplicateRoom(args[2], args[3]);
+            sender.sendMessage(Component.text("Duplicated room " + args[2] + " to " + duplicated.id() + "."));
+        } catch (Exception ex) {
+            throw new IllegalArgumentException("Failed to duplicate room: " + ex.getMessage(), ex);
+        }
+    }
+
     private void inspectFeature(CommandSender sender, String[] args) {
         requireArgs(args, 3, "/da feature inspect <id>");
         FeatureTemplate template = featureRegistry.get(args[2])
@@ -525,6 +556,31 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
             sender.sendMessage(Component.text("Deleted feature " + args[2] + "."));
         } catch (Exception ex) {
             throw new IllegalArgumentException("Failed to delete feature: " + ex.getMessage(), ex);
+        }
+    }
+
+    private void renameFeature(CommandSender sender, String[] args) {
+        requireArgs(args, 4, "/da feature rename <oldId> <newId>");
+        try {
+            FeatureTemplate renamed = featureRegistry.renameFeature(args[2], args[3]);
+            templateRegistry.replaceFeatureReferences(args[2], renamed.id());
+            if (sender instanceof Player player) {
+                authoringManager.renameActiveFeatureId(player, args[2], renamed.id());
+            }
+            sender.sendMessage(Component.text("Renamed feature " + args[2] + " to " + renamed.id() + "."));
+        } catch (Exception ex) {
+            throw new IllegalArgumentException("Failed to rename feature: " + ex.getMessage(), ex);
+        }
+    }
+
+    private void duplicateFeature(CommandSender sender, String[] args) {
+        requireArgs(args, 4, "/da feature duplicate <oldId> <newId>");
+        try {
+            FeatureTemplate duplicated = featureRegistry.duplicateFeature(args[2], args[3]);
+            templateRegistry.reload();
+            sender.sendMessage(Component.text("Duplicated feature " + args[2] + " to " + duplicated.id() + "."));
+        } catch (Exception ex) {
+            throw new IllegalArgumentException("Failed to duplicate feature: " + ex.getMessage(), ex);
         }
     }
 
@@ -562,6 +618,31 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
             sender.sendMessage(Component.text("Deleted door " + args[2] + "."));
         } catch (Exception ex) {
             throw new IllegalArgumentException("Failed to delete door: " + ex.getMessage(), ex);
+        }
+    }
+
+    private void renameDoor(CommandSender sender, String[] args) {
+        requireArgs(args, 4, "/da door rename <oldId> <newId>");
+        try {
+            DoorTemplate renamed = doorRegistry.renameDoor(args[2], args[3]);
+            templateRegistry.replaceDoorReferences(args[2], renamed.id());
+            if (sender instanceof Player player) {
+                authoringManager.renameActiveDoorId(player, args[2], renamed.id());
+            }
+            sender.sendMessage(Component.text("Renamed door " + args[2] + " to " + renamed.id() + "."));
+        } catch (Exception ex) {
+            throw new IllegalArgumentException("Failed to rename door: " + ex.getMessage(), ex);
+        }
+    }
+
+    private void duplicateDoor(CommandSender sender, String[] args) {
+        requireArgs(args, 4, "/da door duplicate <oldId> <newId>");
+        try {
+            DoorTemplate duplicated = doorRegistry.duplicateDoor(args[2], args[3]);
+            templateRegistry.reload();
+            sender.sendMessage(Component.text("Duplicated door " + args[2] + " to " + duplicated.id() + "."));
+        } catch (Exception ex) {
+            throw new IllegalArgumentException("Failed to duplicate door: " + ex.getMessage(), ex);
         }
     }
 
@@ -752,7 +833,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
             return prefix(args[0], List.of("help", "version", "reload", "wand", "selector", "gui", "rooms", "features", "doors", "config", "dungeons", "exit", "room", "feature", "door", "generate", "list", "debug", "teleport", "destroy"));
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("room")) {
-            return prefix(args[1], List.of("create", "edit", "cancel", "bounds", "pos1", "pos2", "door", "marker", "feature", "component", "save", "inspect", "validate", "delete"));
+            return prefix(args[1], List.of("create", "edit", "cancel", "bounds", "pos1", "pos2", "door", "marker", "feature", "component", "save", "inspect", "validate", "rename", "duplicate", "delete"));
         }
         if (args[0].equalsIgnoreCase("rooms")) {
             if (args.length == 2) {
@@ -784,8 +865,20 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
         if (args.length == 3 && args[0].equalsIgnoreCase("room") && args[1].equalsIgnoreCase("delete")) {
             return prefix(args[2], templateRegistry.all().stream().map(RoomTemplate::id).toList());
         }
+        if (args.length == 3 && args[0].equalsIgnoreCase("room") && List.of("rename", "duplicate").contains(args[1].toLowerCase(Locale.ROOT))) {
+            return prefix(args[2], templateRegistry.all().stream().map(RoomTemplate::id).toList());
+        }
+        if (args.length == 4 && args[0].equalsIgnoreCase("room") && List.of("rename", "duplicate").contains(args[1].toLowerCase(Locale.ROOT))) {
+            return prefix(args[3], List.of("new_id"));
+        }
         if (args[0].equalsIgnoreCase("room") && args.length == 3 && args[1].equalsIgnoreCase("door")) {
             return prefix(args[2], List.of("door_1"));
+        }
+        if (args[0].equalsIgnoreCase("room") && args.length == 4 && args[1].equalsIgnoreCase("door")) {
+            return prefix(args[3], enumOptions(SocketType.class));
+        }
+        if (args[0].equalsIgnoreCase("room") && args.length == 5 && args[1].equalsIgnoreCase("door")) {
+            return prefix(args[4], enumOptions(Direction3.class));
         }
         if (args[0].equalsIgnoreCase("room") && args.length == 3 && args[1].equalsIgnoreCase("marker")) {
             return prefix(args[2], List.of("add"));
@@ -794,13 +887,16 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
             return prefix(args[2], List.of("feature_1"));
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("feature")) {
-            return prefix(args[1], List.of("create", "bounds", "save", "edit", "inspect", "validate", "delete"));
+            return prefix(args[1], List.of("create", "bounds", "save", "edit", "inspect", "validate", "rename", "duplicate", "delete"));
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("door")) {
-            return prefix(args[1], List.of("create", "bounds", "gateway", "marker", "feature", "save", "edit", "inspect", "validate", "delete"));
+            return prefix(args[1], List.of("create", "bounds", "gateway", "marker", "feature", "save", "edit", "inspect", "validate", "rename", "duplicate", "delete"));
         }
-        if (args.length == 3 && args[0].equalsIgnoreCase("door") && List.of("edit", "inspect", "delete").contains(args[1].toLowerCase(Locale.ROOT))) {
+        if (args.length == 3 && args[0].equalsIgnoreCase("door") && List.of("edit", "inspect", "delete", "rename", "duplicate").contains(args[1].toLowerCase(Locale.ROOT))) {
             return prefix(args[2], doorRegistry.all().stream().map(DoorTemplate::id).toList());
+        }
+        if (args.length == 4 && args[0].equalsIgnoreCase("door") && List.of("rename", "duplicate").contains(args[1].toLowerCase(Locale.ROOT))) {
+            return prefix(args[3], List.of("new_id"));
         }
         if (args.length == 3 && args[0].equalsIgnoreCase("door") && args[1].equalsIgnoreCase("validate")) {
             List<String> ids = new ArrayList<>();
@@ -811,8 +907,11 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
         if (args.length == 3 && args[0].equalsIgnoreCase("door") && args[1].equalsIgnoreCase("marker")) {
             return prefix(args[2], List.of("add"));
         }
-        if (args.length == 3 && args[0].equalsIgnoreCase("feature") && List.of("edit", "inspect", "delete").contains(args[1].toLowerCase(Locale.ROOT))) {
+        if (args.length == 3 && args[0].equalsIgnoreCase("feature") && List.of("edit", "inspect", "delete", "rename", "duplicate").contains(args[1].toLowerCase(Locale.ROOT))) {
             return prefix(args[2], featureRegistry.all().stream().map(FeatureTemplate::id).toList());
+        }
+        if (args.length == 4 && args[0].equalsIgnoreCase("feature") && List.of("rename", "duplicate").contains(args[1].toLowerCase(Locale.ROOT))) {
+            return prefix(args[3], List.of("new_id"));
         }
         if (args.length == 3 && args[0].equalsIgnoreCase("feature") && args[1].equalsIgnoreCase("validate")) {
             List<String> ids = new ArrayList<>();

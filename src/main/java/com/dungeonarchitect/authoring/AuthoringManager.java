@@ -304,6 +304,13 @@ public final class AuthoringManager {
         }
     }
 
+    public void renameActiveDoorId(Player player, String oldId, String newId) {
+        AuthoringSession session = sessions.get(player.getUniqueId());
+        if (session != null && session.doorSession() && session.roomId().equalsIgnoreCase(oldId)) {
+            session.roomId(newId);
+        }
+    }
+
     public boolean isEditingRoom(Player player, String roomId) {
         AuthoringSession session = sessions.get(player.getUniqueId());
         return session != null && session.editingExistingRoom() && session.roomId().equalsIgnoreCase(roomId);
@@ -423,14 +430,18 @@ public final class AuthoringManager {
         SelectionBounds local = current.toLocal(roomBounds);
         String id = requestedId == null || requestedId.isBlank() ? "door_" + session.nextDoorNumber() : requestedId;
         Direction3 inferredFacing = BoundaryFacing.infer(local, SelectionBounds.between(IntVector3.ZERO, roomBounds.size().subtract(new IntVector3(1, 1, 1))), "Door slot");
+        Direction3 slotFacing = facing == null ? inferredFacing : facing;
         IntVector3 size = local.size();
-        int width = switch (inferredFacing) {
+        int width = switch (slotFacing) {
             case NORTH, SOUTH -> size.x();
             case EAST, WEST -> size.z();
-            default -> throw new IllegalArgumentException("Door slot facing must be horizontal");
+            case UP, DOWN -> size.x();
         };
-        int height = size.y();
-        session.addDoorSlot(id, local.min(), size, inferredFacing);
+        int height = switch (slotFacing) {
+            case NORTH, SOUTH, EAST, WEST -> size.y();
+            case UP, DOWN -> size.z();
+        };
+        session.addDoorSlot(id, local.min(), size, slotFacing, socketType);
         selectComponent(player, "door", id);
         return new DoorCreation(id, local, width, height);
     }

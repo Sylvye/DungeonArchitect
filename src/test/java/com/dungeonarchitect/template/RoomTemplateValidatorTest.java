@@ -117,4 +117,27 @@ final class RoomTemplateValidatorTest {
         assertTrue(result.errors().stream().anyMatch(error -> error.contains("unknown feature missing")));
         assertTrue(result.errors().stream().anyMatch(error -> error.contains("does not match feature large")));
     }
+
+    @Test
+    void rejectsDoorFacingThatDoesNotMatchDominantBoundsFace() throws Exception {
+        Path nbt = tempDir.resolve("room.nbt");
+        Files.writeString(nbt, "fake");
+        RoomTemplate template = new RoomTemplate(
+            "bad_facing",
+            RoomCategory.COMBAT,
+            1,
+            Set.of(),
+            new IntVector3(5, 5, 5),
+            null,
+            List.of(new DoorSocket("ceiling", new IntVector3(1, 4, 1), new IntVector3(3, 1, 3), Direction3.NORTH, Set.of(), List.of())),
+            List.of(),
+            List.of(),
+            nbt
+        );
+
+        var result = new RoomTemplateValidator().validate(template);
+
+        assertFalse(result.valid());
+        assertTrue(result.errors().stream().anyMatch(error -> error.contains("does not match inferred bounds face UP")), result.errors().toString());
+    }
 }
