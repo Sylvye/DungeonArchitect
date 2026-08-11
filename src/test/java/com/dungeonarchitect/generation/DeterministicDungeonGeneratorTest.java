@@ -1,6 +1,7 @@
 package com.dungeonarchitect.generation;
 
 import com.dungeonarchitect.domain.Direction3;
+import com.dungeonarchitect.domain.DoorConnectionRules;
 import com.dungeonarchitect.domain.DoorGateway;
 import com.dungeonarchitect.domain.DoorSocket;
 import com.dungeonarchitect.domain.DoorSlotEntry;
@@ -96,6 +97,26 @@ final class DeterministicDungeonGeneratorTest {
 
         assertFalse(errors.isEmpty());
         assertTrue(errors.stream().anyMatch(error -> error.contains("door rectangles are not aligned")));
+    }
+
+    @Test
+    void graphValidatorRejectsConnectionRuleViolation() {
+        DoorSocket startDoor = taggedDoor("north", new IntVector3(2, 1, 0), Direction3.NORTH, "locked_blue")
+            .withConnectionRules(new DoorConnectionRules(Set.of("treasure"), Set.of(), Set.of("boss"), Set.of(), false));
+        DoorSocket combatDoor = taggedDoor("south", new IntVector3(2, 1, 4), Direction3.SOUTH, "treasure");
+        RoomTemplate start = taggedCompactRoom("start", RoomCategory.START, 1, Set.of("entry"), List.of(startDoor));
+        RoomTemplate combat = taggedCompactRoom("combat", RoomCategory.COMBAT, 1, Set.of("treasure"), List.of(combatDoor));
+        var graph = new com.dungeonarchitect.domain.DungeonGraph(
+            List.of(
+                new DungeonNode(0, "start", RoomCategory.START, 0, new RoomTransform(new IntVector3(0, 80, 0), Rotation.NONE, new IntVector3(5, 4, 5))),
+                new DungeonNode(1, "combat", RoomCategory.COMBAT, 1, new RoomTransform(new IntVector3(0, 80, -5), Rotation.NONE, new IntVector3(5, 4, 5)))
+            ),
+            List.of(new DungeonEdge(0, "north", 1, "south"))
+        );
+
+        var errors = new DungeonGraphValidator().validate(graph, List.of(start, combat));
+
+        assertTrue(errors.stream().anyMatch(error -> error.contains("violates connection rules")), errors.toString());
     }
 
     @Test
@@ -391,6 +412,64 @@ final class DeterministicDungeonGeneratorTest {
     }
 
     @Test
+    void prioritizesRequiredDoorConnections() {
+        DeterministicDungeonGenerator generator = new DeterministicDungeonGenerator(200, 80);
+        DoorSocket required = taggedDoor("required", new IntVector3(2, 1, 0), Direction3.NORTH, "required")
+            .withConnectionRules(new DoorConnectionRules(Set.of(), Set.of(), true));
+        RoomTemplate start = compactRoom("start", RoomCategory.START, 1, List.of(
+            required,
+            taggedDoor("optional", new IntVector3(2, 1, 4), Direction3.SOUTH, "optional")
+        ));
+        RoomTemplate deadEnd = compactRoom("dead_end", RoomCategory.COMBAT, 100, List.of(
+            taggedDoor("north", new IntVector3(2, 1, 0), Direction3.NORTH, "optional")
+        ));
+        RoomTemplate requiredEnd = compactRoom("required_end", RoomCategory.COMBAT, 1, List.of(
+            taggedDoor("south", new IntVector3(2, 1, 4), Direction3.SOUTH, "required")
+        ));
+
+        var result = generator.generate(List.of(start, deadEnd, requiredEnd), new DungeonGenerationRequest(2, 1L));
+
+        assertTrue(result.successful(), result.errors().toString());
+        assertEquals("required_end", result.graph().nodes().get(1).templateId());
+    }
+
+    @Test
+    void rejectsDungeonWithUnconnectedRequiredDoorAtTargetCount() {
+        DeterministicDungeonGenerator generator = new DeterministicDungeonGenerator(20, 80);
+        RoomTemplate start = compactRoom("start", RoomCategory.START, 1, List.of(
+            taggedDoor("required", new IntVector3(2, 1, 0), Direction3.NORTH, "required")
+                .withConnectionRules(new DoorConnectionRules(Set.of(), Set.of(), true))
+        ));
+        RoomTemplate unrelated = compactRoom("unrelated", RoomCategory.COMBAT, 1, List.of(
+            taggedDoor("south", new IntVector3(2, 1, 4), Direction3.SOUTH, "other")
+        ));
+
+        var result = generator.generate(List.of(start, unrelated), new DungeonGenerationRequest(1, 1L));
+
+        assertFalse(result.successful());
+        assertTrue(result.errors().getFirst().contains("Required door slots remain unconnected"));
+    }
+
+    @Test
+    void roomTagRulesRejectBlockedConnectiveRooms() {
+        DeterministicDungeonGenerator generator = new DeterministicDungeonGenerator(200, 80);
+        DoorSocket startDoor = taggedDoor("north", new IntVector3(2, 1, 0), Direction3.NORTH, "route")
+            .withConnectionRules(new DoorConnectionRules(Set.of(), Set.of(), Set.of("treasure"), Set.of("connector"), false));
+        RoomTemplate start = taggedCompactRoom("start", RoomCategory.START, 1, Set.of("entry"), List.of(startDoor));
+        RoomTemplate connector = taggedCompactRoom("connector", RoomCategory.COMBAT, 100, Set.of("connector"), List.of(
+            taggedDoor("south", new IntVector3(2, 1, 4), Direction3.SOUTH, "route")
+        ));
+        RoomTemplate treasure = taggedCompactRoom("treasure", RoomCategory.COMBAT, 1, Set.of("treasure"), List.of(
+            taggedDoor("south", new IntVector3(2, 1, 4), Direction3.SOUTH, "route")
+        ));
+
+        var result = generator.generate(List.of(start, connector, treasure), new DungeonGenerationRequest(2, 1L));
+
+        assertTrue(result.successful(), result.errors().toString());
+        assertEquals("treasure", result.graph().nodes().get(1).templateId());
+    }
+
+    @Test
     void differentSeedsCanProduceDifferentGraphs() {
         DeterministicDungeonGenerator generator = new DeterministicDungeonGenerator(25_000, 80);
         List<RoomTemplate> templates = List.of(
@@ -444,6 +523,40 @@ final class DeterministicDungeonGeneratorTest {
         assertTrue(error.contains("search steps="), error);
     }
 
+    @Test
+    void connectsMinimumTwoConnectorBeforeAllowingItToEnd() {
+        DeterministicDungeonGenerator generator = new DeterministicDungeonGenerator(200, 80);
+        RoomTemplate start = taggedCompactRoom("start", RoomCategory.START, 1, Set.of(), List.of(
+            taggedDoor("north", new IntVector3(2, 1, 0), Direction3.NORTH, "start")
+        ));
+        RoomTemplate connector = withMinimumConnections(taggedCompactRoom("connector", RoomCategory.COMBAT, 1, Set.of(), List.of(
+            taggedDoor("south", new IntVector3(2, 1, 4), Direction3.SOUTH, "start"),
+            taggedDoor("north", new IntVector3(2, 1, 0), Direction3.NORTH, "end")
+        )), 2);
+        RoomTemplate end = taggedCompactRoom("end", RoomCategory.COMBAT, 1, Set.of(), List.of(
+            taggedDoor("south", new IntVector3(2, 1, 4), Direction3.SOUTH, "end")
+        ));
+
+        var result = generator.generate(List.of(start, connector, end), new DungeonGenerationRequest(3, 1L));
+
+        assertTrue(result.successful(), result.errors().toString());
+        assertEquals("connector", result.graph().nodes().get(1).templateId());
+        assertEquals(2, result.graph().edges().stream()
+            .filter(edge -> edge.fromNode() == 1 || edge.toNode() == 1)
+            .count());
+    }
+
+    @Test
+    void rejectsImpossibleMinimumConnectionsWithDiagnostic() {
+        DeterministicDungeonGenerator generator = new DeterministicDungeonGenerator(200, 80);
+        RoomTemplate start = withMinimumConnections(startRoom(), 2);
+
+        var result = generator.generate(List.of(start, combatRoom("combat", 1)), new DungeonGenerationRequest(2, 1L));
+
+        assertFalse(result.successful());
+        assertTrue(result.errors().getFirst().contains("minimum connection rejects=1"), result.errors().toString());
+    }
+
     private RoomTemplate startRoom() {
         return new RoomTemplate(
             "start",
@@ -493,11 +606,15 @@ final class DeterministicDungeonGeneratorTest {
     }
 
     private RoomTemplate compactRoom(String id, RoomCategory category, int weight, List<DoorSocket> doors) {
+        return taggedCompactRoom(id, category, weight, Set.of(), doors);
+    }
+
+    private RoomTemplate taggedCompactRoom(String id, RoomCategory category, int weight, Set<String> tags, List<DoorSocket> doors) {
         return new RoomTemplate(
             id,
             category,
             weight,
-            Set.of(),
+            tags,
             new IntVector3(5, 4, 5),
             category == RoomCategory.START ? new IntVector3(2, 1, 2) : null,
             doors,
@@ -525,6 +642,10 @@ final class DeterministicDungeonGeneratorTest {
             List.of(),
             Path.of(id + ".nbt")
         );
+    }
+
+    private RoomTemplate withMinimumConnections(RoomTemplate template, int minimumConnections) {
+        return new RoomTemplate(template.id(), template.category(), template.weight(), minimumConnections, template.tags(), template.size(), template.spawn(), template.doors(), template.markers(), template.featureSlots(), template.structureFile());
     }
 
     private DoorSocket taggedDoor(String id, IntVector3 position, Direction3 facing, String tag) {

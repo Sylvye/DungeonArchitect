@@ -31,6 +31,7 @@ public final class AuthoringSession {
     private SelectionBounds roomBounds;
     private RoomCategory category;
     private int weight;
+    private int minimumConnections;
     private Set<String> tags = new LinkedHashSet<>();
     private IntVector3 spawn;
     private boolean editingExistingRoom;
@@ -141,6 +142,14 @@ public final class AuthoringSession {
         this.weight = weight;
     }
 
+    public int minimumConnections() {
+        return minimumConnections;
+    }
+
+    public void minimumConnections(int minimumConnections) {
+        this.minimumConnections = minimumConnections;
+    }
+
     public Set<String> tags() {
         return Set.copyOf(tags);
     }
@@ -192,6 +201,7 @@ public final class AuthoringSession {
         pos2 = roomBounds.max();
         category = template.category();
         weight = template.weight();
+        minimumConnections = template.minimumConnections();
         tags = new LinkedHashSet<>(template.tags());
         spawn = template.spawn();
         doors.clear();
@@ -293,7 +303,7 @@ public final class AuthoringSession {
         for (int i = 0; i < doors.size(); i++) {
             DoorSocket door = doors.get(i);
             if (door.id().equalsIgnoreCase(oldId)) {
-                doors.set(i, new DoorSocket(newId, door.position(), door.facing(), door.socketType(), door.width(), door.height(), door.size(), door.tags(), door.entries()));
+                doors.set(i, new DoorSocket(newId, door.position(), door.facing(), door.socketType(), door.width(), door.height(), door.size(), door.tags(), door.entries(), door.connectionRules()));
                 selectedComponent = null;
                 return true;
             }
@@ -315,7 +325,7 @@ public final class AuthoringSession {
         for (int i = 0; i < doors.size(); i++) {
             DoorSocket door = doors.get(i);
             if (door.id().equalsIgnoreCase(id)) {
-                doors.set(i, new DoorSocket(door.id(), localBounds.min(), facing, door.socketType(), width, height, localBounds.size(), door.tags(), door.entries()));
+                doors.set(i, new DoorSocket(door.id(), localBounds.min(), facing, door.socketType(), width, height, localBounds.size(), door.tags(), door.entries(), door.connectionRules()));
                 return true;
             }
         }

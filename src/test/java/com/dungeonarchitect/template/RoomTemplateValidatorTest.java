@@ -59,6 +59,30 @@ final class RoomTemplateValidatorTest {
     }
 
     @Test
+    void rejectsMinimumConnectionsGreaterThanDoorSlots() throws Exception {
+        Path nbt = tempDir.resolve("connections.nbt");
+        Files.writeString(nbt, "fake");
+        RoomTemplate template = new RoomTemplate(
+            "connections",
+            RoomCategory.COMBAT,
+            1,
+            2,
+            Set.of(),
+            new IntVector3(3, 3, 3),
+            null,
+            List.of(new DoorSocket("north", new IntVector3(1, 1, 0), Direction3.NORTH, SocketType.STANDARD, 1, 2)),
+            List.of(),
+            List.of(),
+            nbt
+        );
+
+        var result = new RoomTemplateValidator().validate(template);
+
+        assertFalse(result.valid());
+        assertTrue(result.errors().stream().anyMatch(error -> error.contains("minimum connections 2 exceeds its 1 door slots")), result.errors().toString());
+    }
+
+    @Test
     void validationIssuesIncludeMarkerAndFeaturePositions() throws Exception {
         Path nbt = tempDir.resolve("room.nbt");
         Files.writeString(nbt, "fake");

@@ -1,6 +1,7 @@
 package com.dungeonarchitect.template;
 
 import com.dungeonarchitect.domain.Direction3;
+import com.dungeonarchitect.domain.DoorConnectionRules;
 import com.dungeonarchitect.domain.DoorSocket;
 import com.dungeonarchitect.domain.FeatureSlotEntry;
 import com.dungeonarchitect.domain.IntVector3;
@@ -32,11 +33,13 @@ final class RoomTemplateIOTest {
             "crypt_start_01",
             RoomCategory.START,
             7,
+            2,
             Set.of("crypt", "start"),
             new IntVector3(9, 6, 9),
             new IntVector3(4, 1, 4),
             List.of(
-                new DoorSocket("door_1", new IntVector3(4, 1, 0), Direction3.NORTH, SocketType.STANDARD, 3, 3),
+                new DoorSocket("door_1", new IntVector3(4, 1, 0), Direction3.NORTH, SocketType.STANDARD, 3, 3)
+                    .withConnectionRules(new DoorConnectionRules(Set.of("hall", "treasure"), Set.of("secret"), Set.of("boss"), Set.of("connector"), true)),
                 new DoorSocket("ceiling", new IntVector3(2, 5, 2), Direction3.UP, SocketType.STANDARD, 3, 4)
             ),
             List.of(new RoomMarker("reward", "generic", new IntVector3(4, 1, 4))),
@@ -56,10 +59,36 @@ final class RoomTemplateIOTest {
         assertEquals(template.id(), loaded.id());
         assertEquals(template.category(), loaded.category());
         assertEquals(template.weight(), loaded.weight());
+        assertEquals(template.minimumConnections(), loaded.minimumConnections());
         assertEquals(template.size(), loaded.size());
         assertEquals(template.spawn(), loaded.spawn());
         assertEquals(template.doors(), loaded.doors());
         assertEquals(template.markers(), loaded.markers());
         assertEquals(template.featureSlots(), loaded.featureSlots());
+    }
+
+    @Test
+    void loadsLegacyDoorWithoutConnectionRules() throws Exception {
+        Path roomDir = tempDir.resolve("legacy_room");
+        Files.createDirectories(roomDir);
+        Files.writeString(roomDir.resolve("room.nbt"), "fake");
+        Files.writeString(roomDir.resolve("room.yml"), """
+            id: legacy_room
+            category: GENERIC
+            weight: 10
+            size: [5, 4, 5]
+            doors:
+              - id: north
+                position: [2, 1, 0]
+                facing: NORTH
+                socket: STANDARD
+                width: 1
+                height: 2
+            """);
+
+        RoomTemplate loaded = RoomTemplateIO.load(roomDir);
+
+        assertEquals(DoorConnectionRules.DEFAULT, loaded.doors().getFirst().connectionRules());
+        assertEquals(0, loaded.minimumConnections());
     }
 }

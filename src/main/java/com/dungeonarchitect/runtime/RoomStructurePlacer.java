@@ -39,7 +39,7 @@ public final class RoomStructurePlacer {
     }
 
     public void place(World world, RoomTemplate template, RoomTransform transform, long dungeonSeed, int nodeIndex, List<DungeonEdge> edges) throws IOException {
-        Structure structure = structureService.server().getStructureManager().loadStructure(template.structureFile().toFile());
+        Structure structure = structureService.loadStructure(template.structureFile());
         IntVector3 nbtSize = new IntVector3(structure.getSize().getBlockX(), structure.getSize().getBlockY(), structure.getSize().getBlockZ());
         if (!nbtSize.equals(template.size())) {
             throw new IOException("Template " + template.id() + " room.nbt size " + nbtSize + " does not match room.yml size " + template.size() + ". Re-save this room.");

@@ -3,6 +3,7 @@ package com.dungeonarchitect.gui;
 import com.dungeonarchitect.authoring.AuthoringManager;
 import com.dungeonarchitect.authoring.AuthoringSession;
 import com.dungeonarchitect.domain.DoorSocket;
+import com.dungeonarchitect.domain.DoorConnectionRules;
 import com.dungeonarchitect.domain.DoorSlotEntry;
 import com.dungeonarchitect.domain.DoorTemplate;
 import com.dungeonarchitect.domain.FeatureSlotEntry;
@@ -68,6 +69,7 @@ public final class MenuManager implements Listener {
     private final ChatPromptManager prompts;
     private final Runnable reloadAll;
     private final Map<UUID, PlayerMenuActions> actions = new HashMap<>();
+    private final Map<UUID, MultiEditSession> multiEdits = new HashMap<>();
     private final RoomTemplateValidator validator = new RoomTemplateValidator();
 
     public MenuManager(Plugin plugin, AuthoringManager authoringManager, RoomTemplateRegistry templateRegistry, FeatureTemplateRegistry featureRegistry, DoorTemplateRegistry doorRegistry, DungeonManager dungeonManager, ChatPromptManager prompts, Runnable reloadAll) {
@@ -158,18 +160,18 @@ public final class MenuManager implements Listener {
             if (activeEdit != null) {
                 activeEdit.category(next);
             }
-            saveRoom(new RoomTemplate(template.id(), next, template.weight(), template.tags(), template.size(), template.spawn(), template.doors(), template.markers(), template.featureSlots(), template.structureFile()));
+            saveRoom(new RoomTemplate(template.id(), next, template.weight(), template.minimumConnections(), template.tags(), template.size(), template.spawn(), template.doors(), template.markers(), template.featureSlots(), template.structureFile()));
             p.sendMessage(Component.text("Room category changed to " + next + "."));
             openRoom(p, roomId);
         });
         button(menu, 12, Material.GOLD_NUGGET, "Weight: " + template.weight(), List.of("Click to edit generation weight."), p -> prompts.prompt(p, "Enter positive integer weight", value -> {
-            saveRoom(new RoomTemplate(template.id(), template.category(), Integer.parseInt(value), template.tags(), template.size(), template.spawn(), template.doors(), template.markers(), template.featureSlots(), template.structureFile()));
+            saveRoom(new RoomTemplate(template.id(), template.category(), Integer.parseInt(value), template.minimumConnections(), template.tags(), template.size(), template.spawn(), template.doors(), template.markers(), template.featureSlots(), template.structureFile()));
             p.sendMessage(Component.text("Room weight updated."));
             openRoom(p, roomId);
         }));
         button(menu, 14, Material.COMPASS, "Spawn: " + (template.spawn() == null ? "unset" : template.spawn()), List.of("Format: x,y,z or empty to clear."), p -> prompts.prompt(p, "Enter spawn as x,y,z or empty", value -> {
             IntVector3 spawn = value.isBlank() ? null : parseVector(value);
-            saveRoom(new RoomTemplate(template.id(), template.category(), template.weight(), template.tags(), template.size(), spawn, template.doors(), template.markers(), template.featureSlots(), template.structureFile()));
+            saveRoom(new RoomTemplate(template.id(), template.category(), template.weight(), template.minimumConnections(), template.tags(), template.size(), spawn, template.doors(), template.markers(), template.featureSlots(), template.structureFile()));
             p.sendMessage(Component.text("Room spawn updated."));
             openRoom(p, roomId);
         }));
@@ -180,8 +182,23 @@ public final class MenuManager implements Listener {
                     tags.add(tag.trim());
                 }
             }
-            saveRoom(new RoomTemplate(template.id(), template.category(), template.weight(), tags, template.size(), template.spawn(), template.doors(), template.markers(), template.featureSlots(), template.structureFile()));
+            saveRoom(new RoomTemplate(template.id(), template.category(), template.weight(), template.minimumConnections(), tags, template.size(), template.spawn(), template.doors(), template.markers(), template.featureSlots(), template.structureFile()));
             p.sendMessage(Component.text("Room tags updated."));
+            openRoom(p, roomId);
+        }));
+        button(menu, 18, Material.IRON_BARS, "Minimum Connections: " + template.minimumConnections(), List.of("Connections required for every generated copy.", "0 allows this room to end a branch."), p -> prompts.prompt(p, "Enter a non-negative minimum connection count", value -> {
+            int minimumConnections = Integer.parseInt(value);
+            if (minimumConnections < 0) {
+                throw new IllegalArgumentException("Minimum connections cannot be negative");
+            }
+            if (minimumConnections > template.doors().size()) {
+                throw new IllegalArgumentException("Minimum connections cannot exceed this room's " + template.doors().size() + " door slots");
+            }
+            if (activeEdit != null) {
+                activeEdit.minimumConnections(minimumConnections);
+            }
+            saveRoom(new RoomTemplate(template.id(), template.category(), template.weight(), minimumConnections, template.tags(), template.size(), template.spawn(), template.doors(), template.markers(), template.featureSlots(), template.structureFile()));
+            p.sendMessage(Component.text("Minimum connections updated."));
             openRoom(p, roomId);
         }));
         button(menu, 22, Material.STRUCTURE_BLOCK, "Edit In World", List.of("Paste this room into the edit world."), p -> {
@@ -260,6 +277,10 @@ public final class MenuManager implements Listener {
                 }
             }
         }
+        if (type.equals("door") || type.equals("feature")) {
+            Material material = type.equals("door") ? Material.OAK_DOOR : Material.HOPPER;
+            button(menu, 45, material, "Multi-edit", List.of("Configure multiple " + type + " slots at once."), p -> beginMultiEdit(p, MultiEditOwner.ROOM, roomId, type.equals("door") ? MultiEditSlotType.DOOR : MultiEditSlotType.FEATURE));
+        }
         button(menu, 49, Material.ARROW, "Back", List.of(), p -> openRoom(p, roomId));
         open(player, menu);
     }
@@ -309,7 +330,14 @@ public final class MenuManager implements Listener {
             .findFirst()
             .orElseThrow(() -> new IllegalArgumentException("Unknown door slot " + slotId));
         Menu menu = menu("da:door-slot:" + roomId + ":" + slotId, 54, "Door Slot: " + slotId);
+        button(menu, 0, Material.NAME_TAG, "Tags: " + String.join(",", doorSlot.tags()), List.of("Comma separated tags."), p -> promptDoorTags(p, template, doorSlot));
+        button(menu, 1, doorSlot.connectionRules().mustConnect() ? Material.TRIPWIRE_HOOK : Material.GRAY_CONCRETE, "Must Connect: " + doorSlot.connectionRules().mustConnect(), List.of("A generated dungeon is invalid until this slot connects."), p -> toggleDoorMustConnect(p, template, doorSlot));
+        button(menu, 2, Material.LIME_DYE, "Accept Tags: " + String.join(",", doorSlot.connectionRules().allowedTags()), List.of("Comma separated opposite-door tags.", "Empty accepts any tag unless rejected."), p -> promptDoorAllowedTags(p, template, doorSlot));
+        button(menu, 3, Material.RED_DYE, "Reject Tags: " + String.join(",", doorSlot.connectionRules().deniedTags()), List.of("Comma separated opposite-door tags."), p -> promptDoorDeniedTags(p, template, doorSlot));
         button(menu, 4, Material.IRON_DOOR, "Slot " + slotId, List.of("Size: " + doorSlot.size(), "Position: " + doorSlot.position(), "Facing: " + doorSlot.facing(), "Tags: " + String.join(",", doorSlot.tags())), p -> openDoorSlot(p, roomId, slotId));
+        button(menu, 5, Material.COMPASS, "Connection Preview", connectionPreviewLore(template, doorSlot), p -> openDoorSlot(p, roomId, slotId));
+        button(menu, 6, Material.LIME_BANNER, "Accept Room Tags: " + String.join(",", doorSlot.connectionRules().allowedRoomTags()), List.of("Comma separated opposite-room tags.", "Empty accepts any room unless rejected."), p -> promptDoorAllowedRoomTags(p, template, doorSlot));
+        button(menu, 7, Material.RED_BANNER, "Reject Room Tags: " + String.join(",", doorSlot.connectionRules().deniedRoomTags()), List.of("Comma separated opposite-room tags."), p -> promptDoorDeniedRoomTags(p, template, doorSlot));
         int slot = 9;
         button(menu, slot++, Material.BARRIER, "empty", doorEntryLore(doorSlot, DoorSlotEntry.EMPTY, "Virtual door; leaves room blueprint unchanged."), p -> toggleDoorEntry(p, template, doorSlot, DoorSlotEntry.EMPTY, 1), null, p -> promptDoorWeight(p, template, doorSlot, DoorSlotEntry.EMPTY));
         List<DoorTemplate> unavailable = new ArrayList<>();
@@ -380,6 +408,82 @@ public final class MenuManager implements Listener {
         saveDoorSlot(player, template, slot.withEntries(entries));
     }
 
+    private void promptDoorTags(Player player, RoomTemplate template, DoorSocket slot) {
+        prompts.prompt(player, "Enter comma-separated door tags", value -> saveDoorSlot(player, template, slot.withTags(parseTags(value))));
+    }
+
+    private void toggleDoorMustConnect(Player player, RoomTemplate template, DoorSocket slot) {
+        DoorConnectionRules rules = slot.connectionRules();
+        saveDoorSlot(player, template, slot.withConnectionRules(new DoorConnectionRules(rules.allowedTags(), rules.deniedTags(), rules.allowedRoomTags(), rules.deniedRoomTags(), !rules.mustConnect())));
+    }
+
+    private void promptDoorAllowedTags(Player player, RoomTemplate template, DoorSocket slot) {
+        prompts.prompt(player, "Enter comma-separated accepted opposite-door tags", value -> {
+            DoorConnectionRules rules = slot.connectionRules();
+            saveDoorSlot(player, template, slot.withConnectionRules(new DoorConnectionRules(parseTags(value), rules.deniedTags(), rules.allowedRoomTags(), rules.deniedRoomTags(), rules.mustConnect())));
+        });
+    }
+
+    private void promptDoorDeniedTags(Player player, RoomTemplate template, DoorSocket slot) {
+        prompts.prompt(player, "Enter comma-separated rejected opposite-door tags", value -> {
+            DoorConnectionRules rules = slot.connectionRules();
+            saveDoorSlot(player, template, slot.withConnectionRules(new DoorConnectionRules(rules.allowedTags(), parseTags(value), rules.allowedRoomTags(), rules.deniedRoomTags(), rules.mustConnect())));
+        });
+    }
+
+    private void promptDoorAllowedRoomTags(Player player, RoomTemplate template, DoorSocket slot) {
+        prompts.prompt(player, "Enter comma-separated accepted opposite-room tags", value -> {
+            DoorConnectionRules rules = slot.connectionRules();
+            saveDoorSlot(player, template, slot.withConnectionRules(new DoorConnectionRules(rules.allowedTags(), rules.deniedTags(), parseTags(value), rules.deniedRoomTags(), rules.mustConnect())));
+        });
+    }
+
+    private void promptDoorDeniedRoomTags(Player player, RoomTemplate template, DoorSocket slot) {
+        prompts.prompt(player, "Enter comma-separated rejected opposite-room tags", value -> {
+            DoorConnectionRules rules = slot.connectionRules();
+            saveDoorSlot(player, template, slot.withConnectionRules(new DoorConnectionRules(rules.allowedTags(), rules.deniedTags(), rules.allowedRoomTags(), parseTags(value), rules.mustConnect())));
+        });
+    }
+
+    private Set<String> parseTags(String value) {
+        Set<String> tags = new LinkedHashSet<>();
+        for (String tag : value.split(",")) {
+            if (!tag.isBlank()) {
+                tags.add(tag.trim());
+            }
+        }
+        return tags;
+    }
+
+    private List<String> connectionPreviewLore(RoomTemplate owner, DoorSocket slot) {
+        List<String> lore = new ArrayList<>();
+        int matches = 0;
+        for (RoomTemplate candidateRoom : templateRegistry.all()) {
+            for (DoorSocket candidate : candidateRoom.doors()) {
+                if (candidateRoom.id().equals(owner.id()) && candidate.id().equals(slot.id())) {
+                    continue;
+                }
+                if (candidate.facing() != slot.facing().opposite()) {
+                    continue;
+                }
+                DoorSocket.ConnectionMatch match = slot.connectionMatch(candidate, owner.tags(), candidateRoom.tags());
+                if (match.compatible()) {
+                    matches++;
+                    if (lore.size() < 5) {
+                        lore.add("Compatible: " + candidateRoom.id() + ":" + candidate.id());
+                    }
+                } else if (lore.size() < 5) {
+                    lore.add("Unavailable: " + candidateRoom.id() + ":" + candidate.id() + " - " + match.reason());
+                }
+            }
+        }
+        lore.add(0, "Opposite-facing rule matches: " + matches);
+        if (lore.size() == 1) {
+            lore.add("No opposite-facing room slots found.");
+        }
+        return lore;
+    }
+
     private void promptDoorWeight(Player player, RoomTemplate template, DoorSocket slot, String doorId) {
         prompts.prompt(player, "Enter weight for " + doorId, value -> {
             int weight = Integer.parseInt(value);
@@ -401,7 +505,7 @@ public final class MenuManager implements Listener {
         }
         List<DoorSocket> slots = new ArrayList<>(template.doors());
         slots.replaceAll(slot -> slot.id().equalsIgnoreCase(updatedSlot.id()) ? updatedSlot : slot);
-        saveRoom(new RoomTemplate(template.id(), template.category(), template.weight(), template.tags(), template.size(), template.spawn(), slots, template.markers(), template.featureSlots(), template.structureFile()));
+        saveRoom(new RoomTemplate(template.id(), template.category(), template.weight(), template.minimumConnections(), template.tags(), template.size(), template.spawn(), slots, template.markers(), template.featureSlots(), template.structureFile()));
         player.sendMessage(Component.text("Door slot updated."));
         openDoorSlot(player, template.id(), updatedSlot.id());
     }
@@ -448,7 +552,7 @@ public final class MenuManager implements Listener {
         }
         List<RoomFeatureSlot> slots = new ArrayList<>(template.featureSlots());
         slots.replaceAll(slot -> slot.id().equalsIgnoreCase(updatedSlot.id()) ? updatedSlot : slot);
-        saveRoom(new RoomTemplate(template.id(), template.category(), template.weight(), template.tags(), template.size(), template.spawn(), template.doors(), template.markers(), slots, template.structureFile()));
+        saveRoom(new RoomTemplate(template.id(), template.category(), template.weight(), template.minimumConnections(), template.tags(), template.size(), template.spawn(), template.doors(), template.markers(), slots, template.structureFile()));
         player.sendMessage(Component.text("Feature slot updated."));
         openFeatureSlot(player, template.id(), updatedSlot.id());
     }
@@ -466,7 +570,7 @@ public final class MenuManager implements Listener {
         if (!removed) {
             return template;
         }
-        return new RoomTemplate(template.id(), template.category(), template.weight(), template.tags(), template.size(), template.spawn(), doors, markers, features, template.structureFile());
+        return new RoomTemplate(template.id(), template.category(), template.weight(), template.minimumConnections(), template.tags(), template.size(), template.spawn(), doors, markers, features, template.structureFile());
     }
 
     private void selectComponent(Player player, String roomId, String type, String id) {
@@ -542,7 +646,7 @@ public final class MenuManager implements Listener {
                 for (int i = 0; i < doors.size(); i++) {
                     DoorSocket door = doors.get(i);
                     if (door.id().equalsIgnoreCase(oldId)) {
-                        doors.set(i, new DoorSocket(newId, door.position(), door.facing(), door.socketType(), door.width(), door.height(), door.size(), door.tags(), door.entries()));
+                        doors.set(i, new DoorSocket(newId, door.position(), door.facing(), door.socketType(), door.width(), door.height(), door.size(), door.tags(), door.entries(), door.connectionRules()));
                         found = true;
                         break;
                     }
@@ -584,7 +688,7 @@ public final class MenuManager implements Listener {
         if (!renamed) {
             return template;
         }
-        return new RoomTemplate(template.id(), template.category(), template.weight(), template.tags(), template.size(), template.spawn(), doors, markers, features, template.structureFile());
+        return new RoomTemplate(template.id(), template.category(), template.weight(), template.minimumConnections(), template.tags(), template.size(), template.spawn(), doors, markers, features, template.structureFile());
     }
 
     public void openDoors(Player player) {
@@ -681,6 +785,7 @@ public final class MenuManager implements Listener {
                     break;
                 }
             }
+            button(menu, 45, Material.HOPPER, "Multi-edit", List.of("Configure multiple feature slots at once."), p -> beginMultiEdit(p, MultiEditOwner.DOOR_TEMPLATE, doorId, MultiEditSlotType.FEATURE));
         }
         button(menu, 49, Material.ARROW, "Back", List.of(), p -> openDoor(p, doorId));
         open(player, menu);
@@ -754,6 +859,509 @@ public final class MenuManager implements Listener {
         saveDoorTemplate(new DoorTemplate(template.id(), template.size(), template.tags(), template.markers(), slots, template.gateway(), template.structureFile()));
         player.sendMessage(Component.text("Door feature slot updated."));
         openDoorFeatureSlot(player, template.id(), updatedSlot.id());
+    }
+
+    private void beginMultiEdit(Player player, MultiEditOwner owner, String ownerId, MultiEditSlotType slotType) {
+        MultiEditSession session = new MultiEditSession(owner, ownerId, slotType);
+        multiEdits.put(player.getUniqueId(), session);
+        openMultiEditSlotSelection(player);
+    }
+
+    private void openMultiEditSlotSelection(Player player) {
+        MultiEditSession session = requireMultiEdit(player);
+        Menu menu = menu("da:multi-select:" + session.ownerId + ":" + session.slotType, 54, "Multi-edit " + session.slotType.label());
+        int slotIndex = 0;
+        if (session.slotType == MultiEditSlotType.DOOR) {
+            for (DoorSocket slot : currentDoorSlots(player, session)) {
+                boolean selected = session.selectedSlotIds.contains(slot.id().toLowerCase(Locale.ROOT));
+                button(menu, slotIndex++, selected ? Material.EMERALD_BLOCK : Material.IRON_DOOR, slot.id(), multiDoorSlotLore(player, slot, selected, session), p -> {
+                    toggleMultiEditSlot(p, slot.id());
+                    openMultiEditSlotSelection(p);
+                });
+                if (slotIndex >= 45) {
+                    break;
+                }
+            }
+        } else {
+            for (RoomFeatureSlot slot : currentFeatureSlots(player, session)) {
+                boolean selected = session.selectedSlotIds.contains(slot.id().toLowerCase(Locale.ROOT));
+                button(menu, slotIndex++, selected ? Material.EMERALD_BLOCK : Material.CHEST, slot.id(), multiFeatureSlotLore(player, slot, selected, session), p -> {
+                    toggleMultiEditSlot(p, slot.id());
+                    openMultiEditSlotSelection(p);
+                });
+                if (slotIndex >= 45) {
+                    break;
+                }
+            }
+        }
+        if (session.selectedSlotIds.isEmpty()) {
+            button(menu, 53, Material.GRAY_CONCRETE, "Continue to config", List.of("Select at least one slot first."), p -> openMultiEditSlotSelection(p));
+        } else {
+            button(menu, 53, Material.EMERALD_BLOCK, "Continue to config", List.of("Selected slots: " + session.selectedSlotIds.size()), this::openMultiEditConfig);
+        }
+        button(menu, 49, Material.BARRIER, "Cancel", List.of("Discard this multi-edit session."), this::cancelMultiEdit);
+        open(player, menu);
+    }
+
+    private void openMultiEditConfig(Player player) {
+        MultiEditSession session = requireMultiEdit(player);
+        if (session.selectedSlotIds.isEmpty()) {
+            openMultiEditSlotSelection(player);
+            return;
+        }
+        if (session.slotType == MultiEditSlotType.DOOR) {
+            openMultiEditDoorConfig(player, session);
+        } else {
+            openMultiEditFeatureConfig(player, session);
+        }
+    }
+
+    private void openMultiEditDoorConfig(Player player, MultiEditSession session) {
+        List<DoorSocket> selectedSlots = selectedDoorSlots(player, session);
+        initializeMultiDoorRuleDraft(session, selectedSlots);
+        Menu menu = menu("da:multi-config:" + session.ownerId + ":door", 54, "Multi-edit Doors");
+        button(menu, 0, Material.NAME_TAG, "Tags: " + String.join(",", session.doorTagsDraft), List.of("Comma separated tags.", "Applies to every selected door."), p -> promptMultiDoorTags(p));
+        button(menu, 1, session.doorConnectionRulesDraft.mustConnect() ? Material.TRIPWIRE_HOOK : Material.GRAY_CONCRETE, "Must Connect: " + session.doorConnectionRulesDraft.mustConnect(), List.of("Applies to every selected door."), p -> toggleMultiDoorMustConnect(p));
+        button(menu, 2, Material.LIME_DYE, "Accept Tags: " + String.join(",", session.doorConnectionRulesDraft.allowedTags()), List.of("Comma separated opposite-door tags.", "Applies to every selected door."), p -> promptMultiDoorAllowedTags(p));
+        button(menu, 3, Material.RED_DYE, "Reject Tags: " + String.join(",", session.doorConnectionRulesDraft.deniedTags()), List.of("Comma separated opposite-door tags.", "Applies to every selected door."), p -> promptMultiDoorDeniedTags(p));
+        button(menu, 4, Material.OAK_DOOR, "Draft Door Entries", List.of("Selected slots: " + selectedSlots.size(), "Draft entries: " + session.doorDraft.size(), session.doorEntriesTouched ? "Entry changes apply to every selected slot." : "Entries remain unchanged unless edited."), p -> openMultiEditConfig(p));
+        button(menu, 6, Material.LIME_BANNER, "Accept Room Tags: " + String.join(",", session.doorConnectionRulesDraft.allowedRoomTags()), List.of("Comma separated opposite-room tags.", "Applies to every selected door."), p -> promptMultiDoorAllowedRoomTags(p));
+        button(menu, 7, Material.RED_BANNER, "Reject Room Tags: " + String.join(",", session.doorConnectionRulesDraft.deniedRoomTags()), List.of("Comma separated opposite-room tags.", "Applies to every selected door."), p -> promptMultiDoorDeniedRoomTags(p));
+        int slot = 9;
+        button(menu, slot++, Material.BARRIER, "empty", multiDoorEntryLore(session, DoorSlotEntry.EMPTY, "Virtual door; leaves room blueprint unchanged."), p -> {
+            toggleMultiDoorDraft(p, DoorSlotEntry.EMPTY, 1);
+            openMultiEditConfig(p);
+        }, null, p -> promptMultiDoorWeight(p, DoorSlotEntry.EMPTY));
+        List<UnavailableCandidate> unavailable = new ArrayList<>();
+        for (DoorTemplate door : doorRegistry.visible()) {
+            TemplateLoadStatus<DoorTemplate> status = doorRegistry.status(door.id()).orElse(null);
+            List<String> conflicts = SlotMultiEditMatcher.doorConflicts(selectedSlots, door, status);
+            if (!conflicts.isEmpty()) {
+                unavailable.add(new UnavailableCandidate(door.id(), conflicts, "Bounds: " + DiagnosticText.size(door.size())));
+                continue;
+            }
+            button(menu, slot++, Material.OAK_DOOR, door.id(), multiDoorEntryLore(session, door.id(), "Bounds: " + DiagnosticText.size(door.size()), "Matches all selected slots."), p -> {
+                toggleMultiDoorDraft(p, door.id(), 1);
+                openMultiEditConfig(p);
+            }, null, p -> promptMultiDoorWeight(p, door.id()));
+            if (slot >= 45) {
+                break;
+            }
+        }
+        for (TemplateLoadStatus<DoorTemplate> status : doorRegistry.loadStatuses()) {
+            if (!status.loadable()) {
+                unavailable.add(new UnavailableCandidate(status.id(), status.errors(), "Template could not be loaded."));
+            }
+        }
+        slot = addUnavailableMultiEntries(menu, slot, unavailable, "doors");
+        button(menu, 45, Material.ARROW, "Back to slot selection", List.of("Keep the current draft."), this::openMultiEditSlotSelection);
+        button(menu, 49, Material.BARRIER, "Cancel", List.of("Discard this multi-edit session."), this::cancelMultiEdit);
+        button(menu, 53, Material.EMERALD_BLOCK, "Apply to selected slots", multiDoorApplyLore(session, selectedSlots.size()), this::applyMultiEdit);
+        open(player, menu);
+    }
+
+    private void openMultiEditFeatureConfig(Player player, MultiEditSession session) {
+        List<RoomFeatureSlot> selectedSlots = selectedFeatureSlots(player, session);
+        Menu menu = menu("da:multi-config:" + session.ownerId + ":feature", 54, "Multi-edit Features");
+        button(menu, 4, Material.HOPPER, "Draft Feature Entries", List.of("Selected slots: " + selectedSlots.size(), "Draft entries: " + session.featureDraft.size(), "Apply replaces every selected slot."), p -> openMultiEditConfig(p));
+        int slot = 9;
+        button(menu, slot++, Material.BARRIER, "empty", multiFeatureEntryLore(session, FeatureSlotEntry.EMPTY, "Virtual feature; pastes nothing."), p -> {
+            toggleMultiFeatureDraft(p, FeatureSlotEntry.EMPTY, 1);
+            openMultiEditConfig(p);
+        }, null, p -> promptMultiFeatureWeight(p, FeatureSlotEntry.EMPTY));
+        List<UnavailableCandidate> unavailable = new ArrayList<>();
+        for (FeatureTemplate feature : featureRegistry.visible()) {
+            TemplateLoadStatus<FeatureTemplate> status = featureRegistry.status(feature.id()).orElse(null);
+            List<String> conflicts = SlotMultiEditMatcher.featureConflicts(selectedSlots, feature, status);
+            if (!conflicts.isEmpty()) {
+                unavailable.add(new UnavailableCandidate(feature.id(), conflicts, "Size: " + DiagnosticText.size(feature.size())));
+                continue;
+            }
+            button(menu, slot++, Material.STRUCTURE_BLOCK, feature.id(), multiFeatureEntryLore(session, feature.id(), "Size: " + DiagnosticText.size(feature.size()), "Matches all selected slots."), p -> {
+                toggleMultiFeatureDraft(p, feature.id(), 1);
+                openMultiEditConfig(p);
+            }, null, p -> promptMultiFeatureWeight(p, feature.id()));
+            if (slot >= 45) {
+                break;
+            }
+        }
+        for (TemplateLoadStatus<FeatureTemplate> status : featureRegistry.loadStatuses()) {
+            if (!status.loadable()) {
+                unavailable.add(new UnavailableCandidate(status.id(), status.errors(), "Template could not be loaded."));
+            }
+        }
+        slot = addUnavailableMultiEntries(menu, slot, unavailable, "features");
+        button(menu, 45, Material.ARROW, "Back to slot selection", List.of("Keep the current draft."), this::openMultiEditSlotSelection);
+        button(menu, 49, Material.BARRIER, "Cancel", List.of("Discard this multi-edit session."), this::cancelMultiEdit);
+        button(menu, 53, Material.EMERALD_BLOCK, "Apply to selected slots", List.of("Replaces entries on " + selectedSlots.size() + " slot(s).", "Draft entries: " + session.featureDraft.size()), this::applyMultiEdit);
+        open(player, menu);
+    }
+
+    private int addUnavailableMultiEntries(Menu menu, int slot, List<UnavailableCandidate> unavailable, String label) {
+        if (slot >= 45 || unavailable.isEmpty()) {
+            return slot;
+        }
+        button(menu, slot++, Material.GRAY_STAINED_GLASS_PANE, "Unavailable", List.of("These " + label + " do not match every selected slot."), p -> {});
+        for (UnavailableCandidate candidate : unavailable) {
+            if (slot >= 45) {
+                break;
+            }
+            List<String> lore = new ArrayList<>();
+            lore.add("Unavailable for selected slots.");
+            lore.add(candidate.summary);
+            candidate.conflicts.stream().limit(4).forEach(lore::add);
+            button(menu, slot++, Material.GRAY_CONCRETE, candidate.id, lore, p -> {
+                p.sendMessage(Component.text(candidate.id + " conflicts:"));
+                for (String conflict : candidate.conflicts) {
+                    p.sendMessage(Component.text("- " + conflict));
+                }
+            });
+        }
+        return slot;
+    }
+
+    private void applyMultiEdit(Player player) {
+        MultiEditSession session = requireMultiEdit(player);
+        if (session.selectedSlotIds.isEmpty()) {
+            openMultiEditSlotSelection(player);
+            return;
+        }
+        if (session.slotType == MultiEditSlotType.DOOR) {
+            applyMultiDoorEdit(player, session);
+        } else if (session.owner == MultiEditOwner.ROOM) {
+            applyMultiRoomFeatureEdit(player, session);
+        } else {
+            applyMultiDoorFeatureEdit(player, session);
+        }
+        multiEdits.remove(player.getUniqueId());
+    }
+
+    private void applyMultiDoorEdit(Player player, MultiEditSession session) {
+        RoomTemplate template = templateRegistry.getVisible(session.ownerId)
+            .orElseThrow(() -> new IllegalArgumentException("Unknown room " + session.ownerId));
+        AuthoringSession activeEdit = authoringManager.editingSession(player, template.id()).orElse(null);
+        if (activeEdit != null) {
+            for (DoorSocket slot : activeEdit.doors()) {
+                if (selected(session, slot.id())) {
+                    activeEdit.removeDoor(slot.id());
+                    activeEdit.addDoorSlot(applyMultiDoorDraft(slot, session));
+                }
+            }
+            player.sendMessage(Component.text("Updated " + session.selectedSlotIds.size() + " door slots in the active edit session."));
+            openComponents(player, template.id(), "door");
+            return;
+        }
+        List<DoorSocket> slots = template.doors().stream()
+            .map(slot -> selected(session, slot.id()) ? applyMultiDoorDraft(slot, session) : slot)
+            .toList();
+        saveRoom(new RoomTemplate(template.id(), template.category(), template.weight(), template.minimumConnections(), template.tags(), template.size(), template.spawn(), slots, template.markers(), template.featureSlots(), template.structureFile()));
+        player.sendMessage(Component.text("Updated " + session.selectedSlotIds.size() + " door slots."));
+        openComponents(player, template.id(), "door");
+    }
+
+    private void applyMultiRoomFeatureEdit(Player player, MultiEditSession session) {
+        RoomTemplate template = templateRegistry.getVisible(session.ownerId)
+            .orElseThrow(() -> new IllegalArgumentException("Unknown room " + session.ownerId));
+        AuthoringSession activeEdit = authoringManager.editingSession(player, template.id()).orElse(null);
+        List<FeatureSlotEntry> entries = List.copyOf(session.featureDraft);
+        if (activeEdit != null) {
+            for (RoomFeatureSlot slot : activeEdit.featureSlots()) {
+                if (selected(session, slot.id())) {
+                    activeEdit.removeFeature(slot.id());
+                    activeEdit.addFeatureSlot(slot.withEntries(entries));
+                }
+            }
+            player.sendMessage(Component.text("Updated " + session.selectedSlotIds.size() + " feature slots in the active edit session."));
+            openComponents(player, template.id(), "feature");
+            return;
+        }
+        List<RoomFeatureSlot> slots = template.featureSlots().stream()
+            .map(slot -> selected(session, slot.id()) ? slot.withEntries(entries) : slot)
+            .toList();
+        saveRoom(new RoomTemplate(template.id(), template.category(), template.weight(), template.minimumConnections(), template.tags(), template.size(), template.spawn(), template.doors(), template.markers(), slots, template.structureFile()));
+        player.sendMessage(Component.text("Updated " + session.selectedSlotIds.size() + " feature slots."));
+        openComponents(player, template.id(), "feature");
+    }
+
+    private void applyMultiDoorFeatureEdit(Player player, MultiEditSession session) {
+        DoorTemplate template = doorRegistry.getVisible(session.ownerId)
+            .orElseThrow(() -> new IllegalArgumentException("Unknown door " + session.ownerId));
+        AuthoringSession activeEdit = authoringManager.editingDoorSession(player, template.id()).orElse(null);
+        List<FeatureSlotEntry> entries = List.copyOf(session.featureDraft);
+        if (activeEdit != null) {
+            for (RoomFeatureSlot slot : activeEdit.featureSlots()) {
+                if (selected(session, slot.id())) {
+                    activeEdit.removeFeature(slot.id());
+                    activeEdit.addFeatureSlot(slot.withEntries(entries));
+                }
+            }
+            player.sendMessage(Component.text("Updated " + session.selectedSlotIds.size() + " door feature slots in the active edit session."));
+            openDoorComponents(player, template.id(), "feature");
+            return;
+        }
+        List<RoomFeatureSlot> slots = template.featureSlots().stream()
+            .map(slot -> selected(session, slot.id()) ? slot.withEntries(entries) : slot)
+            .toList();
+        saveDoorTemplate(new DoorTemplate(template.id(), template.size(), template.tags(), template.markers(), slots, template.gateway(), template.structureFile()));
+        player.sendMessage(Component.text("Updated " + session.selectedSlotIds.size() + " door feature slots."));
+        openDoorComponents(player, template.id(), "feature");
+    }
+
+    private void cancelMultiEdit(Player player) {
+        MultiEditSession session = multiEdits.remove(player.getUniqueId());
+        if (session == null) {
+            openMain(player);
+            return;
+        }
+        if (session.owner == MultiEditOwner.ROOM) {
+            openComponents(player, session.ownerId, session.slotType == MultiEditSlotType.DOOR ? "door" : "feature");
+        } else {
+            openDoorComponents(player, session.ownerId, "feature");
+        }
+    }
+
+    private void toggleMultiEditSlot(Player player, String slotId) {
+        MultiEditSession session = requireMultiEdit(player);
+        String normalized = slotId.toLowerCase(Locale.ROOT);
+        if (!session.selectedSlotIds.remove(normalized)) {
+            session.selectedSlotIds.add(normalized);
+        }
+    }
+
+    private void toggleMultiDoorDraft(Player player, String doorId, int defaultWeight) {
+        MultiEditSession session = requireMultiEdit(player);
+        session.doorEntriesTouched = true;
+        boolean removed = session.doorDraft.removeIf(entry -> entry.doorId().equalsIgnoreCase(doorId));
+        if (!removed) {
+            session.doorDraft.add(new DoorSlotEntry(doorId, defaultWeight));
+        }
+    }
+
+    private void toggleMultiFeatureDraft(Player player, String featureId, int defaultWeight) {
+        MultiEditSession session = requireMultiEdit(player);
+        boolean removed = session.featureDraft.removeIf(entry -> entry.featureId().equalsIgnoreCase(featureId));
+        if (!removed) {
+            session.featureDraft.add(new FeatureSlotEntry(featureId, defaultWeight));
+        }
+    }
+
+    private void promptMultiDoorWeight(Player player, String doorId) {
+        prompts.prompt(player, "Enter weight for " + doorId, value -> {
+            MultiEditSession session = requireMultiEdit(player);
+            session.doorEntriesTouched = true;
+            int weight = Integer.parseInt(value);
+            session.doorDraft.removeIf(entry -> entry.doorId().equalsIgnoreCase(doorId));
+            session.doorDraft.add(new DoorSlotEntry(doorId, weight));
+            openMultiEditConfig(player);
+        });
+    }
+
+    private void initializeMultiDoorRuleDraft(MultiEditSession session, List<DoorSocket> selectedSlots) {
+        if (session.doorRuleDraftInitialized || selectedSlots.isEmpty()) {
+            return;
+        }
+        DoorSocket source = selectedSlots.getFirst();
+        session.doorTagsDraft.addAll(source.tags());
+        session.doorConnectionRulesDraft = source.connectionRules();
+        session.doorRuleDraftInitialized = true;
+    }
+
+    private void promptMultiDoorTags(Player player) {
+        prompts.prompt(player, "Enter comma-separated door tags", value -> {
+            MultiEditSession session = requireMultiEdit(player);
+            session.doorTagsDraft.clear();
+            session.doorTagsDraft.addAll(parseTags(value));
+            session.doorTagsTouched = true;
+            openMultiEditConfig(player);
+        });
+    }
+
+    private void toggleMultiDoorMustConnect(Player player) {
+        MultiEditSession session = requireMultiEdit(player);
+        DoorConnectionRules rules = session.doorConnectionRulesDraft;
+        session.doorConnectionRulesDraft = new DoorConnectionRules(rules.allowedTags(), rules.deniedTags(), rules.allowedRoomTags(), rules.deniedRoomTags(), !rules.mustConnect());
+        session.doorConnectionRulesTouched = true;
+        openMultiEditConfig(player);
+    }
+
+    private void promptMultiDoorAllowedTags(Player player) {
+        prompts.prompt(player, "Enter comma-separated accepted opposite-door tags", value -> {
+            MultiEditSession session = requireMultiEdit(player);
+            DoorConnectionRules rules = session.doorConnectionRulesDraft;
+            session.doorConnectionRulesDraft = new DoorConnectionRules(parseTags(value), rules.deniedTags(), rules.allowedRoomTags(), rules.deniedRoomTags(), rules.mustConnect());
+            session.doorConnectionRulesTouched = true;
+            openMultiEditConfig(player);
+        });
+    }
+
+    private void promptMultiDoorDeniedTags(Player player) {
+        prompts.prompt(player, "Enter comma-separated rejected opposite-door tags", value -> {
+            MultiEditSession session = requireMultiEdit(player);
+            DoorConnectionRules rules = session.doorConnectionRulesDraft;
+            session.doorConnectionRulesDraft = new DoorConnectionRules(rules.allowedTags(), parseTags(value), rules.allowedRoomTags(), rules.deniedRoomTags(), rules.mustConnect());
+            session.doorConnectionRulesTouched = true;
+            openMultiEditConfig(player);
+        });
+    }
+
+    private void promptMultiDoorAllowedRoomTags(Player player) {
+        prompts.prompt(player, "Enter comma-separated accepted opposite-room tags", value -> {
+            MultiEditSession session = requireMultiEdit(player);
+            DoorConnectionRules rules = session.doorConnectionRulesDraft;
+            session.doorConnectionRulesDraft = new DoorConnectionRules(rules.allowedTags(), rules.deniedTags(), parseTags(value), rules.deniedRoomTags(), rules.mustConnect());
+            session.doorConnectionRulesTouched = true;
+            openMultiEditConfig(player);
+        });
+    }
+
+    private void promptMultiDoorDeniedRoomTags(Player player) {
+        prompts.prompt(player, "Enter comma-separated rejected opposite-room tags", value -> {
+            MultiEditSession session = requireMultiEdit(player);
+            DoorConnectionRules rules = session.doorConnectionRulesDraft;
+            session.doorConnectionRulesDraft = new DoorConnectionRules(rules.allowedTags(), rules.deniedTags(), rules.allowedRoomTags(), parseTags(value), rules.mustConnect());
+            session.doorConnectionRulesTouched = true;
+            openMultiEditConfig(player);
+        });
+    }
+
+    private DoorSocket applyMultiDoorDraft(DoorSocket slot, MultiEditSession session) {
+        DoorSocket updated = slot;
+        if (session.doorEntriesTouched) {
+            updated = updated.withEntries(session.doorDraft);
+        }
+        if (session.doorTagsTouched) {
+            updated = updated.withTags(session.doorTagsDraft);
+        }
+        if (session.doorConnectionRulesTouched) {
+            updated = updated.withConnectionRules(session.doorConnectionRulesDraft);
+        }
+        return updated;
+    }
+
+    private List<String> multiDoorApplyLore(MultiEditSession session, int selectedCount) {
+        List<String> lore = new ArrayList<>();
+        lore.add("Selected slots: " + selectedCount);
+        lore.add("Entries: " + (session.doorEntriesTouched ? "updated" : "unchanged"));
+        lore.add("Tags: " + (session.doorTagsTouched ? "updated" : "unchanged"));
+        lore.add("Connection rules: " + (session.doorConnectionRulesTouched ? "updated" : "unchanged"));
+        return lore;
+    }
+
+    private void promptMultiFeatureWeight(Player player, String featureId) {
+        prompts.prompt(player, "Enter weight for " + featureId, value -> {
+            MultiEditSession session = requireMultiEdit(player);
+            int weight = Integer.parseInt(value);
+            session.featureDraft.removeIf(entry -> entry.featureId().equalsIgnoreCase(featureId));
+            session.featureDraft.add(new FeatureSlotEntry(featureId, weight));
+            openMultiEditConfig(player);
+        });
+    }
+
+    private List<String> multiDoorEntryLore(MultiEditSession session, String doorId, String... extra) {
+        List<String> lore = new ArrayList<>();
+        session.doorDraft.stream()
+            .filter(entry -> entry.doorId().equalsIgnoreCase(doorId))
+            .findFirst()
+            .ifPresentOrElse(entry -> lore.add("Selected weight: " + entry.weight()), () -> lore.add("Not selected"));
+        lore.addAll(List.of(extra));
+        lore.add("Left click toggles weight 1.");
+        lore.add("Shift-left edits shared weight.");
+        return lore;
+    }
+
+    private List<String> multiFeatureEntryLore(MultiEditSession session, String featureId, String... extra) {
+        List<String> lore = new ArrayList<>();
+        session.featureDraft.stream()
+            .filter(entry -> entry.featureId().equalsIgnoreCase(featureId))
+            .findFirst()
+            .ifPresentOrElse(entry -> lore.add("Selected weight: " + entry.weight()), () -> lore.add("Not selected"));
+        lore.addAll(List.of(extra));
+        lore.add("Left click toggles weight 1.");
+        lore.add("Shift-left edits shared weight.");
+        return lore;
+    }
+
+    private List<String> multiDoorSlotLore(Player player, DoorSocket slot, boolean selected, MultiEditSession session) {
+        List<String> lore = new ArrayList<>();
+        lore.add(selected ? "Selected" : "Not selected");
+        lore.add("Size: " + DiagnosticText.size(slot.size()));
+        lore.add("Facing: " + slot.facing());
+        lore.add("Current entries: " + slot.entries().size());
+        if (mixedDoorEntries(slot, currentDoorSlots(player, session))) {
+            lore.add("Config differs from other slots.");
+        }
+        return lore;
+    }
+
+    private List<String> multiFeatureSlotLore(Player player, RoomFeatureSlot slot, boolean selected, MultiEditSession session) {
+        List<String> lore = new ArrayList<>();
+        lore.add(selected ? "Selected" : "Not selected");
+        lore.add("Size: " + DiagnosticText.size(slot.size()));
+        lore.add("Current entries: " + slot.entries().size());
+        if (mixedFeatureEntries(slot, currentFeatureSlots(player, session))) {
+            lore.add("Config differs from other slots.");
+        }
+        return lore;
+    }
+
+    private boolean mixedDoorEntries(DoorSocket slot, List<DoorSocket> slots) {
+        return slots.stream().anyMatch(other -> !other.id().equalsIgnoreCase(slot.id()) && !other.entries().equals(slot.entries()));
+    }
+
+    private boolean mixedFeatureEntries(RoomFeatureSlot slot, List<RoomFeatureSlot> slots) {
+        return slots.stream().anyMatch(other -> !other.id().equalsIgnoreCase(slot.id()) && !other.entries().equals(slot.entries()));
+    }
+
+    private List<DoorSocket> currentDoorSlots(Player player, MultiEditSession session) {
+        if (session.owner != MultiEditOwner.ROOM) {
+            return List.of();
+        }
+        if (player != null) {
+            AuthoringSession activeEdit = authoringManager.editingSession(player, session.ownerId).orElse(null);
+            if (activeEdit != null) {
+                return activeEdit.doors();
+            }
+        }
+        return templateRegistry.getVisible(session.ownerId).map(RoomTemplate::doors).orElse(List.of());
+    }
+
+    private List<RoomFeatureSlot> currentFeatureSlots(Player player, MultiEditSession session) {
+        if (session.owner == MultiEditOwner.ROOM) {
+            if (player != null) {
+                AuthoringSession activeEdit = authoringManager.editingSession(player, session.ownerId).orElse(null);
+                if (activeEdit != null) {
+                    return activeEdit.featureSlots();
+                }
+            }
+            return templateRegistry.getVisible(session.ownerId).map(RoomTemplate::featureSlots).orElse(List.of());
+        }
+        if (player != null) {
+            AuthoringSession activeEdit = authoringManager.editingDoorSession(player, session.ownerId).orElse(null);
+            if (activeEdit != null) {
+                return activeEdit.featureSlots();
+            }
+        }
+        return doorRegistry.getVisible(session.ownerId).map(DoorTemplate::featureSlots).orElse(List.of());
+    }
+
+    private List<DoorSocket> selectedDoorSlots(Player player, MultiEditSession session) {
+        return currentDoorSlots(player, session).stream().filter(slot -> selected(session, slot.id())).toList();
+    }
+
+    private List<RoomFeatureSlot> selectedFeatureSlots(Player player, MultiEditSession session) {
+        return currentFeatureSlots(player, session).stream().filter(slot -> selected(session, slot.id())).toList();
+    }
+
+    private boolean selected(MultiEditSession session, String slotId) {
+        return session.selectedSlotIds.contains(slotId.toLowerCase(Locale.ROOT));
+    }
+
+    private MultiEditSession requireMultiEdit(Player player) {
+        MultiEditSession session = multiEdits.get(player.getUniqueId());
+        if (session == null) {
+            throw new IllegalArgumentException("No active multi-edit session");
+        }
+        return session;
     }
 
     private void selectDoorComponent(Player player, String doorId, String type, String id) {
@@ -1421,5 +2029,52 @@ public final class MenuManager implements Listener {
     }
 
     private record PlayerMenuActions(Map<Integer, MenuAction> actions, Map<Integer, MenuAction> rightClickActions, Map<Integer, MenuAction> shiftLeftActions, Map<Integer, MenuAction> shiftRightActions) {
+    }
+
+    private enum MultiEditOwner {
+        ROOM,
+        DOOR_TEMPLATE
+    }
+
+    private enum MultiEditSlotType {
+        DOOR("Door Slots"),
+        FEATURE("Feature Slots");
+
+        private final String label;
+
+        MultiEditSlotType(String label) {
+            this.label = label;
+        }
+
+        private String label() {
+            return label;
+        }
+    }
+
+    private static final class MultiEditSession {
+        private final MultiEditOwner owner;
+        private final String ownerId;
+        private final MultiEditSlotType slotType;
+        private final Set<String> selectedSlotIds = new LinkedHashSet<>();
+        private final List<DoorSlotEntry> doorDraft = new ArrayList<>();
+        private final Set<String> doorTagsDraft = new LinkedHashSet<>();
+        private final List<FeatureSlotEntry> featureDraft = new ArrayList<>();
+        private DoorConnectionRules doorConnectionRulesDraft = DoorConnectionRules.DEFAULT;
+        private boolean doorRuleDraftInitialized;
+        private boolean doorEntriesTouched;
+        private boolean doorTagsTouched;
+        private boolean doorConnectionRulesTouched;
+
+        private MultiEditSession(MultiEditOwner owner, String ownerId, MultiEditSlotType slotType) {
+            this.owner = owner;
+            this.ownerId = ownerId;
+            this.slotType = slotType;
+        }
+    }
+
+    private record UnavailableCandidate(String id, List<String> conflicts, String summary) {
+        private UnavailableCandidate {
+            conflicts = List.copyOf(conflicts);
+        }
     }
 }

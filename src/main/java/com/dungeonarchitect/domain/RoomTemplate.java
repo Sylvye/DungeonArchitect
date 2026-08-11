@@ -8,6 +8,7 @@ public record RoomTemplate(
     String id,
     RoomCategory category,
     int weight,
+    int minimumConnections,
     Set<String> tags,
     IntVector3 size,
     IntVector3 spawn,
@@ -23,9 +24,27 @@ public record RoomTemplate(
         if (weight <= 0) {
             throw new IllegalArgumentException("Room weight must be positive");
         }
+        if (minimumConnections < 0) {
+            throw new IllegalArgumentException("Minimum room connections cannot be negative");
+        }
         tags = Set.copyOf(tags);
         doors = List.copyOf(doors);
         markers = List.copyOf(markers);
         featureSlots = List.copyOf(featureSlots);
+    }
+
+    public RoomTemplate(
+        String id,
+        RoomCategory category,
+        int weight,
+        Set<String> tags,
+        IntVector3 size,
+        IntVector3 spawn,
+        List<DoorSocket> doors,
+        List<RoomMarker> markers,
+        List<RoomFeatureSlot> featureSlots,
+        Path structureFile
+    ) {
+        this(id, category, weight, 0, tags, size, spawn, doors, markers, featureSlots, structureFile);
     }
 }

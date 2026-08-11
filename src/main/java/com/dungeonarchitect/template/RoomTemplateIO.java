@@ -1,6 +1,7 @@
 package com.dungeonarchitect.template;
 
 import com.dungeonarchitect.domain.Direction3;
+import com.dungeonarchitect.domain.DoorConnectionRules;
 import com.dungeonarchitect.domain.DoorSlotEntry;
 import com.dungeonarchitect.domain.DoorSocket;
 import com.dungeonarchitect.domain.FeatureSlotEntry;
@@ -17,6 +18,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -52,6 +54,7 @@ public final class RoomTemplateIO {
         }
         RoomCategory category = enumValue(RoomCategory.class, yaml.getString("category", "GENERIC"));
         int weight = yaml.getInt("weight", 10);
+        int minimumConnections = yaml.getInt("minimumConnections", 0);
         IntVector3 size = size(yaml, structureFile, sizeReader, id, "room", repairLog);
         IntVector3 spawn = yaml.isList("spawn") ? vector(yaml.getIntegerList("spawn")) : null;
         Set<String> tags = new LinkedHashSet<>(yaml.getStringList("tags"));
@@ -67,7 +70,8 @@ public final class RoomTemplateIO {
                 section.getInt("height", 2),
                 section.isList("size") ? vector(section.getIntegerList("size")) : legacyDoorSize(enumValue(Direction3.class, section.getString("facing", "NORTH")), section.getInt("width", 1), section.getInt("height", 2)),
                 new LinkedHashSet<>(section.isList("tags") ? section.getStringList("tags") : List.of(section.getString("socket", "STANDARD").toLowerCase(Locale.ROOT))),
-                doorEntries(section)
+                doorEntries(section),
+                connectionRules(section)
             ));
         }
 
@@ -95,7 +99,7 @@ public final class RoomTemplateIO {
             ));
         }
 
-        RoomTemplate template = new RoomTemplate(id, category, weight, tags, size, spawn, doors, markers, featureSlots, structureFile);
+        RoomTemplate template = new RoomTemplate(id, category, weight, minimumConnections, tags, size, spawn, doors, markers, featureSlots, structureFile);
         return new TemplateLoadStatus<>(template, template.id(), roomDirectory, true, errors, repairLog);
         } catch (RuntimeException ex) {
             if (repairs == null) {
@@ -112,6 +116,7 @@ public final class RoomTemplateIO {
         yaml.set("id", template.id());
         yaml.set("category", template.category().name());
         yaml.set("weight", template.weight());
+        yaml.set("minimumConnections", template.minimumConnections());
         yaml.set("size", list(template.size()));
         yaml.set("spawn", template.spawn() == null ? null : list(template.spawn()));
         yaml.set("tags", new ArrayList<>(template.tags()));
@@ -127,6 +132,23 @@ public final class RoomTemplateIO {
             item.put("height", door.height());
             item.put("size", list(door.size()));
             item.put("tags", new ArrayList<>(door.tags()));
+            if (!door.connectionRules().isDefault()) {
+                Map<String, Object> connection = new LinkedHashMap<>();
+                connection.put("mustConnect", door.connectionRules().mustConnect());
+                if (!door.connectionRules().allowedTags().isEmpty()) {
+                    connection.put("allowedTags", new ArrayList<>(door.connectionRules().allowedTags()));
+                }
+                if (!door.connectionRules().deniedTags().isEmpty()) {
+                    connection.put("deniedTags", new ArrayList<>(door.connectionRules().deniedTags()));
+                }
+                if (!door.connectionRules().allowedRoomTags().isEmpty()) {
+                    connection.put("allowedRoomTags", new ArrayList<>(door.connectionRules().allowedRoomTags()));
+                }
+                if (!door.connectionRules().deniedRoomTags().isEmpty()) {
+                    connection.put("deniedRoomTags", new ArrayList<>(door.connectionRules().deniedRoomTags()));
+                }
+                item.put("connection", connection);
+            }
             List<Map<String, Object>> entries = new ArrayList<>();
             for (DoorSlotEntry entry : door.entries()) {
                 Map<String, Object> entryMap = new LinkedHashMap<>();
@@ -236,6 +258,42 @@ public final class RoomTemplateIO {
             entries.add(new DoorSlotEntry(entry.getString("door", DoorSlotEntry.EMPTY), entry.getInt("weight", 1)));
         }
         return entries;
+    }
+
+    private static DoorConnectionRules connectionRules(ConfigurationSection section) {
+        ConfigurationSection connection = section.getConfigurationSection("connection");
+        if (connection != null) {
+            return new DoorConnectionRules(
+                new LinkedHashSet<>(connection.getStringList("allowedTags")),
+                new LinkedHashSet<>(connection.getStringList("deniedTags")),
+                new LinkedHashSet<>(connection.getStringList("allowedRoomTags")),
+                new LinkedHashSet<>(connection.getStringList("deniedRoomTags")),
+                connection.getBoolean("mustConnect", false)
+            );
+        }
+        Object rawConnection = section.get("connection");
+        if (rawConnection instanceof Map<?, ?> connectionMap) {
+            return new DoorConnectionRules(
+                strings(connectionMap.get("allowedTags")),
+                strings(connectionMap.get("deniedTags")),
+                strings(connectionMap.get("allowedRoomTags")),
+                strings(connectionMap.get("deniedRoomTags")),
+                Boolean.parseBoolean(String.valueOf(connectionMap.containsKey("mustConnect") ? connectionMap.get("mustConnect") : false))
+            );
+        }
+        return DoorConnectionRules.DEFAULT;
+    }
+
+    private static Set<String> strings(Object value) {
+        LinkedHashSet<String> values = new LinkedHashSet<>();
+        if (value instanceof Collection<?> collection) {
+            for (Object item : collection) {
+                if (item != null) {
+                    values.add(String.valueOf(item));
+                }
+            }
+        }
+        return values;
     }
 
     private static IntVector3 legacyDoorSize(Direction3 facing, int width, int height) {

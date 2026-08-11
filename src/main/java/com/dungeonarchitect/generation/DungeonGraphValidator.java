@@ -31,8 +31,28 @@ public final class DungeonGraphValidator {
         }
         List<String> errors = new ArrayList<>();
         validateEdges(graph, byId, doorsById, errors);
+        validateMinimumConnections(graph, byId, errors);
         validateBounds(graph, errors);
         return errors;
+    }
+
+    private void validateMinimumConnections(DungeonGraph graph, Map<String, RoomTemplate> templates, List<String> errors) {
+        int[] connectionCounts = new int[graph.nodes().size()];
+        for (DungeonEdge edge : graph.edges()) {
+            if (edge.fromNode() >= 0 && edge.fromNode() < connectionCounts.length) {
+                connectionCounts[edge.fromNode()]++;
+            }
+            if (edge.toNode() >= 0 && edge.toNode() < connectionCounts.length) {
+                connectionCounts[edge.toNode()]++;
+            }
+        }
+        for (DungeonNode node : graph.nodes()) {
+            RoomTemplate template = templates.get(node.templateId());
+            if (template == null || connectionCounts[node.index()] >= template.minimumConnections()) {
+                continue;
+            }
+            errors.add("Room " + node.index() + " (" + node.templateId() + ") has " + connectionCounts[node.index()] + " connections; requires " + template.minimumConnections());
+        }
     }
 
     private void validateEdges(DungeonGraph graph, Map<String, RoomTemplate> templates, Map<String, DoorTemplate> doorTemplates, List<String> errors) {
@@ -49,6 +69,10 @@ public final class DungeonGraphValidator {
             DoorSocket toDoor = findDoor(toTemplate, edge.toDoorId(), errors);
             if (fromDoor == null || toDoor == null) {
                 continue;
+            }
+            DoorSocket.ConnectionMatch connection = fromDoor.connectionMatch(toDoor, fromTemplate.tags(), toTemplate.tags());
+            if (!connection.compatible()) {
+                errors.add("Edge " + edge.fromNode() + ":" + edge.fromDoorId() + " -> " + edge.toNode() + ":" + edge.toDoorId() + " violates connection rules: " + connection.reason());
             }
             if (edge.fromDoorTemplateId() != null || edge.toDoorTemplateId() != null) {
                 validateTemplateDoorEdge(edge, from, to, fromDoor, toDoor, doorTemplates, errors);

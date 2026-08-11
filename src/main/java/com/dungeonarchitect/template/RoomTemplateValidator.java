@@ -54,6 +54,9 @@ public final class RoomTemplateValidator {
 
     public TemplateValidationResult validate(RoomTemplate template) {
         TemplateValidationResult result = new TemplateValidationResult();
+        if (template.minimumConnections() > template.doors().size()) {
+            result.add(template.id() + ": minimum connections " + template.minimumConnections() + " exceeds its " + template.doors().size() + " door slots");
+        }
         if (!Files.isRegularFile(template.structureFile())) {
             result.add(template.id() + ": missing room.nbt");
         } else if (structureService != null) {

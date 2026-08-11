@@ -33,6 +33,7 @@ import java.util.Locale;
 
 public final class DungeonArchitectPlugin extends JavaPlugin {
     private DungeonManager dungeonManager;
+    private RoomStructureService structureService;
     private RoomTemplateRegistry roomTemplateRegistry;
     private FeatureTemplateRegistry featureTemplateRegistry;
     private DoorTemplateRegistry doorTemplateRegistry;
@@ -43,7 +44,7 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
         saveDefaultConfig();
 
         Path dataPath = getDataFolder().toPath();
-        RoomStructureService structureService = new RoomStructureService(getServer());
+        structureService = new RoomStructureService(getServer());
         featureTemplateRegistry = new FeatureTemplateRegistry(dataPath.resolve("features"), structureService);
         featureTemplateRegistry.reload();
         doorTemplateRegistry = new DoorTemplateRegistry(dataPath.resolve("doors"), structureService);
@@ -56,6 +57,11 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
             ? getConfig().getInt("generation.max-search-steps", 25_000)
             : getConfig().getInt("generation.max-placement-attempts", 25_000);
         int spawnY = getConfig().getInt("worlds.spawn-y", 80);
+        int placementTimeBudgetMillis = getConfig().getInt("generation.placement-time-budget-ms", 8);
+        if (placementTimeBudgetMillis <= 0) {
+            getLogger().warning("generation.placement-time-budget-ms must be positive; using 8 ms");
+            placementTimeBudgetMillis = 8;
+        }
         String worldPrefix = getConfig().getString("worlds.name-prefix", "da_");
         boolean deleteOnDestroy = getConfig().getBoolean("worlds.delete-on-destroy", true);
 
@@ -68,7 +74,8 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
             roomTemplateRegistry,
             new DeterministicDungeonGenerator(maxSearchSteps, spawnY, doorTemplateRegistry::all),
             worldManager,
-            structurePlacer
+            structurePlacer,
+            placementTimeBudgetMillis
         );
 
         Material wandMaterial = Material.matchMaterial(getConfig().getString("authoring.wand-material", "BLAZE_ROD"));
@@ -86,7 +93,8 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
             new NamespacedKey(this, "authoring_selector"),
             wandMaterial,
             defaultCategory,
-            defaultWeight
+            defaultWeight,
+            structureService
         );
 
         getServer().getPluginManager().registerEvents(new AuthoringListener(authoringManager), this);
@@ -131,6 +139,7 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
 
     private void reloadContent() {
         reloadConfig();
+        structureService.clearCache();
         featureTemplateRegistry.reload();
         doorTemplateRegistry.reload();
         roomTemplateRegistry.reload();

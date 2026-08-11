@@ -69,6 +69,19 @@ public final class TemplateDiagnostics {
     }
 
     private static void analyzeRoom(RoomTemplate room, RoomTemplateRegistry rooms, FeatureTemplateRegistry features, DoorTemplateRegistry doors, TemplateValidationResult result) {
+        if (room.minimumConnections() > 0) {
+            int compatibleSlots = 0;
+            for (DoorSocket slot : room.doors()) {
+                if (hasCompatibleOppositeCandidate(room, slot, rooms, doors)) {
+                    compatibleSlots++;
+                }
+            }
+            if (compatibleSlots < room.minimumConnections()) {
+                result.addDiagnostic(warning("room", room.id(), "room", null,
+                    "requires " + room.minimumConnections() + " connections, but only " + compatibleSlots + " door slots have compatible room candidates",
+                    "Lower Minimum Connections or add compatible opposite-facing door slots.", null));
+            }
+        }
         for (DoorSocket slot : room.doors()) {
             if (!hasAssignedDoorTemplate(slot)) {
                 result.addDiagnostic(warning("room", room.id(), "door", slot.id(),
@@ -104,6 +117,11 @@ public final class TemplateDiagnostics {
                 result.addDiagnostic(warning("room", room.id(), "door", slot.id(),
                     "vertical door " + slot.id() + " has no compatible opposite-facing room slot candidate",
                     "Create a matching " + slot.facing().opposite() + " slot in another room and select compatible door templates.", slot.position()));
+            }
+            if (slot.connectionRules().mustConnect() && !hasCompatibleOppositeCandidate(room, slot, rooms, doors)) {
+                result.addDiagnostic(error("room", room.id(), "door", slot.id(),
+                    "required door " + slot.id() + " has no compatible opposite-facing room slot candidate: " + incompatibleOppositeCandidateReason(room, slot, rooms),
+                    "Adjust this slot's connection tags or rules, or create a compatible " + slot.facing().opposite() + " slot.", slot.position()));
             }
         }
         for (RoomFeatureSlot slot : room.featureSlots()) {
@@ -151,6 +169,10 @@ public final class TemplateDiagnostics {
     }
 
     private static boolean hasOppositeVerticalCandidate(RoomTemplate owner, DoorSocket slot, RoomTemplateRegistry rooms, DoorTemplateRegistry doors) {
+        return hasCompatibleOppositeCandidate(owner, slot, rooms, doors);
+    }
+
+    private static boolean hasCompatibleOppositeCandidate(RoomTemplate owner, DoorSocket slot, RoomTemplateRegistry rooms, DoorTemplateRegistry doors) {
         if (rooms == null) {
             return false;
         }
@@ -162,6 +184,9 @@ public final class TemplateDiagnostics {
                 if (candidateSlot.facing() != slot.facing().opposite()) {
                     continue;
                 }
+                if (!slot.compatibleWith(candidateSlot, owner.tags(), candidateRoom.tags())) {
+                    continue;
+                }
                 if (compatibleDoorEntries(slot, candidateSlot, doors)) {
                     return true;
                 }
@@ -170,8 +195,32 @@ public final class TemplateDiagnostics {
         return false;
     }
 
+    private static String incompatibleOppositeCandidateReason(RoomTemplate owner, DoorSocket slot, RoomTemplateRegistry rooms) {
+        if (rooms == null) {
+            return "room templates are unavailable for comparison";
+        }
+        for (RoomTemplate candidateRoom : rooms.all()) {
+            for (DoorSocket candidateSlot : candidateRoom.doors()) {
+                if (candidateRoom.id().equals(owner.id()) && candidateSlot.id().equals(slot.id())) {
+                    continue;
+                }
+                if (candidateSlot.facing() != slot.facing().opposite()) {
+                    continue;
+                }
+                DoorSocket.ConnectionMatch match = slot.connectionMatch(candidateSlot, owner.tags(), candidateRoom.tags());
+                if (!match.compatible()) {
+                    return match.reason();
+                }
+            }
+        }
+        return "no opposite-facing room slot exists";
+    }
+
     private static boolean compatibleDoorEntries(DoorSocket first, DoorSocket second, DoorTemplateRegistry doors) {
-        if (doors == null) {
+        if (!first.compatibleWith(second)) {
+            return false;
+        }
+        if (doors == null || doors.all().isEmpty()) {
             return first.size().equals(second.size());
         }
         List<String> firstEntries = selectedDoorIds(first);

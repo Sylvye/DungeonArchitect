@@ -2,6 +2,7 @@ generation:
   default-room-count: 6
   max-search-steps: 25000
   max-placement-attempts: 250
+  placement-time-budget-ms: 8
 
 worlds:
   name-prefix: "da_"

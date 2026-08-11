@@ -3,6 +3,7 @@ package com.dungeonarchitect.generation;
 import com.dungeonarchitect.domain.BoundingBox3i;
 import com.dungeonarchitect.domain.Direction3;
 import com.dungeonarchitect.domain.DoorSocket;
+import com.dungeonarchitect.domain.DoorConnectionRules;
 import com.dungeonarchitect.domain.DoorSlotEntry;
 import com.dungeonarchitect.domain.DoorTemplate;
 import com.dungeonarchitect.domain.DungeonEdge;
@@ -73,6 +74,8 @@ public final class DeterministicDungeonGenerator {
         RoomTemplate start = starts.getFirst();
         RoomTransform startTransform = new RoomTransform(new IntVector3(0, spawnY, 0), Rotation.NONE, start.size());
         state.nodes.add(new DungeonNode(0, start.id(), start.category(), 0, startTransform));
+        state.connectionCounts.add(0);
+        state.minimumConnections.add(start.minimumConnections());
         state.occupancy.add(0, startTransform.transformedBounds());
         addFrontierDoors(context, state, 0, start, startTransform, null);
 
@@ -93,6 +96,12 @@ public final class DeterministicDungeonGenerator {
     }
 
     private DungeonGenerationResult validatedResult(SearchState state, GenerationContext context) {
+        if (hasRequiredOpenDoors(state)) {
+            return DungeonGenerationResult.failure("Required door slots remain unconnected");
+        }
+        if (minimumConnectionDeficit(state) > 0) {
+            return DungeonGenerationResult.failure(unmetMinimumMessage(state));
+        }
         DungeonGraph graph = new DungeonGraph(state.nodes, state.edges);
         List<String> validationErrors = validator.validate(graph, context.allTemplates, context.doorsById.values());
         if (!validationErrors.isEmpty()) {
@@ -103,7 +112,15 @@ public final class DeterministicDungeonGenerator {
 
     private boolean search(GenerationContext context, SearchState state, Random random, SearchStats stats) {
         if (state.nodes.size() == context.targetRoomCount) {
-            return true;
+            return !hasRequiredOpenDoors(state) && minimumConnectionDeficit(state) == 0;
+        }
+        if (requiredOpenDoorCount(state) > context.targetRoomCount - state.nodes.size()) {
+            return false;
+        }
+        if (!canMeetMinimumConnections(state, context.targetRoomCount - state.nodes.size())) {
+            stats.minimumConnectionRejects++;
+            stats.bestMinimumConnectionDeficit = Math.max(stats.bestMinimumConnectionDeficit, minimumConnectionDeficit(state));
+            return false;
         }
         stats.observe(state);
         if (stats.searchSteps >= maxSearchSteps) {
@@ -112,15 +129,19 @@ public final class DeterministicDungeonGenerator {
         }
         stats.searchSteps++;
 
-        Selection selection = selectFrontierDoor(context, state);
+        Selection selection = selectFrontierDoor(context, state, stats);
         if (selection == null) {
             return false;
         }
 
         OpenDoor selectedDoor = state.openDoors.get(selection.openIndex);
-        List<Placement> selectedCandidates = candidatePlacements(context, state, selectedDoor, stats);
+        List<Placement> selectedCandidates = selection.candidates;
         OpenDoor existing = state.openDoors.remove(selection.openIndex);
         if (selectedCandidates.isEmpty()) {
+            if (existing.door.connectionRules().mustConnect()) {
+                state.openDoors.add(selection.openIndex, existing);
+                return false;
+            }
             state.exhaustedDoors.add(existing);
             if (search(context, state, random, stats)) {
                 return true;
@@ -151,18 +172,33 @@ public final class DeterministicDungeonGenerator {
         return false;
     }
 
-    private Selection selectFrontierDoor(GenerationContext context, SearchState state) {
-        Selection best = null;
+    private Selection selectFrontierDoor(GenerationContext context, SearchState state, SearchStats stats) {
+        Selection bestRequired = null;
+        Selection bestMinimum = null;
+        Selection bestOptional = null;
         for (int i = 0; i < state.openDoors.size(); i++) {
-            List<Placement> candidates = candidatePlacements(context, state, state.openDoors.get(i), null);
-            if (candidates.isEmpty()) {
+            List<Placement> candidates = candidatePlacements(context, state, state.openDoors.get(i), stats);
+            OpenDoor openDoor = state.openDoors.get(i);
+            if (candidates.isEmpty() && openDoor.door.connectionRules().mustConnect()) {
                 return new Selection(i, candidates);
             }
-            if (best == null || candidates.size() < best.candidates.size()) {
-                best = new Selection(i, candidates);
+            Selection candidate = new Selection(i, candidates);
+            if (openDoor.door.connectionRules().mustConnect()) {
+                if (bestRequired == null || candidates.size() < bestRequired.candidates.size()) {
+                    bestRequired = candidate;
+                }
+            } else if (state.connectionCounts.get(openDoor.nodeIndex) < state.minimumConnections.get(openDoor.nodeIndex)) {
+                if (bestMinimum == null || candidates.size() < bestMinimum.candidates.size()) {
+                    bestMinimum = candidate;
+                }
+            } else if (bestOptional == null || candidates.size() < bestOptional.candidates.size()) {
+                bestOptional = candidate;
             }
         }
-        return best;
+        if (bestRequired != null) {
+            return bestRequired;
+        }
+        return bestMinimum != null ? bestMinimum : bestOptional;
     }
 
     private List<Placement> candidatePlacements(GenerationContext context, SearchState state, OpenDoor existing, SearchStats stats) {
@@ -175,9 +211,11 @@ public final class DeterministicDungeonGenerator {
             existingDoorBounds.size(),
             existing.door.socketType(),
             existing.door.tags(),
-            existing.door.entries()
+            existing.door.entries(),
+            existing.door.connectionRules(),
+            existing.roomTags
         );
-        List<CandidatePrototype> prototypes = context.candidateCache.computeIfAbsent(signature, key -> buildCandidatePrototypes(context, existing.door, key));
+        List<CandidatePrototype> prototypes = context.candidateCache.computeIfAbsent(signature, key -> buildCandidatePrototypes(context, existing.door, existing.roomTags, key));
         if (prototypes.isEmpty() && stats != null) {
             stats.compatibilityRejects++;
         }
@@ -200,12 +238,15 @@ public final class DeterministicDungeonGenerator {
         return placements;
     }
 
-    private List<CandidatePrototype> buildCandidatePrototypes(GenerationContext context, DoorSocket existingDoor, WorldSlotSignature existing) {
+    private List<CandidatePrototype> buildCandidatePrototypes(GenerationContext context, DoorSocket existingDoor, Set<String> existingRoomTags, WorldSlotSignature existing) {
         List<CandidatePrototype> prototypes = new ArrayList<>();
         List<DoorChoice> existingChoices = context.templateDoorMode ? doorChoices(existingDoor, context) : List.of();
         for (RoomTemplate template : context.candidateTemplates) {
+            if (template.minimumConnections() > template.doors().size()) {
+                continue;
+            }
             for (DoorSocket candidateDoor : template.doors()) {
-                if (!candidateDoor.compatibleWith(existingDoor)) {
+                if (!candidateDoor.compatibleWith(existingDoor, template.tags(), existingRoomTags)) {
                     continue;
                 }
                 List<DoorChoice> candidateChoices = context.templateDoorMode ? doorChoices(candidateDoor, context) : List.of();
@@ -284,11 +325,15 @@ public final class DeterministicDungeonGenerator {
     private UndoRecord applyPlacement(GenerationContext context, SearchState state, OpenDoor existing, Placement placement) {
         int nodeIndex = state.nodes.size();
         int firstNewOpenDoor = state.openDoors.size();
+        int previousConnectionCount = state.connectionCounts.get(existing.nodeIndex);
         state.nodes.add(new DungeonNode(nodeIndex, placement.template.id(), placement.template.category(), state.nodes.get(existing.nodeIndex).depth() + 1, placement.transform));
+        state.connectionCounts.set(existing.nodeIndex, previousConnectionCount + 1);
+        state.connectionCounts.add(1);
+        state.minimumConnections.add(placement.template.minimumConnections());
         state.edges.add(new DungeonEdge(existing.nodeIndex, existing.door.id(), placement.existingDoorTemplateId, nodeIndex, placement.door.id(), placement.candidateDoorTemplateId));
         state.occupancy.add(nodeIndex, placement.bounds);
         addFrontierDoors(context, state, nodeIndex, placement.template, placement.transform, placement.door.id());
-        return new UndoRecord(nodeIndex, firstNewOpenDoor);
+        return new UndoRecord(nodeIndex, firstNewOpenDoor, existing.nodeIndex, previousConnectionCount);
     }
 
     private void undo(SearchState state, UndoRecord undo) {
@@ -297,6 +342,9 @@ public final class DeterministicDungeonGenerator {
         }
         state.edges.removeLast();
         state.occupancy.remove(undo.nodeIndex);
+        state.connectionCounts.removeLast();
+        state.minimumConnections.removeLast();
+        state.connectionCounts.set(undo.sourceNodeIndex, undo.previousSourceConnectionCount);
         state.nodes.removeLast();
     }
 
@@ -305,10 +353,59 @@ public final class DeterministicDungeonGenerator {
             if (door.id().equals(connectedDoorId)) {
                 continue;
             }
-            if (!context.templateDoorMode || !doorChoices(door, context).isEmpty()) {
-                state.openDoors.add(new OpenDoor(nodeIndex, door, transform));
+            if (!context.templateDoorMode || !doorChoices(door, context).isEmpty() || door.connectionRules().mustConnect()) {
+                state.openDoors.add(new OpenDoor(nodeIndex, door, transform, template.tags()));
             }
         }
+    }
+
+    private boolean hasRequiredOpenDoors(SearchState state) {
+        return requiredOpenDoorCount(state) > 0;
+    }
+
+    private int requiredOpenDoorCount(SearchState state) {
+        return (int) state.openDoors.stream().filter(openDoor -> openDoor.door.connectionRules().mustConnect()).count();
+    }
+
+    private boolean canMeetMinimumConnections(SearchState state, int remainingPlacements) {
+        if (minimumConnectionDeficit(state) > remainingPlacements) {
+            return false;
+        }
+        for (int nodeIndex = 0; nodeIndex < state.nodes.size(); nodeIndex++) {
+            int deficit = state.minimumConnections.get(nodeIndex) - state.connectionCounts.get(nodeIndex);
+            if (deficit <= 0) {
+                continue;
+            }
+            int availableDoors = 0;
+            for (OpenDoor openDoor : state.openDoors) {
+                if (openDoor.nodeIndex == nodeIndex) {
+                    availableDoors++;
+                }
+            }
+            if (availableDoors < deficit) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static int minimumConnectionDeficit(SearchState state) {
+        int deficit = 0;
+        for (int nodeIndex = 0; nodeIndex < state.connectionCounts.size(); nodeIndex++) {
+            deficit += Math.max(0, state.minimumConnections.get(nodeIndex) - state.connectionCounts.get(nodeIndex));
+        }
+        return deficit;
+    }
+
+    private String unmetMinimumMessage(SearchState state) {
+        for (int nodeIndex = 0; nodeIndex < state.nodes.size(); nodeIndex++) {
+            int count = state.connectionCounts.get(nodeIndex);
+            int minimum = state.minimumConnections.get(nodeIndex);
+            if (count < minimum) {
+                return "Room " + nodeIndex + " (" + state.nodes.get(nodeIndex).templateId() + ") has " + count + " connections; requires " + minimum;
+            }
+        }
+        return "Room minimum connections remain unmet";
     }
 
     private List<DoorChoice> doorChoices(DoorSocket slot, GenerationContext context) {
@@ -349,6 +446,8 @@ public final class DeterministicDungeonGenerator {
             + ": rooms placed=" + stats.bestRooms
             + ", open doors=" + stats.bestOpenDoors
             + ", exhausted doors=" + stats.bestExhaustedDoors
+            + ", unmet room connections=" + stats.bestMinimumConnectionDeficit
+            + ", minimum connection rejects=" + stats.minimumConnectionRejects
             + ", collision rejects=" + stats.collisionRejects
             + ", compatibility rejects=" + stats.compatibilityRejects
             + ", search steps=" + stats.searchSteps
@@ -378,6 +477,8 @@ public final class DeterministicDungeonGenerator {
         private final List<DungeonEdge> edges = new ArrayList<>();
         private final List<OpenDoor> openDoors = new ArrayList<>();
         private final List<OpenDoor> exhaustedDoors = new ArrayList<>();
+        private final List<Integer> connectionCounts = new ArrayList<>();
+        private final List<Integer> minimumConnections = new ArrayList<>();
         private final SpatialRoomIndex occupancy = new SpatialRoomIndex();
     }
 
@@ -389,17 +490,20 @@ public final class DeterministicDungeonGenerator {
         private int bestRooms;
         private int bestOpenDoors;
         private int bestExhaustedDoors;
+        private int bestMinimumConnectionDeficit;
+        private int minimumConnectionRejects;
 
         private void observe(SearchState state) {
             if (state.nodes.size() > bestRooms || (state.nodes.size() == bestRooms && state.exhaustedDoors.size() > bestExhaustedDoors)) {
                 bestRooms = state.nodes.size();
                 bestOpenDoors = state.openDoors.size();
                 bestExhaustedDoors = state.exhaustedDoors.size();
+                bestMinimumConnectionDeficit = minimumConnectionDeficit(state);
             }
         }
     }
 
-    private record OpenDoor(int nodeIndex, DoorSocket door, RoomTransform transform) {
+    private record OpenDoor(int nodeIndex, DoorSocket door, RoomTransform transform, Set<String> roomTags) {
     }
 
     private record Placement(RoomTemplate template, DoorSocket door, RoomTransform transform, BoundingBox3i bounds, String existingDoorTemplateId, String candidateDoorTemplateId, int weight) {
@@ -420,9 +524,9 @@ public final class DeterministicDungeonGenerator {
     private record OrderedPlacement(Placement placement, double orderKey) {
     }
 
-    private record UndoRecord(int nodeIndex, int firstNewOpenDoor) {
+    private record UndoRecord(int nodeIndex, int firstNewOpenDoor, int sourceNodeIndex, int previousSourceConnectionCount) {
     }
 
-    private record WorldSlotSignature(boolean templateDoorMode, Direction3 facing, IntVector3 size, SocketType socketType, Set<String> tags, List<DoorSlotEntry> entries) {
+    private record WorldSlotSignature(boolean templateDoorMode, Direction3 facing, IntVector3 size, SocketType socketType, Set<String> tags, List<DoorSlotEntry> entries, DoorConnectionRules connectionRules, Set<String> roomTags) {
     }
 }

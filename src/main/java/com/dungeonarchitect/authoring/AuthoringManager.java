@@ -77,8 +77,13 @@ public final class AuthoringManager {
     private final RoomTemplateValidator validator = new RoomTemplateValidator();
     private final FeatureTemplateValidator featureValidator;
     private final DoorTemplateValidator doorValidator;
+    private final com.dungeonarchitect.template.RoomStructureService structureService;
 
     public AuthoringManager(Plugin plugin, Server server, Path roomsDirectory, Path featuresDirectory, NamespacedKey wandKey, NamespacedKey selectorKey, Material wandMaterial, RoomCategory defaultCategory, int defaultWeight) {
+        this(plugin, server, roomsDirectory, featuresDirectory, wandKey, selectorKey, wandMaterial, defaultCategory, defaultWeight, new com.dungeonarchitect.template.RoomStructureService(server));
+    }
+
+    public AuthoringManager(Plugin plugin, Server server, Path roomsDirectory, Path featuresDirectory, NamespacedKey wandKey, NamespacedKey selectorKey, Material wandMaterial, RoomCategory defaultCategory, int defaultWeight, com.dungeonarchitect.template.RoomStructureService structureService) {
         this.plugin = plugin;
         this.server = server;
         this.roomsDirectory = roomsDirectory;
@@ -90,8 +95,9 @@ public final class AuthoringManager {
         this.wandMaterial = wandMaterial;
         this.defaultCategory = defaultCategory;
         this.defaultWeight = defaultWeight;
-        this.featureValidator = new FeatureTemplateValidator(new com.dungeonarchitect.template.RoomStructureService(server));
-        this.doorValidator = new DoorTemplateValidator(new com.dungeonarchitect.template.RoomStructureService(server));
+        this.structureService = structureService;
+        this.featureValidator = new FeatureTemplateValidator(structureService);
+        this.doorValidator = new DoorTemplateValidator(structureService);
     }
 
     public ItemStack createWand() {
@@ -548,12 +554,15 @@ public final class AuthoringManager {
         if (!capturedSize.equals(bounds.size())) {
             throw new IllegalStateException("Captured structure size " + capturedSize + " did not match selected bounds size " + bounds.size());
         }
-        server.getStructureManager().saveStructure(roomDirectory.resolve("room.nbt").toFile(), structure);
+        Path structureFile = roomDirectory.resolve("room.nbt");
+        server.getStructureManager().saveStructure(structureFile.toFile(), structure);
+        structureService.invalidate(structureFile);
 
         RoomTemplate template = new RoomTemplate(
             session.roomId(),
             session.category(),
             session.weight(),
+            session.minimumConnections(),
             session.tags(),
             bounds.size(),
             session.spawn(),
@@ -593,7 +602,9 @@ public final class AuthoringManager {
         if (!capturedSize.equals(bounds.size())) {
             throw new IllegalStateException("Captured feature size " + capturedSize + " did not match selected bounds size " + bounds.size());
         }
-        server.getStructureManager().saveStructure(featureDirectory.resolve("feature.nbt").toFile(), structure);
+        Path structureFile = featureDirectory.resolve("feature.nbt");
+        server.getStructureManager().saveStructure(structureFile.toFile(), structure);
+        structureService.invalidate(structureFile);
         FeatureTemplate template = new FeatureTemplate(session.roomId(), bounds.size(), session.tags(), featureDirectory.resolve("feature.nbt"));
         FeatureTemplateIO.save(template, featureDirectory);
         return featureValidator.validate(template);
@@ -626,7 +637,9 @@ public final class AuthoringManager {
         if (!capturedSize.equals(bounds.size())) {
             throw new IllegalStateException("Captured door size " + capturedSize + " did not match selected bounds size " + bounds.size());
         }
-        server.getStructureManager().saveStructure(doorDirectory.resolve("door.nbt").toFile(), structure);
+        Path structureFile = doorDirectory.resolve("door.nbt");
+        server.getStructureManager().saveStructure(structureFile.toFile(), structure);
+        structureService.invalidate(structureFile);
         DoorTemplate template = new DoorTemplate(session.roomId(), bounds.size(), session.tags(), session.markers(), session.featureSlots(), session.gateway(), doorDirectory.resolve("door.nbt"));
         DoorTemplateIO.save(template, doorDirectory);
         return doorValidator.validate(template);

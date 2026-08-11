@@ -36,7 +36,7 @@ public final class DoorGeometry {
     public static RoomTransform doorTransform(DoorSocket slot, DoorTemplate door, RoomTransform roomTransform) {
         Direction3 transformedSlotFacing = roomTransform.transformFacing(slot.facing());
         BoundingBox3i slotBounds = transformedBounds(slot, roomTransform);
-        DoorSocket transformedSlot = new DoorSocket(slot.id(), slotBounds.min(), slotBounds.size(), transformedSlotFacing, slot.tags(), slot.entries());
+        DoorSocket transformedSlot = new DoorSocket(slot.id(), slotBounds.min(), transformedSlotFacing, slot.socketType(), slot.width(), slot.height(), slotBounds.size(), slot.tags(), slot.entries(), slot.connectionRules());
         DoorTemplateMatcher.DoorTemplateMatchResult match = DoorTemplateMatcher.match(transformedSlot, door);
         if (!match.matched()) {
             throw new IllegalArgumentException("Door " + door.id() + " does not match slot " + slot.id() + ": " + match.reason());

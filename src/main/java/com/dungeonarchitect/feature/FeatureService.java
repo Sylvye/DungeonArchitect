@@ -61,8 +61,8 @@ public final class FeatureService {
         if (slot.entries().isEmpty()) {
             return FeatureRollResult.noEntries(slot);
         }
-        FeatureSlotEntry selected = select(slot.entries(), random);
         int total = totalWeight(slot.entries());
+        FeatureSlotEntry selected = select(slot.entries(), random, total);
         if (selected.featureId().equals(FeatureSlotEntry.EMPTY)) {
             return new FeatureRollResult(slot.id(), slot.entries(), selected.featureId(), selected.weight(), total, FeatureRollStatus.EMPTY, "selected empty", null);
         }
@@ -79,6 +79,10 @@ public final class FeatureService {
 
     public static FeatureSlotEntry select(List<FeatureSlotEntry> entries, Random random) {
         int total = totalWeight(entries);
+        return select(entries, random, total);
+    }
+
+    private static FeatureSlotEntry select(List<FeatureSlotEntry> entries, Random random, int total) {
         if (total <= 0) {
             throw new IllegalArgumentException("Feature entries must have positive total weight");
         }
@@ -121,7 +125,7 @@ public final class FeatureService {
     }
 
     private void placeFeature(World world, RoomTransform roomTransform, RoomFeatureSlot slot, FeatureTemplate feature, Rotation featureRotation, long dungeonSeed, int nodeIndex) throws IOException {
-        Structure structure = structureService.server().getStructureManager().loadStructure(feature.structureFile().toFile());
+        Structure structure = structureService.loadStructure(feature.structureFile());
         IntVector3 nbtSize = new IntVector3(structure.getSize().getBlockX(), structure.getSize().getBlockY(), structure.getSize().getBlockZ());
         if (!nbtSize.equals(feature.size())) {
             throw new IOException("Feature " + feature.id() + " feature.nbt is " + DiagnosticText.size(nbtSize) + ", but feature.yml says " + DiagnosticText.size(feature.size()) + ". Re-save this feature.");
@@ -132,7 +136,7 @@ public final class FeatureService {
         IntVector3 origin = transformedLocalBounds(roomTransform, localFeatureMin, rotatedFeatureSize).min();
         RoomTransform featureTransform = new RoomTransform(origin, worldRotation, feature.size());
         IntVector3 pasteOrigin = RoomStructurePlacer.pasteOrigin(featureTransform);
-        logger.info("Placing feature " + feature.id()
+        logger.fine(() -> "Placing feature " + feature.id()
             + " slot=" + slot.id()
             + " origin=" + origin
             + " pasteOrigin=" + pasteOrigin

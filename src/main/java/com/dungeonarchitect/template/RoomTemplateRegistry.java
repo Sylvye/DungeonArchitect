@@ -182,7 +182,7 @@ public final class RoomTemplateRegistry {
         }
         RoomTemplate sourceTemplate = loadVisibleTemplateForOperation(oldId, source, "duplication");
         copyDirectory(source, target);
-        RoomTemplate renamed = new RoomTemplate(newId, sourceTemplate.category(), sourceTemplate.weight(), sourceTemplate.tags(), sourceTemplate.size(), sourceTemplate.spawn(), sourceTemplate.doors(), sourceTemplate.markers(), sourceTemplate.featureSlots(), target.resolve("room.nbt"));
+        RoomTemplate renamed = new RoomTemplate(newId, sourceTemplate.category(), sourceTemplate.weight(), sourceTemplate.minimumConnections(), sourceTemplate.tags(), sourceTemplate.size(), sourceTemplate.spawn(), sourceTemplate.doors(), sourceTemplate.markers(), sourceTemplate.featureSlots(), target.resolve("room.nbt"));
         RoomTemplateIO.save(renamed, target);
         reload();
         return renamed;
@@ -199,7 +199,7 @@ public final class RoomTemplateRegistry {
         }
         RoomTemplate sourceTemplate = loadVisibleTemplateForOperation(oldId, source, "rename");
         Files.move(source, target);
-        RoomTemplate renamed = new RoomTemplate(newId, sourceTemplate.category(), sourceTemplate.weight(), sourceTemplate.tags(), sourceTemplate.size(), sourceTemplate.spawn(), sourceTemplate.doors(), sourceTemplate.markers(), sourceTemplate.featureSlots(), target.resolve("room.nbt"));
+        RoomTemplate renamed = new RoomTemplate(newId, sourceTemplate.category(), sourceTemplate.weight(), sourceTemplate.minimumConnections(), sourceTemplate.tags(), sourceTemplate.size(), sourceTemplate.spawn(), sourceTemplate.doors(), sourceTemplate.markers(), sourceTemplate.featureSlots(), target.resolve("room.nbt"));
         RoomTemplateIO.save(renamed, target);
         reload();
         return renamed;
@@ -225,7 +225,7 @@ public final class RoomTemplateRegistry {
                     slots.add(slot.withEntries(entries));
                 }
                 if (changed) {
-                    RoomTemplate updated = new RoomTemplate(template.id(), template.category(), template.weight(), template.tags(), template.size(), template.spawn(), template.doors(), template.markers(), slots, template.structureFile());
+                    RoomTemplate updated = new RoomTemplate(template.id(), template.category(), template.weight(), template.minimumConnections(), template.tags(), template.size(), template.spawn(), template.doors(), template.markers(), slots, template.structureFile());
                     RoomTemplateIO.save(updated, directory);
                 }
             }
@@ -253,7 +253,7 @@ public final class RoomTemplateRegistry {
                     doors.add(door.withEntries(entries));
                 }
                 if (changed) {
-                    RoomTemplate updated = new RoomTemplate(template.id(), template.category(), template.weight(), template.tags(), template.size(), template.spawn(), doors, template.markers(), template.featureSlots(), template.structureFile());
+                    RoomTemplate updated = new RoomTemplate(template.id(), template.category(), template.weight(), template.minimumConnections(), template.tags(), template.size(), template.spawn(), doors, template.markers(), template.featureSlots(), template.structureFile());
                     RoomTemplateIO.save(updated, directory);
                 }
             }
@@ -347,7 +347,7 @@ public final class RoomTemplateRegistry {
         if (!changed) {
             return new CleanupResult(template, false, List.of());
         }
-        return new CleanupResult(new RoomTemplate(template.id(), template.category(), template.weight(), template.tags(), template.size(), template.spawn(), doors, template.markers(), features, template.structureFile()), true, repairs);
+        return new CleanupResult(new RoomTemplate(template.id(), template.category(), template.weight(), template.minimumConnections(), template.tags(), template.size(), template.spawn(), doors, template.markers(), features, template.structureFile()), true, repairs);
     }
 
     private record CleanupResult(RoomTemplate template, boolean changed, List<String> repairs) {

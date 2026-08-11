@@ -106,8 +106,8 @@ public final class DoorService {
         if (slot.entries().isEmpty()) {
             return new DoorRollResult(slot.id(), slot.entries(), null, 0, 0, DoorRollStatus.NO_ENTRIES, "slot has no door entries");
         }
-        DoorSlotEntry selected = select(slot.entries(), random);
         int total = totalWeight(slot.entries());
+        DoorSlotEntry selected = select(slot.entries(), random, total);
         if (selected.doorId().equals(DoorSlotEntry.EMPTY)) {
             return new DoorRollResult(slot.id(), slot.entries(), selected.doorId(), selected.weight(), total, DoorRollStatus.EMPTY, "selected empty");
         }
@@ -124,6 +124,10 @@ public final class DoorService {
 
     public static DoorSlotEntry select(List<DoorSlotEntry> entries, Random random) {
         int total = totalWeight(entries);
+        return select(entries, random, total);
+    }
+
+    private static DoorSlotEntry select(List<DoorSlotEntry> entries, Random random, int total) {
         if (total <= 0) {
             throw new IllegalArgumentException("Door entries must have positive total weight");
         }
@@ -154,7 +158,7 @@ public final class DoorService {
             logger.warning("Skipped door " + door.id() + " for slot " + slot.id() + ": transformed bounds " + DiagnosticText.box(doorBounds) + " do not fit room bounds " + DiagnosticText.box(roomBounds));
             return;
         }
-        Structure structure = structureService.server().getStructureManager().loadStructure(door.structureFile().toFile());
+        Structure structure = structureService.loadStructure(door.structureFile());
         IntVector3 nbtSize = new IntVector3(structure.getSize().getBlockX(), structure.getSize().getBlockY(), structure.getSize().getBlockZ());
         if (!nbtSize.equals(door.size())) {
             throw new IOException("Door " + door.id() + " door.nbt is " + DiagnosticText.size(nbtSize) + ", but door.yml says " + DiagnosticText.size(door.size()) + ". Re-save this door.");
