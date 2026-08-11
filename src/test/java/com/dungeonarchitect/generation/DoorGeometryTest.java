@@ -62,6 +62,38 @@ final class DoorGeometryTest {
     }
 
     @Test
+    void smallerHorizontalDoorsAlignToSlotBottomOnEveryWall() {
+        for (Direction3 facing : List.of(Direction3.NORTH, Direction3.SOUTH, Direction3.EAST, Direction3.WEST)) {
+            IntVector3 slotPosition = switch (facing) {
+                case NORTH -> new IntVector3(8, 2, 0);
+                case SOUTH -> new IntVector3(8, 2, 20);
+                case EAST -> new IntVector3(20, 2, 8);
+                case WEST -> new IntVector3(0, 2, 8);
+                default -> throw new IllegalStateException();
+            };
+            IntVector3 slotSize = switch (facing) {
+                case NORTH, SOUTH -> new IntVector3(5, 6, 1);
+                case EAST, WEST -> new IntVector3(1, 6, 5);
+                default -> throw new IllegalStateException();
+            };
+            DoorSocket slot = new DoorSocket("slot", slotPosition, slotSize, facing, Set.of(), List.of());
+            DoorTemplate door = new DoorTemplate(
+                "arch_" + facing.name().toLowerCase(),
+                new IntVector3(3, 4, 1),
+                Set.of(),
+                List.of(),
+                List.of(),
+                new DoorGateway(new IntVector3(1, 0, 0), new IntVector3(1, 4, 1), Direction3.NORTH),
+                Path.of("door.nbt")
+            );
+
+            RoomTransform transform = DoorGeometry.doorTransform(slot, door, new RoomTransform(IntVector3.ZERO, Rotation.NONE, new IntVector3(21, 10, 21)));
+
+            assertEquals(slotPosition.y(), transform.transformedBounds().min().y(), facing.name());
+        }
+    }
+
+    @Test
     void smallerVerticalDoorTransformAlignsGatewayToCeilingEdge() {
         DoorSocket slot = new DoorSocket("ceiling", new IntVector3(8, 9, 7), new IntVector3(5, 1, 5), Direction3.UP, Set.of(), List.of());
         DoorTemplate door = new DoorTemplate(

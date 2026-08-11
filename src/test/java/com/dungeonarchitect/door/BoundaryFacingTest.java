@@ -5,6 +5,8 @@ import com.dungeonarchitect.domain.Direction3;
 import com.dungeonarchitect.domain.IntVector3;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -39,8 +41,17 @@ final class BoundaryFacingTest {
     @Test
     void rejectsNonTouchingAndTiedSelections() {
         assertThrows(IllegalArgumentException.class, () -> BoundaryFacing.infer(bounds(8, 2, 8, 10, 5, 8), PARENT, "Door slot"));
-        assertThrows(IllegalArgumentException.class, () -> BoundaryFacing.infer(bounds(0, 2, 0, 2, 5, 2), PARENT, "Door slot"));
-        assertThrows(IllegalArgumentException.class, () -> BoundaryFacing.infer(bounds(0, 0, 0, 2, 2, 2), PARENT, "Door slot"));
+        assertThrows(BoundaryFacing.AmbiguousFacingException.class, () -> BoundaryFacing.infer(bounds(0, 2, 0, 2, 5, 2), PARENT, "Door slot"));
+        assertThrows(BoundaryFacing.AmbiguousFacingException.class, () -> BoundaryFacing.infer(bounds(0, 0, 0, 2, 2, 2), PARENT, "Door slot"));
+    }
+
+    @Test
+    void exposesAllFacesForAmbiguousSelections() {
+        SelectionBounds child = bounds(0, 2, 0, 2, 5, 2);
+
+        assertEquals(List.of(Direction3.NORTH, Direction3.WEST), BoundaryFacing.validFaces(child, PARENT, "Door slot"));
+        BoundaryFacing.requireValidFace(Direction3.WEST, child, PARENT, "Door slot");
+        assertThrows(IllegalArgumentException.class, () -> BoundaryFacing.requireValidFace(Direction3.SOUTH, child, PARENT, "Door slot"));
     }
 
     private static SelectionBounds bounds(int minX, int minY, int minZ, int maxX, int maxY, int maxZ) {

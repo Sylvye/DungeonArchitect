@@ -446,8 +446,8 @@ public final class AuthoringManager {
             .orElseThrow(() -> new IllegalStateException("Select the door region with the wand first"));
         SelectionBounds local = current.toLocal(roomBounds);
         String id = requestedId == null || requestedId.isBlank() ? "door_" + session.nextDoorNumber() : requestedId;
-        Direction3 inferredFacing = BoundaryFacing.infer(local, SelectionBounds.between(IntVector3.ZERO, roomBounds.size().subtract(new IntVector3(1, 1, 1))), "Door slot");
-        Direction3 slotFacing = facing == null ? inferredFacing : facing;
+        SelectionBounds parent = SelectionBounds.between(IntVector3.ZERO, roomBounds.size().subtract(new IntVector3(1, 1, 1)));
+        Direction3 slotFacing = resolveFacing(facing, local, parent, "Door slot");
         IntVector3 size = local.size();
         int width = switch (slotFacing) {
             case NORTH, SOUTH -> size.x();
@@ -464,6 +464,10 @@ public final class AuthoringManager {
     }
 
     public DoorGateway saveDoorGateway(Player player) {
+        return saveDoorGateway(player, null);
+    }
+
+    public DoorGateway saveDoorGateway(Player player, Direction3 facing) {
         AuthoringSession session = session(player);
         if (!session.doorSession()) {
             throw new IllegalStateException("Start a door session with /da door create <id>");
@@ -473,8 +477,8 @@ public final class AuthoringManager {
         SelectionBounds current = session.currentSelection()
             .orElseThrow(() -> new IllegalStateException("Select the gateway region with the wand first"));
         SelectionBounds local = current.toLocal(doorBounds);
-        Direction3 facing = BoundaryFacing.infer(local, SelectionBounds.between(IntVector3.ZERO, doorBounds.size().subtract(new IntVector3(1, 1, 1))), "Gateway");
-        DoorGateway gateway = new DoorGateway(local.min(), local.size(), facing);
+        Direction3 gatewayFacing = resolveFacing(facing, local, SelectionBounds.between(IntVector3.ZERO, doorBounds.size().subtract(new IntVector3(1, 1, 1))), "Gateway");
+        DoorGateway gateway = new DoorGateway(local.min(), local.size(), gatewayFacing);
         session.gateway(gateway);
         selectComponent(player, "gateway", "gateway");
         return gateway;
@@ -706,6 +710,10 @@ public final class AuthoringManager {
     }
 
     public ComponentSelection updateComponentBounds(Player player, String type, String id) {
+        return updateComponentBounds(player, type, id, null);
+    }
+
+    public ComponentSelection updateComponentBounds(Player player, String type, String id, Direction3 facing) {
         AuthoringSession session = session(player);
         if (!isRoomComponentSession(session)) {
             throw new IllegalStateException("Save room bounds first with /da room bounds");
@@ -715,11 +723,7 @@ public final class AuthoringManager {
             .orElseThrow(() -> new IllegalStateException("Select the new component bounds with the wand first"));
         SelectionBounds local = current.toLocal(roomBounds);
         boolean updated = switch (type.toLowerCase(java.util.Locale.ROOT)) {
-            case "door" -> session.updateDoorBounds(
-                id,
-                local,
-                BoundaryFacing.infer(local, SelectionBounds.between(IntVector3.ZERO, roomBounds.size().subtract(new IntVector3(1, 1, 1))), "Door slot")
-            );
+            case "door" -> session.updateDoorBounds(id, local, resolveFacing(facing, local, SelectionBounds.between(IntVector3.ZERO, roomBounds.size().subtract(new IntVector3(1, 1, 1))), "Door slot"));
             case "marker" -> session.updateMarkerPosition(id, local.min());
             case "feature" -> session.updateFeatureSlotBounds(id, local);
             default -> throw new IllegalArgumentException("Unknown component type " + type);
@@ -733,6 +737,14 @@ public final class AuthoringManager {
     public void cancelEdit(Player player) {
         clearExistingEditCopy(player);
         sessions.remove(player.getUniqueId());
+    }
+
+    private Direction3 resolveFacing(Direction3 requestedFacing, SelectionBounds child, SelectionBounds parent, String label) {
+        if (requestedFacing == null) {
+            return BoundaryFacing.infer(child, parent, label);
+        }
+        BoundaryFacing.requireValidFace(requestedFacing, child, parent, label);
+        return requestedFacing;
     }
 
     private List<ComponentSelection> componentSelections(AuthoringSession session) {

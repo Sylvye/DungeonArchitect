@@ -1,6 +1,10 @@
 package com.dungeonarchitect.door;
 
 import com.dungeonarchitect.domain.DoorTemplate;
+import com.dungeonarchitect.domain.FeatureSlotEntry;
+import com.dungeonarchitect.domain.RoomFeatureSlot;
+import com.dungeonarchitect.feature.FeatureMatcher;
+import com.dungeonarchitect.feature.FeatureTemplateRegistry;
 import com.dungeonarchitect.template.RoomStructureService;
 import com.dungeonarchitect.template.TemplateLoadStatus;
 import com.dungeonarchitect.template.TemplateValidationResult;
@@ -20,6 +24,7 @@ import java.util.Optional;
 public final class DoorTemplateRegistry {
     private final Path doorsDirectory;
     private final DoorTemplateValidator validator;
+    private final FeatureTemplateRegistry featureRegistry;
     private Map<String, DoorTemplate> templates = Map.of();
     private Map<String, DoorTemplate> visibleTemplates = Map.of();
     private Map<String, TemplateLoadStatus<DoorTemplate>> statusById = Map.of();
@@ -27,13 +32,19 @@ public final class DoorTemplateRegistry {
     private TemplateValidationResult lastValidation = new TemplateValidationResult();
 
     public DoorTemplateRegistry(Path doorsDirectory, RoomStructureService structureService) {
+        this(doorsDirectory, structureService, null);
+    }
+
+    public DoorTemplateRegistry(Path doorsDirectory, RoomStructureService structureService, FeatureTemplateRegistry featureRegistry) {
         this.doorsDirectory = doorsDirectory;
         this.validator = new DoorTemplateValidator(structureService);
+        this.featureRegistry = featureRegistry;
     }
 
     DoorTemplateRegistry(Path doorsDirectory, com.dungeonarchitect.template.StructureSizeReader sizeReader, boolean ignored) {
         this.doorsDirectory = doorsDirectory;
         this.validator = new DoorTemplateValidator(sizeReader, true);
+        this.featureRegistry = null;
     }
 
     public TemplateValidationResult reload() {
@@ -55,20 +66,27 @@ public final class DoorTemplateRegistry {
                     }
                     DoorTemplate template = loadedStatus.template();
                     List<String> errors = new ArrayList<>(loadedStatus.errors());
+                    List<String> repairs = new ArrayList<>(loadedStatus.repairs());
                     if (visible.containsKey(template.id())) {
                         errors.add("Duplicate door id " + template.id());
-                        TemplateLoadStatus<DoorTemplate> duplicate = new TemplateLoadStatus<>(template, template.id(), directory, false, errors, loadedStatus.repairs());
+                        TemplateLoadStatus<DoorTemplate> duplicate = new TemplateLoadStatus<>(template, template.id(), directory, false, errors, repairs);
                         statuses.add(duplicate);
                         result.addAll(errors);
-                        result.addRepairs(loadedStatus.repairs());
+                        result.addRepairs(repairs);
                         continue;
+                    }
+                    CleanupResult cleanup = cleanupInvalidSelections(template);
+                    if (cleanup.changed()) {
+                        template = cleanup.template();
+                        DoorTemplateIO.save(template, directory);
+                        repairs.addAll(cleanup.repairs());
                     }
                     TemplateValidationResult templateResult = validator.validate(template);
                     errors.addAll(templateResult.errors());
                     result.addAll(errors);
-                    result.addRepairs(loadedStatus.repairs());
+                    result.addRepairs(repairs);
                     boolean valid = errors.isEmpty();
-                    TemplateLoadStatus<DoorTemplate> status = new TemplateLoadStatus<>(template, template.id(), directory, valid, errors, loadedStatus.repairs());
+                    TemplateLoadStatus<DoorTemplate> status = new TemplateLoadStatus<>(template, template.id(), directory, valid, errors, repairs);
                     statuses.add(status);
                     visible.put(template.id(), template);
                     statusesById.put(template.id(), status);
@@ -141,6 +159,32 @@ public final class DoorTemplateRegistry {
         reload();
     }
 
+    public void replaceFeatureReferences(String oldFeatureId, String newFeatureId) throws IOException {
+        Files.createDirectories(doorsDirectory);
+        try (var stream = Files.list(doorsDirectory)) {
+            for (Path directory : stream.filter(Files::isDirectory).toList()) {
+                DoorTemplate template = DoorTemplateIO.load(directory);
+                List<RoomFeatureSlot> slots = new ArrayList<>();
+                boolean changed = false;
+                for (RoomFeatureSlot slot : template.featureSlots()) {
+                    List<FeatureSlotEntry> entries = new ArrayList<>();
+                    for (FeatureSlotEntry entry : slot.entries()) {
+                        if (entry.featureId().equalsIgnoreCase(oldFeatureId)) {
+                            entries.add(new FeatureSlotEntry(newFeatureId, entry.weight()));
+                            changed = true;
+                        } else {
+                            entries.add(entry);
+                        }
+                    }
+                    slots.add(slot.withEntries(entries));
+                }
+                if (changed) {
+                    DoorTemplateIO.save(new DoorTemplate(template.id(), template.size(), template.tags(), template.markers(), slots, template.gateway(), template.structureFile()), directory);
+                }
+            }
+        }
+    }
+
     public DoorTemplate duplicateDoor(String oldId, String newId) throws IOException {
         String normalizedNewId = normalizeId(newId);
         Path source = templateDirectory(oldId);
@@ -204,6 +248,45 @@ public final class DoorTemplateRegistry {
             throw new IllegalArgumentException("Invalid door id " + doorId);
         }
         return doorId.toLowerCase(java.util.Locale.ROOT);
+    }
+
+    private CleanupResult cleanupInvalidSelections(DoorTemplate template) {
+        if (featureRegistry == null) {
+            return new CleanupResult(template, false, List.of());
+        }
+        boolean changed = false;
+        List<String> repairs = new ArrayList<>();
+        List<RoomFeatureSlot> slots = new ArrayList<>();
+        for (RoomFeatureSlot slot : template.featureSlots()) {
+            List<FeatureSlotEntry> entries = new ArrayList<>();
+            for (FeatureSlotEntry entry : slot.entries()) {
+                if (entry.featureId().equals(FeatureSlotEntry.EMPTY)) {
+                    entries.add(entry);
+                    continue;
+                }
+                var selected = featureRegistry.get(entry.featureId());
+                if (selected.isEmpty()) {
+                    changed = true;
+                    repairs.add(template.id() + ": removed missing or invalid feature " + entry.featureId() + " from slot " + slot.id());
+                    continue;
+                }
+                var match = FeatureMatcher.match(slot, selected.get());
+                if (!match.matched()) {
+                    changed = true;
+                    repairs.add(template.id() + ": removed incompatible feature " + entry.featureId() + " from slot " + slot.id() + ": " + match.reason());
+                    continue;
+                }
+                entries.add(entry);
+            }
+            slots.add(slot.withEntries(entries));
+        }
+        if (!changed) {
+            return new CleanupResult(template, false, List.of());
+        }
+        return new CleanupResult(new DoorTemplate(template.id(), template.size(), template.tags(), template.markers(), slots, template.gateway(), template.structureFile()), true, repairs);
+    }
+
+    private record CleanupResult(DoorTemplate template, boolean changed, List<String> repairs) {
     }
 
     private void copyDirectory(Path source, Path target) throws IOException {

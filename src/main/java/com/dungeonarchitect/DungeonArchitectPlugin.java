@@ -20,6 +20,7 @@ import com.dungeonarchitect.runtime.PlayerRoomListener;
 import com.dungeonarchitect.runtime.RoomStructurePlacer;
 import com.dungeonarchitect.template.RoomTemplateRegistry;
 import com.dungeonarchitect.template.RoomStructureService;
+import com.dungeonarchitect.template.AssetRenameCoordinator;
 import com.dungeonarchitect.template.TemplateDiagnostics;
 import com.dungeonarchitect.template.TemplateValidationResult;
 import org.bukkit.Material;
@@ -37,6 +38,7 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
     private RoomTemplateRegistry roomTemplateRegistry;
     private FeatureTemplateRegistry featureTemplateRegistry;
     private DoorTemplateRegistry doorTemplateRegistry;
+    private AssetRenameCoordinator assetRenameCoordinator;
     private DungeonArchitectAPI api;
 
     @Override
@@ -47,10 +49,11 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
         structureService = new RoomStructureService(getServer());
         featureTemplateRegistry = new FeatureTemplateRegistry(dataPath.resolve("features"), structureService);
         featureTemplateRegistry.reload();
-        doorTemplateRegistry = new DoorTemplateRegistry(dataPath.resolve("doors"), structureService);
+        doorTemplateRegistry = new DoorTemplateRegistry(dataPath.resolve("doors"), structureService, featureTemplateRegistry);
         doorTemplateRegistry.reload();
         roomTemplateRegistry = new RoomTemplateRegistry(dataPath.resolve("rooms"), structureService, featureTemplateRegistry, doorTemplateRegistry);
         roomTemplateRegistry.reload();
+        assetRenameCoordinator = new AssetRenameCoordinator(roomTemplateRegistry, featureTemplateRegistry, doorTemplateRegistry);
         logDiagnostics();
 
         int maxSearchSteps = getConfig().contains("generation.max-search-steps")
@@ -106,11 +109,11 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
         }, 20L);
 
         ChatPromptManager chatPromptManager = new ChatPromptManager(this);
-        MenuManager menuManager = new MenuManager(this, authoringManager, roomTemplateRegistry, featureTemplateRegistry, doorTemplateRegistry, dungeonManager, chatPromptManager, this::reloadContent);
+        MenuManager menuManager = new MenuManager(this, authoringManager, roomTemplateRegistry, featureTemplateRegistry, doorTemplateRegistry, dungeonManager, chatPromptManager, assetRenameCoordinator, this::reloadContent);
         getServer().getPluginManager().registerEvents(chatPromptManager, this);
         getServer().getPluginManager().registerEvents(menuManager, this);
 
-        DungeonArchitectCommand command = new DungeonArchitectCommand(getPluginMeta().getVersion(), authoringManager, roomTemplateRegistry, featureTemplateRegistry, doorTemplateRegistry, dungeonManager, menuManager, structureService);
+        DungeonArchitectCommand command = new DungeonArchitectCommand(getPluginMeta().getVersion(), authoringManager, roomTemplateRegistry, featureTemplateRegistry, doorTemplateRegistry, dungeonManager, menuManager, structureService, assetRenameCoordinator);
         PluginCommand da = getCommand("da");
         if (da == null) {
             throw new IllegalStateException("Missing /da command registration");

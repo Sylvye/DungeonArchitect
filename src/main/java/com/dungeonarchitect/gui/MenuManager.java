@@ -30,6 +30,7 @@ import com.dungeonarchitect.template.TemplateLoadStatus;
 import com.dungeonarchitect.template.RoomTemplateIO;
 import com.dungeonarchitect.template.RoomTemplateRegistry;
 import com.dungeonarchitect.template.RoomTemplateValidator;
+import com.dungeonarchitect.template.AssetRenameCoordinator;
 import net.kyori.adventure.text.Component;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
@@ -68,11 +69,17 @@ public final class MenuManager implements Listener {
     private final DungeonManager dungeonManager;
     private final ChatPromptManager prompts;
     private final Runnable reloadAll;
+    private final AssetRenameCoordinator assetRenameCoordinator;
     private final Map<UUID, PlayerMenuActions> actions = new HashMap<>();
     private final Map<UUID, MultiEditSession> multiEdits = new HashMap<>();
     private final RoomTemplateValidator validator = new RoomTemplateValidator();
 
     public MenuManager(Plugin plugin, AuthoringManager authoringManager, RoomTemplateRegistry templateRegistry, FeatureTemplateRegistry featureRegistry, DoorTemplateRegistry doorRegistry, DungeonManager dungeonManager, ChatPromptManager prompts, Runnable reloadAll) {
+        this(plugin, authoringManager, templateRegistry, featureRegistry, doorRegistry, dungeonManager, prompts,
+            new AssetRenameCoordinator(templateRegistry, featureRegistry, doorRegistry), reloadAll);
+    }
+
+    public MenuManager(Plugin plugin, AuthoringManager authoringManager, RoomTemplateRegistry templateRegistry, FeatureTemplateRegistry featureRegistry, DoorTemplateRegistry doorRegistry, DungeonManager dungeonManager, ChatPromptManager prompts, AssetRenameCoordinator assetRenameCoordinator, Runnable reloadAll) {
         this.plugin = plugin;
         this.authoringManager = authoringManager;
         this.templateRegistry = templateRegistry;
@@ -80,6 +87,7 @@ public final class MenuManager implements Listener {
         this.doorRegistry = doorRegistry;
         this.dungeonManager = dungeonManager;
         this.prompts = prompts;
+        this.assetRenameCoordinator = assetRenameCoordinator;
         this.reloadAll = reloadAll;
     }
 
@@ -1488,7 +1496,7 @@ public final class MenuManager implements Listener {
     private void promptRenameRoom(Player player, String roomId) {
         prompts.prompt(player, "Enter new room id", value -> {
             try {
-                var renamed = templateRegistry.renameRoom(roomId, value.trim());
+                var renamed = assetRenameCoordinator.renameRoom(roomId, value.trim());
                 authoringManager.renameActiveRoomId(player, roomId, renamed.id());
                 player.sendMessage(Component.text("Renamed room " + roomId + " to " + renamed.id() + "."));
                 openRoom(player, renamed.id());
@@ -1515,8 +1523,7 @@ public final class MenuManager implements Listener {
     private void promptRenameFeature(Player player, String featureId) {
         prompts.prompt(player, "Enter new feature id", value -> {
             try {
-                var renamed = featureRegistry.renameFeature(featureId, value.trim());
-                templateRegistry.replaceFeatureReferences(featureId, renamed.id());
+                var renamed = assetRenameCoordinator.renameFeature(featureId, value.trim());
                 authoringManager.renameActiveFeatureId(player, featureId, renamed.id());
                 player.sendMessage(Component.text("Renamed feature " + featureId + " to " + renamed.id() + "."));
                 openFeature(player, renamed.id());
@@ -1544,8 +1551,7 @@ public final class MenuManager implements Listener {
     private void promptRenameDoor(Player player, String doorId) {
         prompts.prompt(player, "Enter new door id", value -> {
             try {
-                var renamed = doorRegistry.renameDoor(doorId, value.trim());
-                templateRegistry.replaceDoorReferences(doorId, renamed.id());
+                var renamed = assetRenameCoordinator.renameDoor(doorId, value.trim());
                 authoringManager.renameActiveDoorId(player, doorId, renamed.id());
                 player.sendMessage(Component.text("Renamed door " + doorId + " to " + renamed.id() + "."));
                 openDoor(player, renamed.id());
@@ -1575,6 +1581,7 @@ public final class MenuManager implements Listener {
         button(menu, 11, Material.RED_CONCRETE, "Confirm Delete", List.of("Permanently deletes " + roomId), p -> {
             try {
                 templateRegistry.deleteRoom(roomId);
+                assetRenameCoordinator.reloadAll();
                 p.sendMessage(Component.text("Deleted room " + roomId));
                 openRooms(p);
             } catch (IOException ex) {
@@ -1657,7 +1664,7 @@ public final class MenuManager implements Listener {
         button(menu, 11, Material.RED_CONCRETE, "Confirm Delete", List.of("Permanently deletes " + featureId), p -> {
             try {
                 featureRegistry.deleteFeature(featureId);
-                templateRegistry.reload();
+                assetRenameCoordinator.reloadAll();
                 p.sendMessage(Component.text("Deleted feature " + featureId));
                 openFeatures(p);
             } catch (IOException ex) {
@@ -1674,7 +1681,7 @@ public final class MenuManager implements Listener {
         button(menu, 11, Material.RED_CONCRETE, "Confirm Delete", List.of("Permanently deletes " + doorId), p -> {
             try {
                 doorRegistry.deleteDoor(doorId);
-                templateRegistry.reload();
+                assetRenameCoordinator.reloadAll();
                 p.sendMessage(Component.text("Deleted door " + doorId));
                 openDoors(p);
             } catch (IOException ex) {

@@ -26,6 +26,8 @@ import com.dungeonarchitect.template.RoomStructureService;
 import com.dungeonarchitect.template.TemplateDiagnostic;
 import com.dungeonarchitect.template.TemplateDiagnostics;
 import com.dungeonarchitect.template.TemplateValidationResult;
+import com.dungeonarchitect.template.AssetRenameCoordinator;
+import com.dungeonarchitect.door.BoundaryFacing;
 import net.kyori.adventure.text.Component;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
@@ -53,12 +55,18 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
     private final RoomTemplateValidator validator;
     private final FeatureTemplateValidator featureValidator;
     private final DoorTemplateValidator doorValidator;
+    private final AssetRenameCoordinator assetRenameCoordinator;
 
     public DungeonArchitectCommand(String version, AuthoringManager authoringManager, RoomTemplateRegistry templateRegistry, FeatureTemplateRegistry featureRegistry, DungeonManager dungeonManager, MenuManager menuManager, RoomStructureService structureService) {
         this(version, authoringManager, templateRegistry, featureRegistry, null, dungeonManager, menuManager, structureService);
     }
 
     public DungeonArchitectCommand(String version, AuthoringManager authoringManager, RoomTemplateRegistry templateRegistry, FeatureTemplateRegistry featureRegistry, DoorTemplateRegistry doorRegistry, DungeonManager dungeonManager, MenuManager menuManager, RoomStructureService structureService) {
+        this(version, authoringManager, templateRegistry, featureRegistry, doorRegistry, dungeonManager, menuManager, structureService,
+            templateRegistry == null || featureRegistry == null || doorRegistry == null ? null : new AssetRenameCoordinator(templateRegistry, featureRegistry, doorRegistry));
+    }
+
+    public DungeonArchitectCommand(String version, AuthoringManager authoringManager, RoomTemplateRegistry templateRegistry, FeatureTemplateRegistry featureRegistry, DoorTemplateRegistry doorRegistry, DungeonManager dungeonManager, MenuManager menuManager, RoomStructureService structureService, AssetRenameCoordinator assetRenameCoordinator) {
         this.version = version;
         this.authoringManager = authoringManager;
         this.templateRegistry = templateRegistry;
@@ -70,6 +78,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
         this.validator = new RoomTemplateValidator(structureService, featureRegistry, doorRegistry);
         this.featureValidator = new FeatureTemplateValidator(structureService);
         this.doorValidator = new DoorTemplateValidator(structureService);
+        this.assetRenameCoordinator = assetRenameCoordinator;
     }
 
     @Override
@@ -128,9 +137,10 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
     }
 
     private void reload(CommandSender sender) {
-        TemplateValidationResult featureResult = featureRegistry.reload();
-        TemplateValidationResult doorResult = doorRegistry.reload();
-        TemplateValidationResult result = templateRegistry.reload();
+        assetRenameCoordinator.reloadAll();
+        TemplateValidationResult featureResult = featureRegistry.lastValidation();
+        TemplateValidationResult doorResult = doorRegistry.lastValidation();
+        TemplateValidationResult result = templateRegistry.lastValidation();
         sender.sendMessage(Component.text("Loaded rooms valid=" + templateRegistry.all().size() + " invalid=" + templateRegistry.invalidCount() + " unrecoverable=" + templateRegistry.unrecoverableCount()
             + ", features valid=" + featureRegistry.all().size() + " invalid=" + featureRegistry.invalidCount() + " unrecoverable=" + featureRegistry.unrecoverableCount()
             + ", doors valid=" + doorRegistry.all().size() + " invalid=" + doorRegistry.invalidCount() + " unrecoverable=" + doorRegistry.unrecoverableCount() + "."));
@@ -240,7 +250,15 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
 
     private void door(Player player, String[] args) {
         DoorSlotCommandOptions options = DoorSlotCommandOptions.parse(args, 2);
-        var created = authoringManager.createDoorFromSelection(player, options.id(), options.socketType(), options.facing());
+        try {
+            announceCreatedDoor(player, options, options.facing());
+        } catch (BoundaryFacing.AmbiguousFacingException ex) {
+            promptForFacing(player, ex, facing -> announceCreatedDoor(player, options, facing));
+        }
+    }
+
+    private void announceCreatedDoor(Player player, DoorSlotCommandOptions options, Direction3 facing) {
+        var created = authoringManager.createDoorFromSelection(player, options.id(), options.socketType(), facing);
         player.sendMessage(Component.text("Added door slot " + created.id() + " bounds=" + created.localBounds().describe()));
     }
 
@@ -341,8 +359,11 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
                 player.sendMessage(Component.text("Door bounds saved: " + bounds.describe()));
             }
             case "gateway" -> {
-                var gateway = authoringManager.saveDoorGateway(player);
-                player.sendMessage(Component.text("Door gateway saved: position=" + gateway.position() + " size=" + gateway.size() + " facing=" + gateway.facing()));
+                try {
+                    announceGateway(player, null);
+                } catch (BoundaryFacing.AmbiguousFacingException ex) {
+                    promptForFacing(player, ex, facing -> announceGateway(player, facing));
+                }
             }
             case "marker" -> {
                 requireArgs(args, 4, "/da door marker add <name> [type]");
@@ -415,8 +436,11 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
             return;
         }
         if (action.equals("bounds")) {
-            var selection = authoringManager.updateComponentBounds(player, target.type(), target.id());
-            player.sendMessage(Component.text("Updated " + target.type() + " " + target.id() + " bounds: " + selection.worldBounds().describe()));
+            try {
+                announceComponentBounds(player, target, null);
+            } catch (BoundaryFacing.AmbiguousFacingException ex) {
+                promptForFacing(player, ex, facing -> announceComponentBounds(player, target, facing));
+            }
             return;
         }
         if (action.equals("rename")) {
@@ -426,6 +450,38 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
                     () -> menuManager.prompt(player, "Enter new " + target.type() + " id", value -> renameComponent(player, target, value.trim()))
                 );
         }
+    }
+
+    private void announceGateway(Player player, Direction3 facing) {
+        var gateway = authoringManager.saveDoorGateway(player, facing);
+        player.sendMessage(Component.text("Door gateway saved: position=" + gateway.position() + " size=" + gateway.size() + " facing=" + gateway.facing()));
+    }
+
+    private void announceComponentBounds(Player player, ComponentCommandTarget target, Direction3 facing) {
+        var selection = authoringManager.updateComponentBounds(player, target.type(), target.id(), facing);
+        player.sendMessage(Component.text("Updated " + target.type() + " " + target.id() + " bounds: " + selection.worldBounds().describe()));
+    }
+
+    private void promptForFacing(Player player, BoundaryFacing.AmbiguousFacingException ambiguity, java.util.function.Consumer<Direction3> action) {
+        List<Direction3> validFaces = ambiguity.validFaces();
+        menuManager.prompt(player, "Choose facing: " + validFaces, input -> {
+            Direction3 facing;
+            try {
+                facing = Direction3.valueOf(input.trim().toUpperCase(Locale.ROOT));
+            } catch (IllegalArgumentException ex) {
+                promptForFacing(player, ambiguity, action);
+                return;
+            }
+            if (!validFaces.contains(facing)) {
+                promptForFacing(player, ambiguity, action);
+                return;
+            }
+            try {
+                action.accept(facing);
+            } catch (BoundaryFacing.AmbiguousFacingException ex) {
+                promptForFacing(player, ex, action);
+            }
+        });
     }
 
     private void renameComponent(Player player, ComponentCommandTarget target, String newId) {
@@ -509,6 +565,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
         requireArgs(args, 3, "/da room delete <id>");
         try {
             templateRegistry.deleteRoom(args[2]);
+            assetRenameCoordinator.reloadAll();
             sender.sendMessage(Component.text("Deleted room " + args[2] + "."));
         } catch (Exception ex) {
             throw new IllegalArgumentException("Failed to delete room: " + ex.getMessage(), ex);
@@ -518,7 +575,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
     private void renameRoom(CommandSender sender, String[] args) {
         requireArgs(args, 4, "/da room rename <oldId> <newId>");
         try {
-            RoomTemplate renamed = templateRegistry.renameRoom(args[2], args[3]);
+            RoomTemplate renamed = assetRenameCoordinator.renameRoom(args[2], args[3]);
             if (sender instanceof Player player) {
                 authoringManager.renameActiveRoomId(player, args[2], renamed.id());
             }
@@ -566,7 +623,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
         requireArgs(args, 3, "/da feature delete <id>");
         try {
             featureRegistry.deleteFeature(args[2]);
-            templateRegistry.reload();
+            assetRenameCoordinator.reloadAll();
             sender.sendMessage(Component.text("Deleted feature " + args[2] + "."));
         } catch (Exception ex) {
             throw new IllegalArgumentException("Failed to delete feature: " + ex.getMessage(), ex);
@@ -576,8 +633,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
     private void renameFeature(CommandSender sender, String[] args) {
         requireArgs(args, 4, "/da feature rename <oldId> <newId>");
         try {
-            FeatureTemplate renamed = featureRegistry.renameFeature(args[2], args[3]);
-            templateRegistry.replaceFeatureReferences(args[2], renamed.id());
+            FeatureTemplate renamed = assetRenameCoordinator.renameFeature(args[2], args[3]);
             if (sender instanceof Player player) {
                 authoringManager.renameActiveFeatureId(player, args[2], renamed.id());
             }
@@ -628,7 +684,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
         requireArgs(args, 3, "/da door delete <id>");
         try {
             doorRegistry.deleteDoor(args[2]);
-            templateRegistry.reload();
+            assetRenameCoordinator.reloadAll();
             sender.sendMessage(Component.text("Deleted door " + args[2] + "."));
         } catch (Exception ex) {
             throw new IllegalArgumentException("Failed to delete door: " + ex.getMessage(), ex);
@@ -638,8 +694,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
     private void renameDoor(CommandSender sender, String[] args) {
         requireArgs(args, 4, "/da door rename <oldId> <newId>");
         try {
-            DoorTemplate renamed = doorRegistry.renameDoor(args[2], args[3]);
-            templateRegistry.replaceDoorReferences(args[2], renamed.id());
+            DoorTemplate renamed = assetRenameCoordinator.renameDoor(args[2], args[3]);
             if (sender instanceof Player player) {
                 authoringManager.renameActiveDoorId(player, args[2], renamed.id());
             }

@@ -5,6 +5,7 @@ import com.dungeonarchitect.domain.Direction3;
 import com.dungeonarchitect.domain.IntVector3;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 
 public final class BoundaryFacing {
@@ -12,6 +13,31 @@ public final class BoundaryFacing {
     }
 
     public static Direction3 infer(SelectionBounds child, SelectionBounds parent, String label) {
+        List<FaceCoverage> matches = touchingFaces(child, parent, label);
+        FaceCoverage best = matches.stream()
+            .max(Comparator.comparingInt(FaceCoverage::coverage))
+            .orElseThrow();
+        long tied = matches.stream().filter(match -> match.coverage() == best.coverage()).count();
+        if (tied > 1) {
+            throw new AmbiguousFacingException(label, matches.stream().map(FaceCoverage::direction).toList());
+        }
+        return best.direction();
+    }
+
+    public static List<Direction3> validFaces(SelectionBounds child, SelectionBounds parent, String label) {
+        return touchingFaces(child, parent, label).stream().map(FaceCoverage::direction).toList();
+    }
+
+    public static void requireValidFace(Direction3 facing, SelectionBounds child, SelectionBounds parent, String label) {
+        if (facing == null) {
+            throw new IllegalArgumentException(label + " facing is required");
+        }
+        if (!validFaces(child, parent, label).contains(facing)) {
+            throw new IllegalArgumentException(label + " facing " + facing + " does not touch the selected bounds");
+        }
+    }
+
+    private static List<FaceCoverage> touchingFaces(SelectionBounds child, SelectionBounds parent, String label) {
         if (!parent.contains(child.min()) || !parent.contains(child.max())) {
             throw new IllegalArgumentException(label + " must be inside bounds");
         }
@@ -42,14 +68,20 @@ public final class BoundaryFacing {
         if (matches.isEmpty()) {
             throw new IllegalArgumentException(label + " must touch a bounds face");
         }
-        FaceCoverage best = matches.stream()
-            .max(java.util.Comparator.comparingInt(FaceCoverage::coverage))
-            .orElseThrow();
-        long tied = matches.stream().filter(match -> match.coverage() == best.coverage()).count();
-        if (tied > 1) {
-            throw new IllegalArgumentException(label + " must have one dominant bounds face");
+        return List.copyOf(matches);
+    }
+
+    public static final class AmbiguousFacingException extends IllegalArgumentException {
+        private final List<Direction3> validFaces;
+
+        public AmbiguousFacingException(String label, List<Direction3> validFaces) {
+            super(label + " must have one dominant bounds face; choose one of " + validFaces);
+            this.validFaces = List.copyOf(validFaces);
         }
-        return best.direction();
+
+        public List<Direction3> validFaces() {
+            return validFaces;
+        }
     }
 
     private record FaceCoverage(Direction3 direction, int coverage) {
