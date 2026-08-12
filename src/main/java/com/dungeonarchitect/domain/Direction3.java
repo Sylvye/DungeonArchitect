@@ -1,5 +1,7 @@
 package com.dungeonarchitect.domain;
 
+import java.util.Locale;
+
 public enum Direction3 {
     NORTH(0, 0, -1),
     EAST(1, 0, 0),
@@ -16,6 +18,21 @@ public enum Direction3 {
 
     public IntVector3 vector() {
         return vector;
+    }
+
+    public static Direction3 parse(String input) {
+        if (input == null) {
+            throw new IllegalArgumentException("Direction is required");
+        }
+        return switch (input.trim().toLowerCase(Locale.ROOT)) {
+            case "n", "north" -> NORTH;
+            case "e", "east" -> EAST;
+            case "s", "south" -> SOUTH;
+            case "w", "west" -> WEST;
+            case "u", "up" -> UP;
+            case "d", "down" -> DOWN;
+            default -> throw new IllegalArgumentException("Direction must be N, E, S, W, up, or down");
+        };
     }
 
     public Direction3 opposite() {

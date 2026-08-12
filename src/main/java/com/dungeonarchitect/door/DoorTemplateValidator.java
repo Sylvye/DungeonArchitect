@@ -56,10 +56,7 @@ public final class DoorTemplateValidator {
                     result.add(template.id() + ": gateway is outside door bounds at " + DiagnosticText.position(template.gateway().position()), template.gateway().position());
                 } else {
                     try {
-                        var inferred = BoundaryFacing.infer(gatewayBounds, templateBounds, "Gateway");
-                        if (template.gateway().facing() != inferred) {
-                            result.add(template.id() + ": gateway faces " + template.gateway().facing() + ", but its bounds touch the " + inferred + " door face", template.gateway().position());
-                        }
+                        BoundaryFacing.requireValidFace(template.gateway().facing(), gatewayBounds, templateBounds, "Gateway");
                     } catch (IllegalArgumentException ex) {
                         result.add(template.id() + ": " + readable(ex.getMessage()), template.gateway().position());
                     }

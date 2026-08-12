@@ -26,7 +26,7 @@ final class DungeonArchitectCommandTabCompletionTest {
     Path tempDir;
 
     @Test
-    void componentActionsIncludeBoundsAndRename() {
+    void componentActionsIncludeBoundsRenameRotateAndFace() {
         DungeonArchitectCommand command = new DungeonArchitectCommand("test", null, null, null, null, null, null);
 
         List<String> options = command.onTabComplete(null, null, "da", new String[] {"room", "component", ""});
@@ -35,6 +35,31 @@ final class DungeonArchitectCommandTabCompletionTest {
         assertTrue(options.contains("remove"));
         assertTrue(options.contains("bounds"));
         assertTrue(options.contains("rename"));
+        assertTrue(options.contains("rotate"));
+        assertTrue(options.contains("face"));
+
+        List<String> directions = command.onTabComplete(null, null, "da", new String[] {"room", "component", "rotate", ""});
+        assertTrue(directions.contains("N"));
+        assertTrue(directions.contains("north"));
+        assertTrue(directions.contains("up"));
+
+        List<String> faceDirections = command.onTabComplete(null, null, "da", new String[] {"room", "component", "face", ""});
+        assertTrue(faceDirections.contains("S"));
+        assertTrue(faceDirections.contains("south"));
+    }
+
+    @Test
+    void contextualComponentCompletionLimitsDoorTypesAndFeatureActions() {
+        DungeonArchitectCommand command = new DungeonArchitectCommand("test", null, null, null, null, null, null);
+
+        assertContains(command.onTabComplete(null, null, "da", new String[] {"door", ""}), "component");
+        assertContains(command.onTabComplete(null, null, "da", new String[] {"feature", ""}), "component");
+
+        List<String> doorTypes = command.onTabComplete(null, null, "da", new String[] {"door", "component", "select", ""});
+        assertContains(doorTypes, "gateway", "marker", "feature");
+        assertTrue(!doorTypes.contains("door"));
+
+        assertTrue(command.onTabComplete(null, null, "da", new String[] {"feature", "component", ""}).isEmpty());
     }
 
     @Test

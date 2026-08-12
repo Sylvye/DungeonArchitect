@@ -130,6 +130,9 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
         sender.sendMessage(Component.text("/da feature create <id> | bounds | save [id] | edit <id> | inspect <id> | validate <id|all>"));
         sender.sendMessage(Component.text("/da feature rename <oldId> <newId> | duplicate <oldId> <newId> | delete <id>"));
         sender.sendMessage(Component.text("/da room component <select|remove|bounds|rename> [door|marker|feature] [id] [newId]"));
+        sender.sendMessage(Component.text("/da <room|door> component <select|remove|bounds|rename|rotate|face> ..."));
+        sender.sendMessage(Component.text("/da <room|door> component <rotate|face> <N|E|S|W|up|down>"));
+        sender.sendMessage(Component.text("/da feature component (feature templates have no nested editable components)"));
         sender.sendMessage(Component.text("/da room save [id] | inspect <id> | validate <id|all> | delete <id>"));
         sender.sendMessage(Component.text("/da reload | diagnose [room|door|feature] [id|all] | generate <roomCount> [seed]"));
         sender.sendMessage(Component.text("/da list | debug instance [id|#n] | debug room"));
@@ -163,7 +166,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
     private void selector(CommandSender sender) {
         Player player = requirePlayer(sender);
         player.getInventory().addItem(authoringManager.createSelector());
-        player.sendMessage(Component.text("DungeonArchitect selector added. Hold to outline room components; right click to ray-select one."));
+        player.sendMessage(Component.text("DungeonArchitect selector added. Hold to outline editable template components; right click to ray-select one."));
     }
 
     private void room(CommandSender sender, String[] args) {
@@ -202,7 +205,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
             case "door" -> door(player, args);
             case "marker" -> marker(player, args);
             case "feature" -> feature(player, args);
-            case "component" -> component(player, args);
+            case "component" -> component(player, args, ComponentCommandContext.ROOM);
             case "save" -> save(player, args);
             case "inspect" -> inspect(sender, args);
             case "validate" -> validate(sender, args);
@@ -283,7 +286,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
     private void featureCommand(CommandSender sender, String[] args) {
         Player player = requirePlayer(sender);
         if (args.length < 2) {
-            throw new IllegalArgumentException("Usage: /da feature <create|bounds|save|edit|inspect|validate|rename|duplicate|delete>");
+            throw new IllegalArgumentException("Usage: /da feature <create|bounds|save|edit|inspect|validate|rename|duplicate|delete|component>");
         }
         switch (args[1].toLowerCase(Locale.ROOT)) {
             case "create" -> {
@@ -332,6 +335,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
             case "rename" -> renameFeature(sender, args);
             case "duplicate" -> duplicateFeature(sender, args);
             case "delete" -> deleteFeature(sender, args);
+            case "component" -> component(player, args, ComponentCommandContext.FEATURE);
             default -> throw new IllegalArgumentException("Unknown feature command " + args[1]);
         }
     }
@@ -339,7 +343,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
     private void doorCommand(CommandSender sender, String[] args) {
         Player player = requirePlayer(sender);
         if (args.length < 2) {
-            throw new IllegalArgumentException("Usage: /da door <create|bounds|gateway|marker|feature|save|edit|inspect|validate|rename|duplicate|delete>");
+            throw new IllegalArgumentException("Usage: /da door <create|bounds|gateway|marker|feature|save|edit|inspect|validate|rename|duplicate|delete|component>");
         }
         switch (args[1].toLowerCase(Locale.ROOT)) {
             case "create" -> {
@@ -411,20 +415,52 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
             case "rename" -> renameDoor(sender, args);
             case "duplicate" -> duplicateDoor(sender, args);
             case "delete" -> deleteDoor(sender, args);
+            case "component" -> component(player, args, ComponentCommandContext.DOOR);
             default -> throw new IllegalArgumentException("Unknown door command " + args[1]);
         }
     }
 
-    private void component(Player player, String[] args) {
-        requireArgs(args, 3, "/da room component <select|remove|bounds|rename> [door|marker|feature] [id] [newId]");
-        if (!authoringManager.hasEditableRoomSession(player)) {
+    private void component(Player player, String[] args, ComponentCommandContext context) {
+        if (!context.hasComponents()) {
+            throw new IllegalArgumentException("Feature templates do not have nested editable components");
+        }
+        requireArgs(args, 3, componentUsage(context));
+        if (context == ComponentCommandContext.ROOM && !authoringManager.hasEditableRoomSession(player)) {
             throw new IllegalStateException("Save room bounds first with /da room bounds");
         }
-        String action = args[2].toLowerCase(Locale.ROOT);
-        if (!List.of("select", "remove", "bounds", "rename").contains(action)) {
-            throw new IllegalArgumentException("Usage: /da room component <select|remove|bounds|rename> [door|marker|feature] [id] [newId]");
+        if (context == ComponentCommandContext.DOOR && !authoringManager.hasEditableDoorSession(player)) {
+            throw new IllegalStateException("Save door bounds first with /da door bounds");
         }
-        ComponentCommandTarget target = ComponentCommandTarget.resolve(args, 3, authoringManager.selectedComponent(player));
+        String action = args[2].toLowerCase(Locale.ROOT);
+        if (!context.actions().contains(action)) {
+            throw new IllegalArgumentException("Usage: " + componentUsage(context));
+        }
+        if (action.equals("rotate")) {
+            String usage = "/da " + context.displayName().toLowerCase(Locale.ROOT) + " component rotate <N|E|S|W|up|down>";
+            requireArgs(args, 4, usage);
+            if (args.length != 4) {
+                throw new IllegalArgumentException("Usage: " + usage);
+            }
+            Direction3 facing = Direction3.parse(args[3]);
+            requireSelectedAction(player, context, action);
+            var selection = authoringManager.rotateSelectedComponent(player, facing);
+            player.sendMessage(Component.text("Rotated " + selection.type() + " " + selection.id() + " to face " + facing + "."));
+            return;
+        }
+        if (action.equals("face")) {
+            String usage = "/da " + context.displayName().toLowerCase(Locale.ROOT) + " component face <N|E|S|W|up|down>";
+            requireArgs(args, 4, usage);
+            if (args.length != 4) {
+                throw new IllegalArgumentException("Usage: " + usage);
+            }
+            Direction3 facing = Direction3.parse(args[3]);
+            requireSelectedAction(player, context, action);
+            var selection = authoringManager.faceSelectedComponent(player, facing);
+            player.sendMessage(Component.text("Set " + selection.type() + " " + selection.id() + " to face " + facing + "."));
+            return;
+        }
+        ComponentCommandTarget target = ComponentCommandTarget.resolve(args, 3, authoringManager.selectedComponent(player), context.types());
+        context.requireAction(action, target.type());
         if (action.equals("select")) {
             var selection = authoringManager.selectComponent(player, target.type(), target.id());
             player.sendMessage(Component.text("Selected " + target.type() + " " + target.id() + ": " + selection.worldBounds().describe()));
@@ -450,6 +486,16 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
                     () -> menuManager.prompt(player, "Enter new " + target.type() + " id", value -> renameComponent(player, target, value.trim()))
                 );
         }
+    }
+
+    private String componentUsage(ComponentCommandContext context) {
+        return "/da " + context.displayName().toLowerCase(Locale.ROOT) + " component <" + String.join("|", context.actions()) + "> [" + String.join("|", context.types()) + "] [id] [newId]";
+    }
+
+    private void requireSelectedAction(Player player, ComponentCommandContext context, String action) {
+        AuthoringSession.SelectedComponent selected = authoringManager.selectedComponent(player)
+            .orElseThrow(() -> new IllegalArgumentException("Select a component first"));
+        context.requireAction(action, selected.type());
     }
 
     private void announceGateway(Player player, Direction3 facing) {
@@ -1076,10 +1122,10 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
             return prefix(args[2], List.of("feature_1"));
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("feature")) {
-            return prefix(args[1], List.of("create", "bounds", "save", "edit", "inspect", "validate", "rename", "duplicate", "delete"));
+            return prefix(args[1], List.of("create", "bounds", "save", "edit", "inspect", "validate", "rename", "duplicate", "delete", "component"));
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("door")) {
-            return prefix(args[1], List.of("create", "bounds", "gateway", "marker", "feature", "save", "edit", "inspect", "validate", "rename", "duplicate", "delete"));
+            return prefix(args[1], List.of("create", "bounds", "gateway", "marker", "feature", "save", "edit", "inspect", "validate", "rename", "duplicate", "delete", "component"));
         }
         if (args.length == 3 && args[0].equalsIgnoreCase("door") && List.of("edit", "inspect", "delete", "rename", "duplicate").contains(args[1].toLowerCase(Locale.ROOT))) {
             return prefix(args[2], doorRegistry.visible().stream().map(DoorTemplate::id).toList());
@@ -1108,12 +1154,16 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
             ids.addAll(featureRegistry.visible().stream().map(FeatureTemplate::id).toList());
             return prefix(args[2], ids);
         }
-        if (args[0].equalsIgnoreCase("room") && args[1].equalsIgnoreCase("component")) {
+        ComponentCommandContext componentContext = componentContext(args[0]);
+        if (componentContext != null && args[1].equalsIgnoreCase("component")) {
             if (args.length == 3) {
-                return prefix(args[2], List.of("select", "remove", "bounds", "rename"));
+                return prefix(args[2], componentContext.actions());
+            }
+            if (args.length == 4 && List.of("rotate", "face").contains(args[2].toLowerCase(Locale.ROOT))) {
+                return prefix(args[3], List.of("N", "E", "S", "W", "up", "down", "north", "east", "south", "west"));
             }
             if (args.length == 4) {
-                return prefix(args[3], ComponentCommandTarget.types());
+                return prefix(args[3], componentContext.types());
             }
             if (args.length == 5 && sender instanceof Player player) {
                 return prefix(args[4], authoringManager.componentIds(player, args[3]));
@@ -1145,6 +1195,15 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
             return prefix(args[1], instanceOptions());
         }
         return List.of();
+    }
+
+    private ComponentCommandContext componentContext(String root) {
+        return switch (root.toLowerCase(Locale.ROOT)) {
+            case "room" -> ComponentCommandContext.ROOM;
+            case "door" -> ComponentCommandContext.DOOR;
+            case "feature" -> ComponentCommandContext.FEATURE;
+            default -> null;
+        };
     }
 
     private DungeonInstance currentDungeonOrNull(CommandSender sender) {

@@ -13,6 +13,7 @@ import com.dungeonarchitect.feature.FeatureService;
 import com.dungeonarchitect.feature.FeatureTemplateRegistry;
 import com.dungeonarchitect.gui.ChatPromptManager;
 import com.dungeonarchitect.gui.MenuManager;
+import com.dungeonarchitect.gui.TagCatalog;
 import com.dungeonarchitect.generation.DeterministicDungeonGenerator;
 import com.dungeonarchitect.runtime.DungeonManager;
 import com.dungeonarchitect.runtime.DungeonWorldManager;
@@ -39,6 +40,7 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
     private FeatureTemplateRegistry featureTemplateRegistry;
     private DoorTemplateRegistry doorTemplateRegistry;
     private AssetRenameCoordinator assetRenameCoordinator;
+    private TagCatalog tagCatalog;
     private DungeonArchitectAPI api;
 
     @Override
@@ -53,6 +55,8 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
         doorTemplateRegistry.reload();
         roomTemplateRegistry = new RoomTemplateRegistry(dataPath.resolve("rooms"), structureService, featureTemplateRegistry, doorTemplateRegistry);
         roomTemplateRegistry.reload();
+        tagCatalog = new TagCatalog(dataPath.resolve("tags.yml"));
+        synchronizeTags();
         assetRenameCoordinator = new AssetRenameCoordinator(roomTemplateRegistry, featureTemplateRegistry, doorTemplateRegistry);
         logDiagnostics();
 
@@ -102,14 +106,17 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
 
         getServer().getPluginManager().registerEvents(new AuthoringListener(authoringManager), this);
         getServer().getPluginManager().registerEvents(new PlayerRoomListener(dungeonManager), this);
+        getServer().getPluginManager().registerEvents(dungeonManager.entityTracker(), this);
         getServer().getScheduler().runTaskTimer(this, new SelectionParticleTask(authoringManager), 10L, 10L);
+        getServer().getScheduler().runTaskTimer(this, dungeonManager.entityTracker(), 20L, 20L);
         getServer().getScheduler().runTaskLater(this, () -> {
-            worldManager.warmupWorld();
+            var dungeonWorld = worldManager.warmupWorld();
+            dungeonManager.purgeStaleEntities(dungeonWorld);
             authoringManager.prepareEditWorld();
         }, 20L);
 
         ChatPromptManager chatPromptManager = new ChatPromptManager(this);
-        MenuManager menuManager = new MenuManager(this, authoringManager, roomTemplateRegistry, featureTemplateRegistry, doorTemplateRegistry, dungeonManager, chatPromptManager, assetRenameCoordinator, this::reloadContent);
+        MenuManager menuManager = new MenuManager(this, authoringManager, roomTemplateRegistry, featureTemplateRegistry, doorTemplateRegistry, dungeonManager, chatPromptManager, assetRenameCoordinator, tagCatalog, this::reloadContent);
         getServer().getPluginManager().registerEvents(chatPromptManager, this);
         getServer().getPluginManager().registerEvents(menuManager, this);
 
@@ -146,7 +153,12 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
         featureTemplateRegistry.reload();
         doorTemplateRegistry.reload();
         roomTemplateRegistry.reload();
+        synchronizeTags();
         logDiagnostics();
+    }
+
+    private void synchronizeTags() {
+        tagCatalog.synchronize(roomTemplateRegistry.visible(), doorTemplateRegistry.visible());
     }
 
     private void logDiagnostics() {

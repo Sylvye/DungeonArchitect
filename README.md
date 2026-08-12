@@ -22,6 +22,11 @@ The checked-in Gradle wrapper uses Gradle 8.14.3.
 - `/da room door` saves the current selection as a door region using defaults.
 - `/da room door [id] [socketType] [facing]` adds a socket with explicit overrides.
 - `/da room marker add <name> [type]` adds a generic marker at the targeted block.
+- `/da room component rotate [N|E|S|W|up|down]` rotates the selected room door or feature slot; full direction names are also accepted.
+- `/da room component face [N|E|S|W|up|down]` sets the selected room component's facing without moving it, when that facing is valid.
+- `/da door component` manages the active door template's gateway, markers, and feature slots; unsupported type/action combinations are rejected.
+- `/da door component rotate|face [N|E|S|W|up|down]` supports the selected gateway or feature slot.
+- `/da feature component` is recognized but reports that feature templates have no nested editable components.
 - `/da room feature <name>` adds a random feature marker at the targeted block.
 - `/da room save [id]` exports `room.nbt` and `room.yml`.
 - `/da room rename <oldId> <newId>` and `/da room duplicate <oldId> <newId>` manage room template ids.

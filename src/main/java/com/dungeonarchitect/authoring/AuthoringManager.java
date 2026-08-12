@@ -11,6 +11,7 @@ import com.dungeonarchitect.domain.FeatureTemplate;
 import com.dungeonarchitect.domain.RoomFeatureSlot;
 import com.dungeonarchitect.domain.RoomTemplate;
 import com.dungeonarchitect.domain.SocketType;
+import com.dungeonarchitect.domain.TagDomain;
 import com.dungeonarchitect.door.BoundaryFacing;
 import com.dungeonarchitect.door.DoorTemplateIO;
 import com.dungeonarchitect.door.DoorTemplateValidator;
@@ -348,9 +349,19 @@ public final class AuthoringManager {
         return Optional.of(session);
     }
 
+    /** Removes a globally deleted tag from all in-memory authoring sessions. */
+    public void removeTag(TagDomain domain, String tag) {
+        sessions.values().forEach(session -> session.removeTag(domain, tag));
+    }
+
     public boolean hasEditableRoomSession(Player player) {
         AuthoringSession session = sessions.get(player.getUniqueId());
         return isRoomComponentSession(session);
+    }
+
+    public boolean hasEditableDoorSession(Player player) {
+        AuthoringSession session = sessions.get(player.getUniqueId());
+        return session != null && session.doorSession() && session.roomBounds().isPresent();
     }
 
     public boolean hasEditableComponentSession(Player player) {
@@ -681,11 +692,16 @@ public final class AuthoringManager {
 
     public boolean removeComponent(Player player, String type, String id) {
         AuthoringSession session = session(player);
-        if (!isRoomComponentSession(session)) {
-            throw new IllegalStateException("Save room bounds first with /da room bounds");
+        if (!isComponentSession(session)) {
+            throw new IllegalStateException("Save bounds first");
         }
         return switch (type.toLowerCase(java.util.Locale.ROOT)) {
-            case "door" -> session.removeDoor(id);
+            case "door" -> {
+                if (!session.roomSession()) {
+                    throw new IllegalArgumentException("Door templates do not have door components");
+                }
+                yield session.removeDoor(id);
+            }
             case "marker" -> session.removeMarker(id);
             case "feature" -> session.removeFeature(id);
             default -> throw new IllegalArgumentException("Unknown component type " + type);
@@ -694,11 +710,16 @@ public final class AuthoringManager {
 
     public boolean renameComponent(Player player, String type, String oldId, String newId) {
         AuthoringSession session = session(player);
-        if (!isRoomComponentSession(session)) {
-            throw new IllegalStateException("Save room bounds first with /da room bounds");
+        if (!isComponentSession(session)) {
+            throw new IllegalStateException("Save bounds first");
         }
         boolean renamed = switch (type.toLowerCase(java.util.Locale.ROOT)) {
-            case "door" -> session.renameDoor(oldId, newId);
+            case "door" -> {
+                if (!session.roomSession()) {
+                    throw new IllegalArgumentException("Door templates do not have door components");
+                }
+                yield session.renameDoor(oldId, newId);
+            }
             case "marker" -> session.renameMarker(oldId, newId);
             case "feature" -> session.renameFeatureSlot(oldId, newId);
             default -> throw new IllegalArgumentException("Unknown component type " + type);
@@ -715,15 +736,26 @@ public final class AuthoringManager {
 
     public ComponentSelection updateComponentBounds(Player player, String type, String id, Direction3 facing) {
         AuthoringSession session = session(player);
-        if (!isRoomComponentSession(session)) {
-            throw new IllegalStateException("Save room bounds first with /da room bounds");
+        if (!isComponentSession(session)) {
+            throw new IllegalStateException("Save bounds first");
         }
         SelectionBounds roomBounds = session.roomBounds().orElseThrow();
         SelectionBounds current = session.currentSelection()
             .orElseThrow(() -> new IllegalStateException("Select the new component bounds with the wand first"));
         SelectionBounds local = current.toLocal(roomBounds);
         boolean updated = switch (type.toLowerCase(java.util.Locale.ROOT)) {
-            case "door" -> session.updateDoorBounds(id, local, resolveFacing(facing, local, SelectionBounds.between(IntVector3.ZERO, roomBounds.size().subtract(new IntVector3(1, 1, 1))), "Door slot"));
+            case "door" -> {
+                if (!session.roomSession()) {
+                    throw new IllegalArgumentException("Door templates do not have door components");
+                }
+                yield session.updateDoorBounds(id, local, resolveFacing(facing, local, SelectionBounds.between(IntVector3.ZERO, roomBounds.size().subtract(new IntVector3(1, 1, 1))), "Door slot"));
+            }
+            case "gateway" -> {
+                if (!session.doorSession()) {
+                    throw new IllegalArgumentException("Room templates do not have gateway components");
+                }
+                yield session.updateGatewayBounds(id, local, resolveFacing(facing, local, SelectionBounds.between(IntVector3.ZERO, roomBounds.size().subtract(new IntVector3(1, 1, 1))), "Gateway"));
+            }
             case "marker" -> session.updateMarkerPosition(id, local.min());
             case "feature" -> session.updateFeatureSlotBounds(id, local);
             default -> throw new IllegalArgumentException("Unknown component type " + type);
@@ -732,6 +764,32 @@ public final class AuthoringManager {
             throw new IllegalArgumentException("No matching " + type + " named " + id + ".");
         }
         return selectComponent(player, type, id);
+    }
+
+    public ComponentSelection rotateSelectedComponent(Player player, Direction3 facing) {
+        AuthoringSession session = session(player);
+        if (!isComponentSession(session)) {
+            throw new IllegalStateException("Save bounds first");
+        }
+        AuthoringSession.SelectedComponent selected = session.selectedComponent()
+            .orElseThrow(() -> new IllegalArgumentException("Select a component first"));
+        if (!session.rotateComponent(selected.type(), selected.id(), facing, session.roomBounds().orElseThrow().size())) {
+            throw new IllegalArgumentException("No matching " + selected.type() + " named " + selected.id() + ".");
+        }
+        return selectComponent(player, selected.type(), selected.id());
+    }
+
+    public ComponentSelection faceSelectedComponent(Player player, Direction3 facing) {
+        AuthoringSession session = session(player);
+        if (!isComponentSession(session)) {
+            throw new IllegalStateException("Save bounds first");
+        }
+        AuthoringSession.SelectedComponent selected = session.selectedComponent()
+            .orElseThrow(() -> new IllegalArgumentException("Select a component first"));
+        if (!session.faceComponent(selected.type(), selected.id(), facing, SelectionBounds.between(IntVector3.ZERO, session.roomBounds().orElseThrow().size().subtract(new IntVector3(1, 1, 1))))) {
+            throw new IllegalArgumentException("No matching " + selected.type() + " named " + selected.id() + ".");
+        }
+        return selectComponent(player, selected.type(), selected.id());
     }
 
     public void cancelEdit(Player player) {

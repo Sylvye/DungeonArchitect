@@ -10,6 +10,10 @@ record ComponentCommandTarget(String type, String id) {
     private static final List<String> TYPES = List.of("door", "marker", "feature");
 
     static ComponentCommandTarget resolve(String[] args, int startIndex, Optional<AuthoringSession.SelectedComponent> selected) {
+        return resolve(args, startIndex, selected, TYPES);
+    }
+
+    static ComponentCommandTarget resolve(String[] args, int startIndex, Optional<AuthoringSession.SelectedComponent> selected, List<String> types) {
         int remaining = args.length - startIndex;
         if (remaining <= 0) {
             return selected
@@ -17,7 +21,7 @@ record ComponentCommandTarget(String type, String id) {
                 .orElseThrow(() -> new IllegalArgumentException("Select a component first, or provide type and id."));
         }
 
-        String type = normalizeType(args[startIndex]);
+        String type = normalizeType(args[startIndex], types);
         if (remaining == 1) {
             return selected
                 .filter(component -> component.type().equals(type))
@@ -33,9 +37,13 @@ record ComponentCommandTarget(String type, String id) {
     }
 
     static String normalizeType(String type) {
+        return normalizeType(type, TYPES);
+    }
+
+    static String normalizeType(String type, List<String> types) {
         String normalized = type.toLowerCase(Locale.ROOT);
-        if (!TYPES.contains(normalized)) {
-            throw new IllegalArgumentException("Component type must be door, marker, or feature");
+        if (!types.contains(normalized)) {
+            throw new IllegalArgumentException("Component type must be " + String.join(", ", types));
         }
         return normalized;
     }

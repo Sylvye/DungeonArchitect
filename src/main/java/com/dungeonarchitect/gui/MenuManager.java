@@ -14,6 +14,7 @@ import com.dungeonarchitect.domain.RoomFeatureSlot;
 import com.dungeonarchitect.domain.RoomMarker;
 import com.dungeonarchitect.domain.RoomTemplate;
 import com.dungeonarchitect.domain.Rotation;
+import com.dungeonarchitect.domain.TagDomain;
 import com.dungeonarchitect.door.DoorTemplateIO;
 import com.dungeonarchitect.door.DoorTemplateMatcher;
 import com.dungeonarchitect.door.DoorTemplateRegistry;
@@ -50,6 +51,7 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -70,16 +72,22 @@ public final class MenuManager implements Listener {
     private final ChatPromptManager prompts;
     private final Runnable reloadAll;
     private final AssetRenameCoordinator assetRenameCoordinator;
+    private final TagCatalog tagCatalog;
     private final Map<UUID, PlayerMenuActions> actions = new HashMap<>();
     private final Map<UUID, MultiEditSession> multiEdits = new HashMap<>();
+    private final Map<UUID, TagSelection> tagSelections = new HashMap<>();
     private final RoomTemplateValidator validator = new RoomTemplateValidator();
 
     public MenuManager(Plugin plugin, AuthoringManager authoringManager, RoomTemplateRegistry templateRegistry, FeatureTemplateRegistry featureRegistry, DoorTemplateRegistry doorRegistry, DungeonManager dungeonManager, ChatPromptManager prompts, Runnable reloadAll) {
         this(plugin, authoringManager, templateRegistry, featureRegistry, doorRegistry, dungeonManager, prompts,
-            new AssetRenameCoordinator(templateRegistry, featureRegistry, doorRegistry), reloadAll);
+            new AssetRenameCoordinator(templateRegistry, featureRegistry, doorRegistry), new TagCatalog(plugin.getDataFolder().toPath().resolve("tags.yml")), reloadAll);
     }
 
     public MenuManager(Plugin plugin, AuthoringManager authoringManager, RoomTemplateRegistry templateRegistry, FeatureTemplateRegistry featureRegistry, DoorTemplateRegistry doorRegistry, DungeonManager dungeonManager, ChatPromptManager prompts, AssetRenameCoordinator assetRenameCoordinator, Runnable reloadAll) {
+        this(plugin, authoringManager, templateRegistry, featureRegistry, doorRegistry, dungeonManager, prompts, assetRenameCoordinator, new TagCatalog(plugin.getDataFolder().toPath().resolve("tags.yml")), reloadAll);
+    }
+
+    public MenuManager(Plugin plugin, AuthoringManager authoringManager, RoomTemplateRegistry templateRegistry, FeatureTemplateRegistry featureRegistry, DoorTemplateRegistry doorRegistry, DungeonManager dungeonManager, ChatPromptManager prompts, AssetRenameCoordinator assetRenameCoordinator, TagCatalog tagCatalog, Runnable reloadAll) {
         this.plugin = plugin;
         this.authoringManager = authoringManager;
         this.templateRegistry = templateRegistry;
@@ -88,6 +96,7 @@ public final class MenuManager implements Listener {
         this.dungeonManager = dungeonManager;
         this.prompts = prompts;
         this.assetRenameCoordinator = assetRenameCoordinator;
+        this.tagCatalog = tagCatalog;
         this.reloadAll = reloadAll;
     }
 
@@ -183,17 +192,8 @@ public final class MenuManager implements Listener {
             p.sendMessage(Component.text("Room spawn updated."));
             openRoom(p, roomId);
         }));
-        button(menu, 16, Material.OAK_SIGN, "Tags: " + String.join(",", template.tags()), List.of("Comma separated tags."), p -> prompts.prompt(p, "Enter comma-separated tags", value -> {
-            Set<String> tags = new LinkedHashSet<>();
-            for (String tag : value.split(",")) {
-                if (!tag.isBlank()) {
-                    tags.add(tag.trim());
-                }
-            }
-            saveRoom(new RoomTemplate(template.id(), template.category(), template.weight(), template.minimumConnections(), tags, template.size(), template.spawn(), template.doors(), template.markers(), template.featureSlots(), template.structureFile()));
-            p.sendMessage(Component.text("Room tags updated."));
-            openRoom(p, roomId);
-        }));
+        Set<String> currentRoomTags = activeEdit == null ? template.tags() : activeEdit.tags();
+        button(menu, 16, Material.OAK_SIGN, "Tags: " + String.join(",", currentRoomTags), List.of("Click to select room tags."), p -> openRoomTags(p, template));
         button(menu, 18, Material.IRON_BARS, "Minimum Connections: " + template.minimumConnections(), List.of("Connections required for every generated copy.", "0 allows this room to end a branch."), p -> prompts.prompt(p, "Enter a non-negative minimum connection count", value -> {
             int minimumConnections = Integer.parseInt(value);
             if (minimumConnections < 0) {
@@ -338,14 +338,14 @@ public final class MenuManager implements Listener {
             .findFirst()
             .orElseThrow(() -> new IllegalArgumentException("Unknown door slot " + slotId));
         Menu menu = menu("da:door-slot:" + roomId + ":" + slotId, 54, "Door Slot: " + slotId);
-        button(menu, 0, Material.NAME_TAG, "Tags: " + String.join(",", doorSlot.tags()), List.of("Comma separated tags."), p -> promptDoorTags(p, template, doorSlot));
+        button(menu, 0, Material.NAME_TAG, "Tags: " + String.join(",", doorSlot.tags()), List.of("Click to select door tags."), p -> promptDoorTags(p, template, doorSlot));
         button(menu, 1, doorSlot.connectionRules().mustConnect() ? Material.TRIPWIRE_HOOK : Material.GRAY_CONCRETE, "Must Connect: " + doorSlot.connectionRules().mustConnect(), List.of("A generated dungeon is invalid until this slot connects."), p -> toggleDoorMustConnect(p, template, doorSlot));
-        button(menu, 2, Material.LIME_DYE, "Accept Tags: " + String.join(",", doorSlot.connectionRules().allowedTags()), List.of("Comma separated opposite-door tags.", "Empty accepts any tag unless rejected."), p -> promptDoorAllowedTags(p, template, doorSlot));
-        button(menu, 3, Material.RED_DYE, "Reject Tags: " + String.join(",", doorSlot.connectionRules().deniedTags()), List.of("Comma separated opposite-door tags."), p -> promptDoorDeniedTags(p, template, doorSlot));
+        button(menu, 2, Material.LIME_DYE, "Accept Tags: " + String.join(",", doorSlot.connectionRules().allowedTags()), List.of("Select opposite-door tags.", "Empty accepts any tag unless rejected."), p -> promptDoorAllowedTags(p, template, doorSlot));
+        button(menu, 3, Material.RED_DYE, "Reject Tags: " + String.join(",", doorSlot.connectionRules().deniedTags()), List.of("Select opposite-door tags."), p -> promptDoorDeniedTags(p, template, doorSlot));
         button(menu, 4, Material.IRON_DOOR, "Slot " + slotId, List.of("Size: " + doorSlot.size(), "Position: " + doorSlot.position(), "Facing: " + doorSlot.facing(), "Tags: " + String.join(",", doorSlot.tags())), p -> openDoorSlot(p, roomId, slotId));
         button(menu, 5, Material.COMPASS, "Connection Preview", connectionPreviewLore(template, doorSlot), p -> openDoorSlot(p, roomId, slotId));
-        button(menu, 6, Material.LIME_BANNER, "Accept Room Tags: " + String.join(",", doorSlot.connectionRules().allowedRoomTags()), List.of("Comma separated opposite-room tags.", "Empty accepts any room unless rejected."), p -> promptDoorAllowedRoomTags(p, template, doorSlot));
-        button(menu, 7, Material.RED_BANNER, "Reject Room Tags: " + String.join(",", doorSlot.connectionRules().deniedRoomTags()), List.of("Comma separated opposite-room tags."), p -> promptDoorDeniedRoomTags(p, template, doorSlot));
+        button(menu, 6, Material.LIME_BANNER, "Accept Room Tags: " + String.join(",", doorSlot.connectionRules().allowedRoomTags()), List.of("Select opposite-room tags.", "Empty accepts any room unless rejected."), p -> promptDoorAllowedRoomTags(p, template, doorSlot));
+        button(menu, 7, Material.RED_BANNER, "Reject Room Tags: " + String.join(",", doorSlot.connectionRules().deniedRoomTags()), List.of("Select opposite-room tags."), p -> promptDoorDeniedRoomTags(p, template, doorSlot));
         int slot = 9;
         button(menu, slot++, Material.BARRIER, "empty", doorEntryLore(doorSlot, DoorSlotEntry.EMPTY, "Virtual door; leaves room blueprint unchanged."), p -> toggleDoorEntry(p, template, doorSlot, DoorSlotEntry.EMPTY, 1), null, p -> promptDoorWeight(p, template, doorSlot, DoorSlotEntry.EMPTY));
         List<DoorTemplate> unavailable = new ArrayList<>();
@@ -417,7 +417,10 @@ public final class MenuManager implements Listener {
     }
 
     private void promptDoorTags(Player player, RoomTemplate template, DoorSocket slot) {
-        prompts.prompt(player, "Enter comma-separated door tags", value -> saveDoorSlot(player, template, slot.withTags(parseTags(value))));
+        openTagSelector(player, TagDomain.DOOR, "Door Slot Tags", slot.tags(), tags -> {
+            saveDoorSlot(player, template, slot.withTags(tags));
+            player.sendMessage(Component.text("Door slot tags updated."));
+        }, p -> openDoorSlot(p, template.id(), slot.id()));
     }
 
     private void toggleDoorMustConnect(Player player, RoomTemplate template, DoorSocket slot) {
@@ -426,31 +429,31 @@ public final class MenuManager implements Listener {
     }
 
     private void promptDoorAllowedTags(Player player, RoomTemplate template, DoorSocket slot) {
-        prompts.prompt(player, "Enter comma-separated accepted opposite-door tags", value -> {
+        openTagSelector(player, TagDomain.DOOR, "Accept Door Tags", slot.connectionRules().allowedTags(), tags -> {
             DoorConnectionRules rules = slot.connectionRules();
-            saveDoorSlot(player, template, slot.withConnectionRules(new DoorConnectionRules(parseTags(value), rules.deniedTags(), rules.allowedRoomTags(), rules.deniedRoomTags(), rules.mustConnect())));
-        });
+            saveDoorSlot(player, template, slot.withConnectionRules(new DoorConnectionRules(tags, rules.deniedTags(), rules.allowedRoomTags(), rules.deniedRoomTags(), rules.mustConnect())));
+        }, p -> openDoorSlot(p, template.id(), slot.id()));
     }
 
     private void promptDoorDeniedTags(Player player, RoomTemplate template, DoorSocket slot) {
-        prompts.prompt(player, "Enter comma-separated rejected opposite-door tags", value -> {
+        openTagSelector(player, TagDomain.DOOR, "Reject Door Tags", slot.connectionRules().deniedTags(), tags -> {
             DoorConnectionRules rules = slot.connectionRules();
-            saveDoorSlot(player, template, slot.withConnectionRules(new DoorConnectionRules(rules.allowedTags(), parseTags(value), rules.allowedRoomTags(), rules.deniedRoomTags(), rules.mustConnect())));
-        });
+            saveDoorSlot(player, template, slot.withConnectionRules(new DoorConnectionRules(rules.allowedTags(), tags, rules.allowedRoomTags(), rules.deniedRoomTags(), rules.mustConnect())));
+        }, p -> openDoorSlot(p, template.id(), slot.id()));
     }
 
     private void promptDoorAllowedRoomTags(Player player, RoomTemplate template, DoorSocket slot) {
-        prompts.prompt(player, "Enter comma-separated accepted opposite-room tags", value -> {
+        openTagSelector(player, TagDomain.ROOM, "Accept Room Tags", slot.connectionRules().allowedRoomTags(), tags -> {
             DoorConnectionRules rules = slot.connectionRules();
-            saveDoorSlot(player, template, slot.withConnectionRules(new DoorConnectionRules(rules.allowedTags(), rules.deniedTags(), parseTags(value), rules.deniedRoomTags(), rules.mustConnect())));
-        });
+            saveDoorSlot(player, template, slot.withConnectionRules(new DoorConnectionRules(rules.allowedTags(), rules.deniedTags(), tags, rules.deniedRoomTags(), rules.mustConnect())));
+        }, p -> openDoorSlot(p, template.id(), slot.id()));
     }
 
     private void promptDoorDeniedRoomTags(Player player, RoomTemplate template, DoorSocket slot) {
-        prompts.prompt(player, "Enter comma-separated rejected opposite-room tags", value -> {
+        openTagSelector(player, TagDomain.ROOM, "Reject Room Tags", slot.connectionRules().deniedRoomTags(), tags -> {
             DoorConnectionRules rules = slot.connectionRules();
-            saveDoorSlot(player, template, slot.withConnectionRules(new DoorConnectionRules(rules.allowedTags(), rules.deniedTags(), rules.allowedRoomTags(), parseTags(value), rules.mustConnect())));
-        });
+            saveDoorSlot(player, template, slot.withConnectionRules(new DoorConnectionRules(rules.allowedTags(), rules.deniedTags(), rules.allowedRoomTags(), tags, rules.mustConnect())));
+        }, p -> openDoorSlot(p, template.id(), slot.id()));
     }
 
     private Set<String> parseTags(String value) {
@@ -461,6 +464,156 @@ public final class MenuManager implements Listener {
             }
         }
         return tags;
+    }
+
+    private void openRoomTags(Player player, RoomTemplate template) {
+        Set<String> current = authoringManager.editingSession(player, template.id()).map(AuthoringSession::tags).orElse(template.tags());
+        openTagSelector(player, TagDomain.ROOM, "Room Tags", current, tags -> {
+            RoomTemplate latest = templateRegistry.getVisible(template.id()).orElse(template);
+            authoringManager.editingSession(player, template.id()).ifPresent(session -> session.tags(tags));
+            saveRoom(new RoomTemplate(latest.id(), latest.category(), latest.weight(), latest.minimumConnections(), tags, latest.size(), latest.spawn(), latest.doors(), latest.markers(), latest.featureSlots(), latest.structureFile()));
+            player.sendMessage(Component.text("Room tags updated."));
+            openRoom(player, template.id());
+        }, p -> openRoom(p, template.id()));
+    }
+
+    private void openDoorTemplateTags(Player player, DoorTemplate template) {
+        Set<String> current = authoringManager.editingDoorSession(player, template.id()).map(AuthoringSession::tags).orElse(template.tags());
+        openTagSelector(player, TagDomain.DOOR, "Door Template Tags", current, tags -> {
+            DoorTemplate latest = doorRegistry.getVisible(template.id()).orElse(template);
+            authoringManager.editingDoorSession(player, template.id()).ifPresent(session -> session.tags(tags));
+            saveDoorTemplate(new DoorTemplate(latest.id(), latest.size(), tags, latest.markers(), latest.featureSlots(), latest.gateway(), latest.structureFile()));
+            player.sendMessage(Component.text("Door template tags updated."));
+            openDoor(player, template.id());
+        }, p -> openDoor(p, template.id()));
+    }
+
+    private void openTagSelector(Player player, TagDomain domain, String title, Set<String> selected, Consumer<Set<String>> onSave, Consumer<Player> onCancel) {
+        tagSelections.put(player.getUniqueId(), new TagSelection(domain, title, selected, onSave, onCancel));
+        openTagSelector(player);
+    }
+
+    private void openTagSelector(Player player) {
+        TagSelection selection = requireTagSelection(player);
+        List<String> filtered = tagCatalog.tags(selection.domain, selection.filter);
+        int pageCount = Math.max(1, (filtered.size() + 44) / 45);
+        selection.page = Math.min(selection.page, pageCount - 1);
+        Menu menu = menu("da:tags:" + selection.domain.name().toLowerCase(Locale.ROOT), 54, selection.title);
+        int start = selection.page * 45;
+        for (int index = start; index < filtered.size() && index < start + 45; index++) {
+            String tag = filtered.get(index);
+            int slot = index - start;
+            boolean selected = containsTag(selection.selected, tag);
+            button(menu, slot, selected ? Material.LIME_DYE : Material.NAME_TAG, tag,
+                List.of(selected ? "Selected. Click to remove from this field." : "Click to add to this field.", "Shift-right-click to delete globally."),
+                p -> {
+                    toggleTag(selection.selected, tag);
+                    openTagSelector(p);
+                }, null, null, p -> openTagDeleteConfirm(p, tag));
+        }
+        if (selection.page > 0) {
+            button(menu, 45, Material.ARROW, "Previous", List.of(), p -> {
+                selection.page--;
+                openTagSelector(p);
+            });
+        }
+        button(menu, 47, Material.ANVIL, "Add New Tag", List.of("Create one " + selection.domain.label().toLowerCase(Locale.ROOT) + " entry."), this::promptNewTag);
+        button(menu, 49, Material.BARRIER, "Back", List.of("Discard tag changes."), this::cancelTagSelection);
+        button(menu, 51, Material.SPYGLASS, "Search: " + (selection.filter.isBlank() ? "all tags" : selection.filter), List.of("Click to filter tags."), this::promptTagSearch);
+        if (start + 45 < filtered.size()) {
+            button(menu, 52, Material.ARROW, "Next", List.of(), p -> {
+                selection.page++;
+                openTagSelector(p);
+            });
+        }
+        button(menu, 53, Material.EMERALD_BLOCK, "Done", List.of("Save " + selection.selected.size() + " selected tag(s)."), this::saveTagSelection);
+        open(player, menu);
+    }
+
+    private void promptTagSearch(Player player) {
+        TagSelection selection = requireTagSelection(player);
+        prompts.prompt(player, "Search " + selection.domain.label() + " (empty shows all)", value -> {
+            selection.filter = value.trim();
+            selection.page = 0;
+            openTagSelector(player);
+        });
+    }
+
+    private void promptNewTag(Player player) {
+        TagSelection selection = requireTagSelection(player);
+        prompts.prompt(player, "Enter one new " + selection.domain.label().toLowerCase(Locale.ROOT), value -> {
+            String tag = tagCatalog.add(selection.domain, value);
+            addTag(selection.selected, tag);
+            selection.filter = "";
+            selection.page = 0;
+            openTagSelector(player);
+        });
+    }
+
+    private void saveTagSelection(Player player) {
+        TagSelection selection = requireTagSelection(player);
+        tagSelections.remove(player.getUniqueId());
+        selection.onSave.accept(Set.copyOf(selection.selected));
+    }
+
+    private void cancelTagSelection(Player player) {
+        TagSelection selection = tagSelections.remove(player.getUniqueId());
+        if (selection != null) {
+            selection.onCancel.accept(player);
+        }
+    }
+
+    private void openTagDeleteConfirm(Player player, String tag) {
+        TagSelection selection = requireTagSelection(player);
+        TagCleanupService.Result result = TagCleanupService.remove(selection.domain, tag, templateRegistry.visible(), doorRegistry.visible());
+        Menu menu = menu("da:tag-delete:" + selection.domain.name().toLowerCase(Locale.ROOT), 27, "Delete Tag: " + tag);
+        button(menu, 11, Material.RED_CONCRETE, "Delete Globally", List.of("Remove from " + result.affectedFields() + " tag field(s).", "This cannot be undone."), p -> deleteTagGlobally(p, tag));
+        button(menu, 15, Material.GRAY_CONCRETE, "Cancel", List.of(), this::openTagSelector);
+        open(player, menu);
+    }
+
+    private void deleteTagGlobally(Player player, String tag) {
+        TagSelection selection = requireTagSelection(player);
+        TagCleanupService.Result result = TagCleanupService.remove(selection.domain, tag, templateRegistry.visible(), doorRegistry.visible());
+        try {
+            for (RoomTemplate room : result.rooms()) {
+                RoomTemplateIO.save(room, room.structureFile().getParent());
+            }
+            for (DoorTemplate door : result.doors()) {
+                DoorTemplateIO.save(door, door.structureFile().getParent());
+            }
+            tagCatalog.remove(selection.domain, tag);
+            authoringManager.removeTag(selection.domain, tag);
+            reloadAll.run();
+            player.sendMessage(Component.text("Deleted " + tag + " from " + result.affectedFields() + " tag field(s)."));
+            cancelTagSelection(player);
+        } catch (IOException ex) {
+            player.sendMessage(Component.text("Tag deletion failed: " + ex.getMessage()));
+            openTagSelector(player);
+        }
+    }
+
+    private TagSelection requireTagSelection(Player player) {
+        TagSelection selection = tagSelections.get(player.getUniqueId());
+        if (selection == null) {
+            throw new IllegalStateException("No active tag selection");
+        }
+        return selection;
+    }
+
+    private static boolean containsTag(Collection<String> tags, String tag) {
+        return tags.stream().anyMatch(candidate -> candidate.equalsIgnoreCase(tag));
+    }
+
+    private static void addTag(Set<String> tags, String tag) {
+        tags.removeIf(candidate -> candidate.equalsIgnoreCase(tag));
+        tags.add(tag);
+    }
+
+    private static void toggleTag(Set<String> tags, String tag) {
+        if (!tags.removeIf(candidate -> candidate.equalsIgnoreCase(tag))) {
+            tags.add(tag);
+        }
     }
 
     private List<String> connectionPreviewLore(RoomTemplate owner, DoorSocket slot) {
@@ -507,6 +660,9 @@ public final class MenuManager implements Listener {
         if (activeEdit != null) {
             activeEdit.removeDoor(updatedSlot.id());
             activeEdit.addDoorSlot(updatedSlot);
+            List<DoorSocket> persistedSlots = new ArrayList<>(template.doors());
+            persistedSlots.replaceAll(slot -> slot.id().equalsIgnoreCase(updatedSlot.id()) ? updatedSlot : slot);
+            saveRoom(new RoomTemplate(template.id(), template.category(), template.weight(), template.minimumConnections(), template.tags(), template.size(), template.spawn(), persistedSlots, template.markers(), template.featureSlots(), template.structureFile()));
             player.sendMessage(Component.text("Door slot updated in the active edit session."));
             openDoorSlot(player, template.id(), updatedSlot.id());
             return;
@@ -723,17 +879,8 @@ public final class MenuManager implements Listener {
         Menu menu = menu("da:door-template:" + doorId, 54, "Door: " + doorId);
         button(menu, 4, statusValid(status) ? Material.OAK_DOOR : Material.RED_CONCRETE, "Size: " + template.size(), loadStatusLore(status, "Captured door footprint."), p -> openDoor(p, doorId));
         button(menu, 10, template.gateway() == null ? Material.RED_CONCRETE : Material.LIME_CONCRETE, "Gateway: " + (template.gateway() == null ? "unset" : template.gateway().size() + " " + template.gateway().facing()), List.of("Set with /da door gateway.", "Right click to select in edit world."), p -> openDoor(p, doorId), p -> selectDoorComponent(p, doorId, "gateway", "gateway"));
-        button(menu, 12, Material.OAK_SIGN, "Tags: " + String.join(",", template.tags()), List.of("Comma separated tags."), p -> prompts.prompt(p, "Enter comma-separated tags", value -> {
-            Set<String> tags = new LinkedHashSet<>();
-            for (String tag : value.split(",")) {
-                if (!tag.isBlank()) {
-                    tags.add(tag.trim());
-                }
-            }
-            saveDoorTemplate(new DoorTemplate(template.id(), template.size(), tags, template.markers(), template.featureSlots(), template.gateway(), template.structureFile()));
-            p.sendMessage(Component.text("Door tags updated."));
-            openDoor(p, doorId);
-        }));
+        Set<String> currentDoorTags = activeEdit == null ? template.tags() : activeEdit.tags();
+        button(menu, 12, Material.OAK_SIGN, "Tags: " + String.join(",", currentDoorTags), List.of("Click to select door tags."), p -> openDoorTemplateTags(p, template));
         button(menu, 20, Material.STRUCTURE_BLOCK, "Edit In World", List.of("Paste this door into the edit world."), p -> {
             p.closeInventory();
             p.sendMessage(Component.text("Preparing isolated edit workspace for " + template.id() + "..."));
@@ -928,13 +1075,13 @@ public final class MenuManager implements Listener {
         List<DoorSocket> selectedSlots = selectedDoorSlots(player, session);
         initializeMultiDoorRuleDraft(session, selectedSlots);
         Menu menu = menu("da:multi-config:" + session.ownerId + ":door", 54, "Multi-edit Doors");
-        button(menu, 0, Material.NAME_TAG, "Tags: " + String.join(",", session.doorTagsDraft), List.of("Comma separated tags.", "Applies to every selected door."), p -> promptMultiDoorTags(p));
+        button(menu, 0, Material.NAME_TAG, "Tags: " + String.join(",", session.doorTagsDraft), List.of("Select door tags.", "Applies to every selected door."), p -> promptMultiDoorTags(p));
         button(menu, 1, session.doorConnectionRulesDraft.mustConnect() ? Material.TRIPWIRE_HOOK : Material.GRAY_CONCRETE, "Must Connect: " + session.doorConnectionRulesDraft.mustConnect(), List.of("Applies to every selected door."), p -> toggleMultiDoorMustConnect(p));
-        button(menu, 2, Material.LIME_DYE, "Accept Tags: " + String.join(",", session.doorConnectionRulesDraft.allowedTags()), List.of("Comma separated opposite-door tags.", "Applies to every selected door."), p -> promptMultiDoorAllowedTags(p));
-        button(menu, 3, Material.RED_DYE, "Reject Tags: " + String.join(",", session.doorConnectionRulesDraft.deniedTags()), List.of("Comma separated opposite-door tags.", "Applies to every selected door."), p -> promptMultiDoorDeniedTags(p));
+        button(menu, 2, Material.LIME_DYE, "Accept Tags: " + String.join(",", session.doorConnectionRulesDraft.allowedTags()), List.of("Select opposite-door tags.", "Applies to every selected door."), p -> promptMultiDoorAllowedTags(p));
+        button(menu, 3, Material.RED_DYE, "Reject Tags: " + String.join(",", session.doorConnectionRulesDraft.deniedTags()), List.of("Select opposite-door tags.", "Applies to every selected door."), p -> promptMultiDoorDeniedTags(p));
         button(menu, 4, Material.OAK_DOOR, "Draft Door Entries", List.of("Selected slots: " + selectedSlots.size(), "Draft entries: " + session.doorDraft.size(), session.doorEntriesTouched ? "Entry changes apply to every selected slot." : "Entries remain unchanged unless edited."), p -> openMultiEditConfig(p));
-        button(menu, 6, Material.LIME_BANNER, "Accept Room Tags: " + String.join(",", session.doorConnectionRulesDraft.allowedRoomTags()), List.of("Comma separated opposite-room tags.", "Applies to every selected door."), p -> promptMultiDoorAllowedRoomTags(p));
-        button(menu, 7, Material.RED_BANNER, "Reject Room Tags: " + String.join(",", session.doorConnectionRulesDraft.deniedRoomTags()), List.of("Comma separated opposite-room tags.", "Applies to every selected door."), p -> promptMultiDoorDeniedRoomTags(p));
+        button(menu, 6, Material.LIME_BANNER, "Accept Room Tags: " + String.join(",", session.doorConnectionRulesDraft.allowedRoomTags()), List.of("Select opposite-room tags.", "Applies to every selected door."), p -> promptMultiDoorAllowedRoomTags(p));
+        button(menu, 7, Material.RED_BANNER, "Reject Room Tags: " + String.join(",", session.doorConnectionRulesDraft.deniedRoomTags()), List.of("Select opposite-room tags.", "Applies to every selected door."), p -> promptMultiDoorDeniedRoomTags(p));
         int slot = 9;
         button(menu, slot++, Material.BARRIER, "empty", multiDoorEntryLore(session, DoorSlotEntry.EMPTY, "Virtual door; leaves room blueprint unchanged."), p -> {
             toggleMultiDoorDraft(p, DoorSlotEntry.EMPTY, 1);
@@ -1175,13 +1322,13 @@ public final class MenuManager implements Listener {
     }
 
     private void promptMultiDoorTags(Player player) {
-        prompts.prompt(player, "Enter comma-separated door tags", value -> {
-            MultiEditSession session = requireMultiEdit(player);
+        MultiEditSession session = requireMultiEdit(player);
+        openTagSelector(player, TagDomain.DOOR, "Door Slot Tags", session.doorTagsDraft, tags -> {
             session.doorTagsDraft.clear();
-            session.doorTagsDraft.addAll(parseTags(value));
+            session.doorTagsDraft.addAll(tags);
             session.doorTagsTouched = true;
             openMultiEditConfig(player);
-        });
+        }, this::openMultiEditConfig);
     }
 
     private void toggleMultiDoorMustConnect(Player player) {
@@ -1193,43 +1340,43 @@ public final class MenuManager implements Listener {
     }
 
     private void promptMultiDoorAllowedTags(Player player) {
-        prompts.prompt(player, "Enter comma-separated accepted opposite-door tags", value -> {
-            MultiEditSession session = requireMultiEdit(player);
+        MultiEditSession session = requireMultiEdit(player);
+        openTagSelector(player, TagDomain.DOOR, "Accept Door Tags", session.doorConnectionRulesDraft.allowedTags(), tags -> {
             DoorConnectionRules rules = session.doorConnectionRulesDraft;
-            session.doorConnectionRulesDraft = new DoorConnectionRules(parseTags(value), rules.deniedTags(), rules.allowedRoomTags(), rules.deniedRoomTags(), rules.mustConnect());
+            session.doorConnectionRulesDraft = new DoorConnectionRules(tags, rules.deniedTags(), rules.allowedRoomTags(), rules.deniedRoomTags(), rules.mustConnect());
             session.doorConnectionRulesTouched = true;
             openMultiEditConfig(player);
-        });
+        }, this::openMultiEditConfig);
     }
 
     private void promptMultiDoorDeniedTags(Player player) {
-        prompts.prompt(player, "Enter comma-separated rejected opposite-door tags", value -> {
-            MultiEditSession session = requireMultiEdit(player);
+        MultiEditSession session = requireMultiEdit(player);
+        openTagSelector(player, TagDomain.DOOR, "Reject Door Tags", session.doorConnectionRulesDraft.deniedTags(), tags -> {
             DoorConnectionRules rules = session.doorConnectionRulesDraft;
-            session.doorConnectionRulesDraft = new DoorConnectionRules(rules.allowedTags(), parseTags(value), rules.allowedRoomTags(), rules.deniedRoomTags(), rules.mustConnect());
+            session.doorConnectionRulesDraft = new DoorConnectionRules(rules.allowedTags(), tags, rules.allowedRoomTags(), rules.deniedRoomTags(), rules.mustConnect());
             session.doorConnectionRulesTouched = true;
             openMultiEditConfig(player);
-        });
+        }, this::openMultiEditConfig);
     }
 
     private void promptMultiDoorAllowedRoomTags(Player player) {
-        prompts.prompt(player, "Enter comma-separated accepted opposite-room tags", value -> {
-            MultiEditSession session = requireMultiEdit(player);
+        MultiEditSession session = requireMultiEdit(player);
+        openTagSelector(player, TagDomain.ROOM, "Accept Room Tags", session.doorConnectionRulesDraft.allowedRoomTags(), tags -> {
             DoorConnectionRules rules = session.doorConnectionRulesDraft;
-            session.doorConnectionRulesDraft = new DoorConnectionRules(rules.allowedTags(), rules.deniedTags(), parseTags(value), rules.deniedRoomTags(), rules.mustConnect());
+            session.doorConnectionRulesDraft = new DoorConnectionRules(rules.allowedTags(), rules.deniedTags(), tags, rules.deniedRoomTags(), rules.mustConnect());
             session.doorConnectionRulesTouched = true;
             openMultiEditConfig(player);
-        });
+        }, this::openMultiEditConfig);
     }
 
     private void promptMultiDoorDeniedRoomTags(Player player) {
-        prompts.prompt(player, "Enter comma-separated rejected opposite-room tags", value -> {
-            MultiEditSession session = requireMultiEdit(player);
+        MultiEditSession session = requireMultiEdit(player);
+        openTagSelector(player, TagDomain.ROOM, "Reject Room Tags", session.doorConnectionRulesDraft.deniedRoomTags(), tags -> {
             DoorConnectionRules rules = session.doorConnectionRulesDraft;
-            session.doorConnectionRulesDraft = new DoorConnectionRules(rules.allowedTags(), rules.deniedTags(), rules.allowedRoomTags(), parseTags(value), rules.mustConnect());
+            session.doorConnectionRulesDraft = new DoorConnectionRules(rules.allowedTags(), rules.deniedTags(), rules.allowedRoomTags(), tags, rules.mustConnect());
             session.doorConnectionRulesTouched = true;
             openMultiEditConfig(player);
-        });
+        }, this::openMultiEditConfig);
     }
 
     private DoorSocket applyMultiDoorDraft(DoorSocket slot, MultiEditSession session) {
@@ -2076,6 +2223,24 @@ public final class MenuManager implements Listener {
             this.owner = owner;
             this.ownerId = ownerId;
             this.slotType = slotType;
+        }
+    }
+
+    private static final class TagSelection {
+        private final TagDomain domain;
+        private final String title;
+        private final Set<String> selected = new LinkedHashSet<>();
+        private final Consumer<Set<String>> onSave;
+        private final Consumer<Player> onCancel;
+        private String filter = "";
+        private int page;
+
+        private TagSelection(TagDomain domain, String title, Set<String> selected, Consumer<Set<String>> onSave, Consumer<Player> onCancel) {
+            this.domain = domain;
+            this.title = title;
+            this.selected.addAll(selected);
+            this.onSave = onSave;
+            this.onCancel = onCancel;
         }
     }
 

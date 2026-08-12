@@ -20,7 +20,26 @@ final class DoorTemplateValidatorTest {
     Path tempDir;
 
     @Test
-    void rejectsGatewayFacingThatDoesNotMatchDominantBoundsFace() throws Exception {
+    void acceptsGatewayFacingOnNonDominantTouchingBoundsFace() throws Exception {
+        Path nbt = tempDir.resolve("door.nbt");
+        Files.writeString(nbt, "fake");
+        DoorTemplate template = new DoorTemplate(
+            "corner_gateway",
+            new IntVector3(5, 2, 5),
+            Set.of(),
+            List.of(),
+            List.of(),
+            new DoorGateway(new IntVector3(1, 0, 0), new IntVector3(3, 1, 3), Direction3.NORTH),
+            nbt
+        );
+
+        var result = new DoorTemplateValidator(null).validate(template);
+
+        assertTrue(result.valid(), result.errors().toString());
+    }
+
+    @Test
+    void rejectsGatewayFacingThatDoesNotTouchDoorBoundsFace() throws Exception {
         Path nbt = tempDir.resolve("door.nbt");
         Files.writeString(nbt, "fake");
         DoorTemplate template = new DoorTemplate(
@@ -36,6 +55,6 @@ final class DoorTemplateValidatorTest {
         var result = new DoorTemplateValidator(null).validate(template);
 
         assertFalse(result.valid());
-        assertTrue(result.errors().stream().anyMatch(error -> error.contains("bounds touch the DOWN door face")), result.errors().toString());
+        assertTrue(result.errors().stream().anyMatch(error -> error.contains("facing NORTH does not touch the selected bounds")), result.errors().toString());
     }
 }

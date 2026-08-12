@@ -51,8 +51,8 @@ public final class DungeonWorldManager {
         return world;
     }
 
-    public void warmupWorld() {
-        createWorld(new UUID(0L, 0L));
+    public World warmupWorld() {
+        return createWorld(new UUID(0L, 0L));
     }
 
     public boolean isDungeonWorld(World world) {

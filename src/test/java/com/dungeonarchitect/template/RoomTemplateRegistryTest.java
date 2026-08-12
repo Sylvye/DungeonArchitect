@@ -145,7 +145,7 @@ final class RoomTemplateRegistryTest {
 
         var result = roomRegistry.reload();
 
-        assertTrue(result.repairs().stream().anyMatch(repair -> repair.contains("removed missing or invalid door cellar from slot door_2")), result.repairs().toString());
+        assertTrue(result.repairs().stream().anyMatch(repair -> repair.contains("removed incompatible door cellar from slot door_2")), result.repairs().toString());
         assertTrue(RoomTemplateIO.load(room).doors().getFirst().entries().isEmpty());
     }
 
