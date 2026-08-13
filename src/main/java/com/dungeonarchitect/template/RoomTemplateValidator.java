@@ -71,6 +71,7 @@ public final class RoomTemplateValidator {
         }
         try {
             BoundingBox3i bounds = BoundingBox3i.fromMinAndSize(com.dungeonarchitect.domain.IntVector3.ZERO, template.size());
+            IdentityRules.validateRoomComponents(template.id(), template.doors(), template.markers(), template.featureSlots(), result);
             validateDoors(template, bounds, result);
             validateMarkers(template, bounds, result);
             validateFeatureSlots(template, bounds, result);

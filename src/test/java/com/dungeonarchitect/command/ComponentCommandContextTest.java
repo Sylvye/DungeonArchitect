@@ -20,8 +20,9 @@ final class ComponentCommandContextTest {
     }
 
     @Test
-    void featureContextHasNoNestedComponents() {
-        assertFalse(ComponentCommandContext.FEATURE.hasComponents());
-        assertTrue(ComponentCommandContext.FEATURE.actions().isEmpty());
+    void featureContextAllowsMarkerComponents() {
+        assertTrue(ComponentCommandContext.FEATURE.hasComponents());
+        ComponentCommandContext.FEATURE.requireAction("remove", "marker");
+        assertThrows(IllegalArgumentException.class, () -> ComponentCommandContext.FEATURE.requireAction("rotate", "marker"));
     }
 }

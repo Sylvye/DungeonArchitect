@@ -22,7 +22,11 @@ public final class ChatPromptManager implements Listener {
     }
 
     public void prompt(Player player, String message, Consumer<String> handler) {
-        prompts.put(player.getUniqueId(), new Prompt(message, handler));
+        prompt(player, message, handler, () -> { });
+    }
+
+    public void prompt(Player player, String message, Consumer<String> handler, Runnable cancelHandler) {
+        prompts.put(player.getUniqueId(), new Prompt(message, handler, cancelHandler));
         player.closeInventory();
         player.sendMessage(Component.text(message + " Type cancel to abort."));
     }
@@ -38,6 +42,7 @@ public final class ChatPromptManager implements Listener {
         Bukkit.getScheduler().runTask(plugin, () -> {
             if (message.equalsIgnoreCase("cancel")) {
                 event.getPlayer().sendMessage(Component.text("Edit cancelled."));
+                prompt.cancelHandler.run();
                 return;
             }
             try {
@@ -48,6 +53,6 @@ public final class ChatPromptManager implements Listener {
         });
     }
 
-    private record Prompt(String message, Consumer<String> handler) {
+    private record Prompt(String message, Consumer<String> handler, Runnable cancelHandler) {
     }
 }

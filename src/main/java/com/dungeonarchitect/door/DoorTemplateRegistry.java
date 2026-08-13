@@ -67,6 +67,11 @@ public final class DoorTemplateRegistry {
                     DoorTemplate template = loadedStatus.template();
                     List<String> errors = new ArrayList<>(loadedStatus.errors());
                     List<String> repairs = new ArrayList<>(loadedStatus.repairs());
+                    try {
+                        com.dungeonarchitect.template.TopLevelIdentity.requireAvailable(doorsDirectory, "door", template.id(), template.id());
+                    } catch (IllegalArgumentException ex) {
+                        errors.add(ex.getMessage());
+                    }
                     if (visible.containsKey(template.id())) {
                         errors.add("Duplicate door id " + template.id());
                         TemplateLoadStatus<DoorTemplate> duplicate = new TemplateLoadStatus<>(template, template.id(), directory, false, errors, repairs);
@@ -187,6 +192,7 @@ public final class DoorTemplateRegistry {
 
     public DoorTemplate duplicateDoor(String oldId, String newId) throws IOException {
         String normalizedNewId = normalizeId(newId);
+        com.dungeonarchitect.template.TopLevelIdentity.requireAvailable(doorsDirectory, "door", normalizedNewId, null);
         Path source = templateDirectory(oldId);
         Path target = templateDirectory(normalizedNewId);
         if (!Files.isDirectory(source)) {
@@ -197,7 +203,7 @@ public final class DoorTemplateRegistry {
         }
         DoorTemplate sourceTemplate = loadVisibleTemplateForOperation(oldId, source, "duplication");
         copyDirectory(source, target);
-        DoorTemplate renamed = new DoorTemplate(normalizedNewId, sourceTemplate.size(), sourceTemplate.tags(), sourceTemplate.markers(), sourceTemplate.featureSlots(), sourceTemplate.gateway(), target.resolve("door.nbt"));
+        DoorTemplate renamed = new DoorTemplate(normalizedNewId, sourceTemplate.size(), sourceTemplate.tags(), sourceTemplate.markers(), sourceTemplate.featureSlots(), sourceTemplate.lootBindings(), sourceTemplate.gateway(), target.resolve("door.nbt"));
         DoorTemplateIO.save(renamed, target);
         reload();
         return renamed;
@@ -205,6 +211,7 @@ public final class DoorTemplateRegistry {
 
     public DoorTemplate renameDoor(String oldId, String newId) throws IOException {
         String normalizedNewId = normalizeId(newId);
+        com.dungeonarchitect.template.TopLevelIdentity.requireAvailable(doorsDirectory, "door", normalizedNewId, oldId);
         Path source = templateDirectory(oldId);
         Path target = templateDirectory(normalizedNewId);
         if (!Files.isDirectory(source)) {
@@ -215,7 +222,7 @@ public final class DoorTemplateRegistry {
         }
         DoorTemplate sourceTemplate = loadVisibleTemplateForOperation(oldId, source, "rename");
         Files.move(source, target);
-        DoorTemplate renamed = new DoorTemplate(normalizedNewId, sourceTemplate.size(), sourceTemplate.tags(), sourceTemplate.markers(), sourceTemplate.featureSlots(), sourceTemplate.gateway(), target.resolve("door.nbt"));
+        DoorTemplate renamed = new DoorTemplate(normalizedNewId, sourceTemplate.size(), sourceTemplate.tags(), sourceTemplate.markers(), sourceTemplate.featureSlots(), sourceTemplate.lootBindings(), sourceTemplate.gateway(), target.resolve("door.nbt"));
         DoorTemplateIO.save(renamed, target);
         reload();
         return renamed;

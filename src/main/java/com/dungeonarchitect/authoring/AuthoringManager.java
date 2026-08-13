@@ -23,6 +23,7 @@ import com.dungeonarchitect.runtime.VoidChunkGenerator;
 import com.dungeonarchitect.template.RoomTemplateIO;
 import com.dungeonarchitect.template.RoomTemplateValidator;
 import com.dungeonarchitect.template.TemplateValidationResult;
+import com.dungeonarchitect.template.TopLevelIdentity;
 import com.dungeonarchitect.util.BukkitVectors;
 import org.bukkit.Color;
 import org.bukkit.Difficulty;
@@ -138,9 +139,11 @@ public final class AuthoringManager {
     }
 
     public CompletableFuture<AuthoringSession> createSession(Player player, String roomId) {
+        String normalizedId = TopLevelIdentity.normalize(roomId);
+        TopLevelIdentity.requireAvailable(roomsDirectory, "room", normalizedId, null);
         return prepareWorkspace(player).thenApply(workspace -> {
             placeScaffold(player, editWorld(), workspace.buildOrigin());
-            AuthoringSession session = new AuthoringSession(roomId);
+            AuthoringSession session = new AuthoringSession(normalizedId);
             session.featureSession(false);
             session.category(defaultCategory);
             session.weight(defaultWeight);
@@ -151,12 +154,14 @@ public final class AuthoringManager {
     }
 
     public CompletableFuture<AuthoringSession> createFeatureSession(Player player, String featureId) {
-        if (featureId.equalsIgnoreCase(com.dungeonarchitect.domain.FeatureSlotEntry.EMPTY)) {
+        String normalizedId = TopLevelIdentity.normalize(featureId);
+        if (normalizedId.equalsIgnoreCase(com.dungeonarchitect.domain.FeatureSlotEntry.EMPTY)) {
             throw new IllegalArgumentException("empty is reserved");
         }
+        TopLevelIdentity.requireAvailable(featuresDirectory, "feature", normalizedId, null);
         return prepareWorkspace(player).thenApply(workspace -> {
             placeScaffold(player, editWorld(), workspace.buildOrigin());
-            AuthoringSession session = new AuthoringSession(featureId);
+            AuthoringSession session = new AuthoringSession(normalizedId);
             session.featureSession(true);
             sessions.put(player.getUniqueId(), session);
             teleportToWorkspace(player, workspace);
@@ -165,12 +170,14 @@ public final class AuthoringManager {
     }
 
     public CompletableFuture<AuthoringSession> createDoorSession(Player player, String doorId) {
-        if (doorId.equalsIgnoreCase(com.dungeonarchitect.domain.DoorSlotEntry.EMPTY)) {
+        String normalizedId = TopLevelIdentity.normalize(doorId);
+        if (normalizedId.equalsIgnoreCase(com.dungeonarchitect.domain.DoorSlotEntry.EMPTY)) {
             throw new IllegalArgumentException("empty is reserved");
         }
+        TopLevelIdentity.requireAvailable(doorsDirectory, "door", normalizedId, null);
         return prepareWorkspace(player).thenApply(workspace -> {
             placeScaffold(player, editWorld(), workspace.buildOrigin());
-            AuthoringSession session = new AuthoringSession(doorId);
+            AuthoringSession session = new AuthoringSession(normalizedId);
             session.doorSession(true);
             sessions.put(player.getUniqueId(), session);
             teleportToWorkspace(player, workspace);
@@ -341,12 +348,20 @@ public final class AuthoringManager {
         return Optional.of(session);
     }
 
+    public Optional<AuthoringSession> editingSessionInWorkspace(Player player, String roomId) {
+        return isInEditWorld(player) ? editingSession(player, roomId) : Optional.empty();
+    }
+
     public Optional<AuthoringSession> editingDoorSession(Player player, String doorId) {
         AuthoringSession session = sessions.get(player.getUniqueId());
         if (session == null || !session.editingExistingDoor() || !session.roomId().equalsIgnoreCase(doorId)) {
             return Optional.empty();
         }
         return Optional.of(session);
+    }
+
+    public Optional<AuthoringSession> editingDoorSessionInWorkspace(Player player, String doorId) {
+        return isInEditWorld(player) ? editingDoorSession(player, doorId) : Optional.empty();
     }
 
     /** Removes a globally deleted tag from all in-memory authoring sessions. */
@@ -545,6 +560,13 @@ public final class AuthoringManager {
         selectComponent(player, "marker", name);
     }
 
+    public void addFeatureMarker(Player player, String name, String type, IntVector3 localPosition) {
+        AuthoringSession session = session(player);
+        requireFeatureSession(session);
+        session.addMarker(name, type, localPosition);
+        selectComponent(player, "marker", name);
+    }
+
     public TemplateValidationResult save(Player player, String requestedId) throws IOException {
         AuthoringSession session = session(player);
         requireRoomSession(session);
@@ -552,8 +574,9 @@ public final class AuthoringManager {
             if (session.editingExistingRoom() && !requestedId.equalsIgnoreCase(session.roomId())) {
                 throw new IllegalStateException("This edit session can only overwrite " + session.roomId());
             }
-            session.roomId(requestedId);
+            session.roomId(TopLevelIdentity.normalize(requestedId));
         }
+        TopLevelIdentity.requireAvailable(roomsDirectory, "room", session.roomId(), session.editingExistingRoom() ? session.roomId() : null);
         SelectionBounds bounds = session.roomBounds()
             .orElseThrow(() -> new IllegalStateException("Save room bounds first with /da room bounds"));
         World world = session.world()
@@ -584,6 +607,7 @@ public final class AuthoringManager {
             session.doors(),
             session.markers(),
             session.featureSlots(),
+            session.lootBindings(),
             roomDirectory.resolve("room.nbt")
         );
         RoomTemplateIO.save(template, roomDirectory);
@@ -602,8 +626,9 @@ public final class AuthoringManager {
             if (session.editingExistingFeature() && !requestedId.equalsIgnoreCase(session.roomId())) {
                 throw new IllegalStateException("This edit session can only overwrite " + session.roomId());
             }
-            session.roomId(requestedId);
+            session.roomId(TopLevelIdentity.normalize(requestedId));
         }
+        TopLevelIdentity.requireAvailable(featuresDirectory, "feature", session.roomId(), session.editingExistingFeature() ? session.roomId() : null);
         SelectionBounds bounds = session.roomBounds()
             .orElseThrow(() -> new IllegalStateException("Save feature bounds first with /da feature bounds"));
         World world = session.world()
@@ -620,7 +645,7 @@ public final class AuthoringManager {
         Path structureFile = featureDirectory.resolve("feature.nbt");
         server.getStructureManager().saveStructure(structureFile.toFile(), structure);
         structureService.invalidate(structureFile);
-        FeatureTemplate template = new FeatureTemplate(session.roomId(), bounds.size(), session.tags(), featureDirectory.resolve("feature.nbt"));
+        FeatureTemplate template = new FeatureTemplate(session.roomId(), bounds.size(), session.tags(), session.markers(), session.lootBindings(), featureDirectory.resolve("feature.nbt"));
         FeatureTemplateIO.save(template, featureDirectory);
         return featureValidator.validate(template);
     }
@@ -637,8 +662,9 @@ public final class AuthoringManager {
             if (session.editingExistingDoor() && !requestedId.equalsIgnoreCase(session.roomId())) {
                 throw new IllegalStateException("This edit session can only overwrite " + session.roomId());
             }
-            session.roomId(requestedId);
+            session.roomId(TopLevelIdentity.normalize(requestedId));
         }
+        TopLevelIdentity.requireAvailable(doorsDirectory, "door", session.roomId(), session.editingExistingDoor() ? session.roomId() : null);
         SelectionBounds bounds = session.roomBounds()
             .orElseThrow(() -> new IllegalStateException("Save door bounds first with /da door bounds"));
         World world = session.world()
@@ -655,7 +681,7 @@ public final class AuthoringManager {
         Path structureFile = doorDirectory.resolve("door.nbt");
         server.getStructureManager().saveStructure(structureFile.toFile(), structure);
         structureService.invalidate(structureFile);
-        DoorTemplate template = new DoorTemplate(session.roomId(), bounds.size(), session.tags(), session.markers(), session.featureSlots(), session.gateway(), doorDirectory.resolve("door.nbt"));
+        DoorTemplate template = new DoorTemplate(session.roomId(), bounds.size(), session.tags(), session.markers(), session.featureSlots(), session.lootBindings(), session.gateway(), doorDirectory.resolve("door.nbt"));
         DoorTemplateIO.save(template, doorDirectory);
         return doorValidator.validate(template);
     }
@@ -831,7 +857,7 @@ public final class AuthoringManager {
     }
 
     private boolean isComponentSession(AuthoringSession session) {
-        return session != null && !session.featureSession() && session.roomBounds().isPresent();
+        return session != null && session.roomBounds().isPresent();
     }
 
     private SelectionBounds saveCurrentSelectionAsBounds(Player player, AuthoringSession session) {

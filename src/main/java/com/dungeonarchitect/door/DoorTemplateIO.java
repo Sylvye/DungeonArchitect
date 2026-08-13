@@ -76,7 +76,7 @@ public final class DoorTemplateIO {
                 entries
             ));
         }
-        DoorTemplate template = new DoorTemplate(id, size, tags, markers, featureSlots, gateway, doorDirectory.resolve("door.nbt"));
+        DoorTemplate template = new DoorTemplate(id, size, tags, markers, featureSlots, lootBindings(yaml), gateway, doorDirectory.resolve("door.nbt"));
         return new TemplateLoadStatus<>(template, template.id(), doorDirectory, true, errors, repairLog);
         } catch (RuntimeException ex) {
             if (repairs == null) {
@@ -88,6 +88,7 @@ public final class DoorTemplateIO {
     }
 
     public static void save(DoorTemplate template, Path doorDirectory) throws IOException {
+        com.dungeonarchitect.template.IdentityRules.assertDoorComponents(template.markers(), template.featureSlots());
         Files.createDirectories(doorDirectory);
         YamlConfiguration yaml = new YamlConfiguration();
         yaml.set("id", template.id());
@@ -107,6 +108,7 @@ public final class DoorTemplateIO {
             markers.add(item);
         }
         yaml.set("markers", markers);
+        yaml.set("lootBindings", new LinkedHashMap<>(template.lootBindings()));
         List<Map<String, Object>> slots = new ArrayList<>();
         for (RoomFeatureSlot slot : template.featureSlots()) {
             Map<String, Object> item = new LinkedHashMap<>();
@@ -185,5 +187,15 @@ public final class DoorTemplateIO {
 
     private static <E extends Enum<E>> E enumValue(Class<E> type, String value) {
         return Enum.valueOf(type, value.toUpperCase(Locale.ROOT));
+    }
+
+    private static Map<String, String> lootBindings(ConfigurationSection yaml) {
+        Map<String, String> bindings = new LinkedHashMap<>();
+        ConfigurationSection section = yaml.getConfigurationSection("lootBindings");
+        if (section != null) for (String marker : section.getKeys(false)) {
+            String table = section.getString(marker);
+            if (table != null && !table.isBlank()) bindings.put(marker, table);
+        }
+        return bindings;
     }
 }

@@ -16,6 +16,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -50,6 +51,7 @@ final class RoomTemplateIOTest {
                 Direction3.SOUTH,
                 List.of(new FeatureSlotEntry("empty", 1), new FeatureSlotEntry("chest_pile", 3))
             )),
+            Map.of("reward", "starter_loot"),
             roomDir.resolve("room.nbt")
         );
 
@@ -65,6 +67,7 @@ final class RoomTemplateIOTest {
         assertEquals(template.doors(), loaded.doors());
         assertEquals(template.markers(), loaded.markers());
         assertEquals(template.featureSlots(), loaded.featureSlots());
+        assertEquals(template.lootBindings(), loaded.lootBindings());
     }
 
     @Test

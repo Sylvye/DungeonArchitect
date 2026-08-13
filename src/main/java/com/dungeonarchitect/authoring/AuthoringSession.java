@@ -14,6 +14,7 @@ import com.dungeonarchitect.domain.RoomTemplate;
 import com.dungeonarchitect.domain.SocketType;
 import com.dungeonarchitect.domain.TagDomain;
 import com.dungeonarchitect.gui.TagCleanupService;
+import com.dungeonarchitect.template.IdentityRules;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.World;
@@ -23,6 +24,8 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.Map;
+import java.util.LinkedHashMap;
 import java.util.UUID;
 
 public final class AuthoringSession {
@@ -46,6 +49,7 @@ public final class AuthoringSession {
     private final List<DoorSocket> doors = new ArrayList<>();
     private final List<RoomMarker> markers = new ArrayList<>();
     private final List<RoomFeatureSlot> featureSlots = new ArrayList<>();
+    private final Map<String, String> lootBindings = new LinkedHashMap<>();
 
     public AuthoringSession(String roomId) {
         this.roomId = roomId;
@@ -210,6 +214,8 @@ public final class AuthoringSession {
         doors.addAll(template.doors());
         markers.clear();
         markers.addAll(template.markers());
+        lootBindings.clear();
+        lootBindings.putAll(template.lootBindings());
         featureSlots.clear();
         featureSlots.addAll(template.featureSlots());
         editingExistingRoom = true;
@@ -230,6 +236,9 @@ public final class AuthoringSession {
         tags = new LinkedHashSet<>(template.tags());
         doors.clear();
         markers.clear();
+        markers.addAll(template.markers());
+        lootBindings.clear();
+        lootBindings.putAll(template.lootBindings());
         featureSlots.clear();
     }
 
@@ -249,6 +258,8 @@ public final class AuthoringSession {
         doors.clear();
         markers.clear();
         markers.addAll(template.markers());
+        lootBindings.clear();
+        lootBindings.putAll(template.lootBindings());
         featureSlots.clear();
         featureSlots.addAll(template.featureSlots());
     }
@@ -270,7 +281,7 @@ public final class AuthoringSession {
     }
 
     public void addDoor(String id, IntVector3 localPosition, Direction3 facing, SocketType socketType, int width, int height) {
-        doors.removeIf(door -> door.id().equalsIgnoreCase(id));
+        IdentityRules.requireRoomComponentAvailable(id, doors, markers, featureSlots, null);
         doors.add(new DoorSocket(id, localPosition, facing, socketType, width, height));
     }
 
@@ -279,16 +290,19 @@ public final class AuthoringSession {
     }
 
     public void addDoorSlot(String id, IntVector3 localPosition, IntVector3 size, Direction3 facing, SocketType socketType) {
-        doors.removeIf(door -> door.id().equalsIgnoreCase(id));
+        IdentityRules.requireRoomComponentAvailable(id, doors, markers, featureSlots, null);
         doors.add(new DoorSocket(id, localPosition, facing, socketType, displayWidth(facing, size), displayHeight(facing, size), size, java.util.Set.of(), java.util.List.of()));
     }
 
     public void addDoorSlot(DoorSocket slot) {
-        doors.removeIf(door -> door.id().equalsIgnoreCase(slot.id()));
+        IdentityRules.requireRoomComponentAvailable(slot.id(), doors, markers, featureSlots, null);
         doors.add(slot);
     }
 
     public void addMarker(String name, String type, IntVector3 localPosition) {
+        if (doorSession()) IdentityRules.requireDoorComponentAvailable(name, markers, featureSlots, null);
+        else if (featureSession()) IdentityRules.requireFeatureMarkerAvailable(name, markers, null);
+        else IdentityRules.requireRoomComponentAvailable(name, doors, markers, featureSlots, null);
         markers.add(new RoomMarker(name, type, localPosition));
     }
 
@@ -336,18 +350,21 @@ public final class AuthoringSession {
 
     public boolean removeMarker(String id) {
         boolean removed = markers.removeIf(marker -> marker.name().equalsIgnoreCase(id));
+        if (removed) lootBindings.keySet().removeIf(key -> key.equalsIgnoreCase(id));
         clearSelectedComponent("marker", id, removed);
         return removed;
     }
 
     public boolean renameMarker(String oldId, String newId) {
-        if (markers.stream().anyMatch(marker -> marker.name().equalsIgnoreCase(newId))) {
-            throw new IllegalArgumentException("Marker already exists: " + newId);
-        }
+        if (doorSession()) IdentityRules.requireDoorComponentAvailable(newId, markers, featureSlots, oldId);
+        else if (featureSession()) IdentityRules.requireFeatureMarkerAvailable(newId, markers, oldId);
+        else IdentityRules.requireRoomComponentAvailable(newId, doors, markers, featureSlots, oldId);
         for (int i = 0; i < markers.size(); i++) {
             RoomMarker marker = markers.get(i);
             if (marker.name().equalsIgnoreCase(oldId)) {
                 markers.set(i, new RoomMarker(newId, marker.type(), marker.position()));
+                String binding = lootBindings.keySet().stream().filter(key -> key.equalsIgnoreCase(oldId)).findFirst().map(lootBindings::remove).orElse(null);
+                if (binding != null) lootBindings.put(newId, binding);
                 selectedComponent = null;
                 return true;
             }
@@ -373,9 +390,8 @@ public final class AuthoringSession {
     }
 
     public boolean renameFeatureSlot(String oldId, String newId) {
-        if (featureSlots.stream().anyMatch(slot -> slot.id().equalsIgnoreCase(newId))) {
-            throw new IllegalArgumentException("Feature slot already exists: " + newId);
-        }
+        if (doorSession()) IdentityRules.requireDoorComponentAvailable(newId, markers, featureSlots, oldId);
+        else IdentityRules.requireRoomComponentAvailable(newId, doors, markers, featureSlots, oldId);
         for (int i = 0; i < featureSlots.size(); i++) {
             RoomFeatureSlot slot = featureSlots.get(i);
             if (slot.id().equalsIgnoreCase(oldId)) {
@@ -427,12 +443,14 @@ public final class AuthoringSession {
     }
 
     public void addFeatureSlot(String id, String poolId, IntVector3 localPosition, Direction3 facing) {
-        featureSlots.removeIf(slot -> slot.id().equalsIgnoreCase(id));
+        if (doorSession()) IdentityRules.requireDoorComponentAvailable(id, markers, featureSlots, null);
+        else IdentityRules.requireRoomComponentAvailable(id, doors, markers, featureSlots, null);
         featureSlots.add(new RoomFeatureSlot(id, poolId, localPosition, facing));
     }
 
     public void addFeatureSlot(RoomFeatureSlot slot) {
-        featureSlots.removeIf(existing -> existing.id().equalsIgnoreCase(slot.id()));
+        if (doorSession()) IdentityRules.requireDoorComponentAvailable(slot.id(), markers, featureSlots, null);
+        else IdentityRules.requireRoomComponentAvailable(slot.id(), doors, markers, featureSlots, null);
         featureSlots.add(slot);
     }
 
@@ -469,6 +487,8 @@ public final class AuthoringSession {
     public List<RoomMarker> markers() {
         return List.copyOf(markers);
     }
+
+    public Map<String, String> lootBindings() { return Map.copyOf(lootBindings); }
 
     public List<RoomFeatureSlot> featureSlots() {
         return List.copyOf(featureSlots);

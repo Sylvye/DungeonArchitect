@@ -25,6 +25,7 @@ public final class FeatureTemplateValidator {
 
     public TemplateValidationResult validate(FeatureTemplate template) {
         TemplateValidationResult result = new TemplateValidationResult();
+        com.dungeonarchitect.template.IdentityRules.validateFeatureMarkers(template.id(), template.markers(), result);
         if (!Files.isRegularFile(template.structureFile())) {
             result.add(template.id() + ": missing feature.nbt");
             return result;

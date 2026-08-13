@@ -55,6 +55,11 @@ public final class FeatureTemplateRegistry {
                     }
                     FeatureTemplate template = loadedStatus.template();
                     List<String> errors = new ArrayList<>(loadedStatus.errors());
+                    try {
+                        com.dungeonarchitect.template.TopLevelIdentity.requireAvailable(featuresDirectory, "feature", template.id(), template.id());
+                    } catch (IllegalArgumentException ex) {
+                        errors.add(ex.getMessage());
+                    }
                     if (visible.containsKey(template.id())) {
                         errors.add("Duplicate feature id " + template.id());
                         TemplateLoadStatus<FeatureTemplate> duplicate = new TemplateLoadStatus<>(template, template.id(), directory, false, errors, loadedStatus.repairs());
@@ -143,6 +148,7 @@ public final class FeatureTemplateRegistry {
 
     public FeatureTemplate duplicateFeature(String oldId, String newId) throws IOException {
         String normalizedNewId = normalizeId(newId);
+        com.dungeonarchitect.template.TopLevelIdentity.requireAvailable(featuresDirectory, "feature", normalizedNewId, null);
         Path source = templateDirectory(oldId);
         Path target = templateDirectory(normalizedNewId);
         if (!Files.isDirectory(source)) {
@@ -153,7 +159,7 @@ public final class FeatureTemplateRegistry {
         }
         FeatureTemplate sourceTemplate = loadVisibleTemplateForOperation(oldId, source, "duplication");
         copyDirectory(source, target);
-        FeatureTemplate renamed = new FeatureTemplate(normalizedNewId, sourceTemplate.size(), sourceTemplate.tags(), target.resolve("feature.nbt"));
+        FeatureTemplate renamed = new FeatureTemplate(normalizedNewId, sourceTemplate.size(), sourceTemplate.tags(), sourceTemplate.markers(), sourceTemplate.lootBindings(), target.resolve("feature.nbt"));
         FeatureTemplateIO.save(renamed, target);
         reload();
         return renamed;
@@ -161,6 +167,7 @@ public final class FeatureTemplateRegistry {
 
     public FeatureTemplate renameFeature(String oldId, String newId) throws IOException {
         String normalizedNewId = normalizeId(newId);
+        com.dungeonarchitect.template.TopLevelIdentity.requireAvailable(featuresDirectory, "feature", normalizedNewId, oldId);
         Path source = templateDirectory(oldId);
         Path target = templateDirectory(normalizedNewId);
         if (!Files.isDirectory(source)) {
@@ -171,7 +178,7 @@ public final class FeatureTemplateRegistry {
         }
         FeatureTemplate sourceTemplate = loadVisibleTemplateForOperation(oldId, source, "rename");
         Files.move(source, target);
-        FeatureTemplate renamed = new FeatureTemplate(normalizedNewId, sourceTemplate.size(), sourceTemplate.tags(), target.resolve("feature.nbt"));
+        FeatureTemplate renamed = new FeatureTemplate(normalizedNewId, sourceTemplate.size(), sourceTemplate.tags(), sourceTemplate.markers(), sourceTemplate.lootBindings(), target.resolve("feature.nbt"));
         FeatureTemplateIO.save(renamed, target);
         reload();
         return renamed;

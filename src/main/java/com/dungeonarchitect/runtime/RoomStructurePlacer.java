@@ -8,6 +8,7 @@ import com.dungeonarchitect.domain.RoomTransform;
 import com.dungeonarchitect.door.DoorService;
 import com.dungeonarchitect.feature.FeatureService;
 import com.dungeonarchitect.template.RoomStructureService;
+import com.dungeonarchitect.loot.LootService;
 import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.block.structure.Mirror;
@@ -23,15 +24,20 @@ public final class RoomStructurePlacer {
     private final RoomStructureService structureService;
     private final FeatureService featureService;
     private final DoorService doorService;
+    private final LootService lootService;
 
     public RoomStructurePlacer(RoomStructureService structureService, FeatureService featureService) {
-        this(structureService, featureService, null);
+        this(structureService, featureService, null, null);
     }
 
     public RoomStructurePlacer(RoomStructureService structureService, FeatureService featureService, DoorService doorService) {
+        this(structureService, featureService, doorService, null);
+    }
+    public RoomStructurePlacer(RoomStructureService structureService, FeatureService featureService, DoorService doorService, LootService lootService) {
         this.structureService = structureService;
         this.featureService = featureService;
         this.doorService = doorService;
+        this.lootService = lootService;
     }
 
     public void place(World world, RoomTemplate template, RoomTransform transform, long dungeonSeed, int nodeIndex) throws IOException {
@@ -57,6 +63,9 @@ public final class RoomStructurePlacer {
         featureService.placeFeatures(world, template, transform, dungeonSeed, nodeIndex);
         if (doorService != null) {
             doorService.placeDoors(world, template, transform, dungeonSeed, nodeIndex, edges);
+        }
+        if (lootService != null) {
+            lootService.placeLoot(world, template.id(), template.markers(), template.lootBindings(), transform, dungeonSeed, "room:" + nodeIndex);
         }
     }
 

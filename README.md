@@ -33,7 +33,7 @@ The checked-in Gradle wrapper uses Gradle 8.14.3.
 - `/da room delete <id>` permanently deletes a room template.
 - `/da feature create <id>`, `/da feature bounds`, `/da feature save [id]`, `/da feature rename <oldId> <newId>`, `/da feature duplicate <oldId> <newId>`, and `/da feature delete <id>` manage reusable feature templates.
 - `/da door create <id>`, `/da door bounds`, `/da door gateway`, `/da door save [id]`, `/da door rename <oldId> <newId>`, `/da door duplicate <oldId> <newId>`, and `/da door delete <id>` manage reusable door templates.
-- `/da gui`, `/da rooms`, `/da features`, `/da doors`, `/da config`, and `/da dungeons` open inventory GUIs.
+- `/da gui`, `/da rooms`, `/da features`, `/da doors`, `/da loot`, `/da config`, and `/da dungeons` open inventory GUIs.
 - `/da reload` reloads templates and feature pools.
 - `/da generate <roomCount> [seed]` creates an isolated dungeon world and teleports the player to the start room.
 - `/da debug room`, `/da debug instance`, `/da list`, `/da teleport [instance] <roomIndex>`, `/da destroy [instance]`, and `/da exit` support debugging and dungeon management.

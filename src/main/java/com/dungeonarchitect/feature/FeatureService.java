@@ -11,6 +11,7 @@ import com.dungeonarchitect.domain.Rotation;
 import com.dungeonarchitect.runtime.RoomStructurePlacer;
 import com.dungeonarchitect.template.DiagnosticText;
 import com.dungeonarchitect.template.RoomStructureService;
+import com.dungeonarchitect.loot.LootService;
 import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.block.structure.Mirror;
@@ -27,15 +28,20 @@ public final class FeatureService {
     private final FeatureTemplateRegistry registry;
     private final RoomStructureService structureService;
     private final Logger logger;
+    private final LootService lootService;
 
     public FeatureService(FeatureTemplateRegistry registry, RoomStructureService structureService) {
-        this(registry, structureService, Logger.getLogger("DungeonArchitect"));
+        this(registry, structureService, Logger.getLogger("DungeonArchitect"), null);
     }
 
     public FeatureService(FeatureTemplateRegistry registry, RoomStructureService structureService, Logger logger) {
+        this(registry, structureService, logger, null);
+    }
+    public FeatureService(FeatureTemplateRegistry registry, RoomStructureService structureService, Logger logger, LootService lootService) {
         this.registry = registry;
         this.structureService = structureService;
         this.logger = logger;
+        this.lootService = lootService;
     }
 
     public void placeFeatures(World world, RoomTemplate template, RoomTransform roomTransform, long dungeonSeed, int nodeIndex) throws IOException {
@@ -53,7 +59,7 @@ public final class FeatureService {
                 continue;
             }
             FeatureTemplate feature = registry.get(roll.selectedFeatureId()).orElseThrow();
-            placeFeature(world, roomTransform, slot, feature, roll.rotation(), dungeonSeed, nodeIndex);
+            placeFeature(world, ownerId, roomTransform, slot, feature, roll.rotation(), dungeonSeed, nodeIndex);
         }
     }
 
@@ -124,7 +130,7 @@ public final class FeatureService {
         return value;
     }
 
-    private void placeFeature(World world, RoomTransform roomTransform, RoomFeatureSlot slot, FeatureTemplate feature, Rotation featureRotation, long dungeonSeed, int nodeIndex) throws IOException {
+    private void placeFeature(World world, String ownerId, RoomTransform roomTransform, RoomFeatureSlot slot, FeatureTemplate feature, Rotation featureRotation, long dungeonSeed, int nodeIndex) throws IOException {
         Structure structure = structureService.loadStructure(feature.structureFile());
         IntVector3 nbtSize = new IntVector3(structure.getSize().getBlockX(), structure.getSize().getBlockY(), structure.getSize().getBlockZ());
         if (!nbtSize.equals(feature.size())) {
@@ -152,6 +158,9 @@ public final class FeatureService {
             RoomStructurePlacer.STRUCTURE_INTEGRITY,
             new Random(dungeonSeed ^ nodeIndex ^ feature.id().hashCode())
         );
+        if (lootService != null) {
+            lootService.placeLoot(world, feature.id(), feature.markers(), feature.lootBindings(), featureTransform, dungeonSeed, ownerId + ":" + slot.id() + ":" + feature.id());
+        }
     }
 
     private static BoundingBox3i transformedLocalBounds(RoomTransform roomTransform, IntVector3 localMin, IntVector3 size) {

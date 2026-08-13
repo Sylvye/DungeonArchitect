@@ -14,6 +14,8 @@ import com.dungeonarchitect.feature.FeatureTemplateRegistry;
 import com.dungeonarchitect.gui.ChatPromptManager;
 import com.dungeonarchitect.gui.MenuManager;
 import com.dungeonarchitect.gui.TagCatalog;
+import com.dungeonarchitect.loot.LootService;
+import com.dungeonarchitect.loot.LootTableRegistry;
 import com.dungeonarchitect.generation.DeterministicDungeonGenerator;
 import com.dungeonarchitect.runtime.DungeonManager;
 import com.dungeonarchitect.runtime.DungeonWorldManager;
@@ -39,6 +41,7 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
     private RoomTemplateRegistry roomTemplateRegistry;
     private FeatureTemplateRegistry featureTemplateRegistry;
     private DoorTemplateRegistry doorTemplateRegistry;
+    private LootTableRegistry lootTableRegistry;
     private AssetRenameCoordinator assetRenameCoordinator;
     private TagCatalog tagCatalog;
     private DungeonArchitectAPI api;
@@ -55,6 +58,8 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
         doorTemplateRegistry.reload();
         roomTemplateRegistry = new RoomTemplateRegistry(dataPath.resolve("rooms"), structureService, featureTemplateRegistry, doorTemplateRegistry);
         roomTemplateRegistry.reload();
+        lootTableRegistry = new LootTableRegistry(dataPath.resolve("loot-tables"));
+        lootTableRegistry.reload();
         tagCatalog = new TagCatalog(dataPath.resolve("tags.yml"));
         synchronizeTags();
         assetRenameCoordinator = new AssetRenameCoordinator(roomTemplateRegistry, featureTemplateRegistry, doorTemplateRegistry);
@@ -72,9 +77,10 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
         String worldPrefix = getConfig().getString("worlds.name-prefix", "da_");
         boolean deleteOnDestroy = getConfig().getBoolean("worlds.delete-on-destroy", true);
 
-        FeatureService featureService = new FeatureService(featureTemplateRegistry, structureService, getLogger());
-        DoorService doorService = new DoorService(doorTemplateRegistry, structureService, featureService, getLogger());
-        RoomStructurePlacer structurePlacer = new RoomStructurePlacer(structureService, featureService, doorService);
+        LootService lootService = new LootService(lootTableRegistry, getLogger());
+        FeatureService featureService = new FeatureService(featureTemplateRegistry, structureService, getLogger(), lootService);
+        DoorService doorService = new DoorService(doorTemplateRegistry, structureService, featureService, getLogger(), lootService);
+        RoomStructurePlacer structurePlacer = new RoomStructurePlacer(structureService, featureService, doorService, lootService);
         DungeonWorldManager worldManager = new DungeonWorldManager(this, worldPrefix, deleteOnDestroy);
         dungeonManager = new DungeonManager(
             this,
@@ -116,7 +122,7 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
         }, 20L);
 
         ChatPromptManager chatPromptManager = new ChatPromptManager(this);
-        MenuManager menuManager = new MenuManager(this, authoringManager, roomTemplateRegistry, featureTemplateRegistry, doorTemplateRegistry, dungeonManager, chatPromptManager, assetRenameCoordinator, tagCatalog, this::reloadContent);
+        MenuManager menuManager = new MenuManager(this, authoringManager, roomTemplateRegistry, featureTemplateRegistry, doorTemplateRegistry, lootTableRegistry, dungeonManager, chatPromptManager, assetRenameCoordinator, tagCatalog, this::reloadContent);
         getServer().getPluginManager().registerEvents(chatPromptManager, this);
         getServer().getPluginManager().registerEvents(menuManager, this);
 
@@ -153,6 +159,7 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
         featureTemplateRegistry.reload();
         doorTemplateRegistry.reload();
         roomTemplateRegistry.reload();
+        lootTableRegistry.reload();
         synchronizeTags();
         logDiagnostics();
     }
@@ -163,7 +170,7 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
 
     private void logDiagnostics() {
         TemplateValidationResult result = TemplateDiagnostics.analyze(roomTemplateRegistry, featureTemplateRegistry, doorTemplateRegistry);
-        int errors = result.errors().size();
+        int errors = result.errors().size() + lootTableRegistry.loadErrors().size();
         int warnings = result.warnings().size();
         if (errors == 0 && warnings == 0 && result.repairs().isEmpty()) {
             getLogger().info("Template diagnostics OK.");
@@ -173,5 +180,6 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
             + ". Run /da diagnose in game for the full report.");
         result.repairs().stream().limit(2).forEach(repair -> getLogger().warning("Repair: " + repair));
         result.diagnostics().stream().limit(3).forEach(diagnostic -> getLogger().warning(diagnostic.severity() + ": " + diagnostic.display()));
+        lootTableRegistry.loadErrors().stream().limit(3).forEach(error -> getLogger().warning("ERROR: " + error));
     }
 }

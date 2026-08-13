@@ -79,6 +79,11 @@ public final class RoomTemplateRegistry {
                     RoomTemplate template = loadedStatus.template();
                     List<String> errors = new ArrayList<>(loadedStatus.errors());
                     List<String> repairs = new ArrayList<>(loadedStatus.repairs());
+                    try {
+                        TopLevelIdentity.requireAvailable(roomsDirectory, "room", template.id(), template.id());
+                    } catch (IllegalArgumentException ex) {
+                        errors.add(ex.getMessage());
+                    }
                     if (visible.containsKey(template.id())) {
                         errors.add("Duplicate room id " + template.id());
                         TemplateLoadStatus<RoomTemplate> duplicate = new TemplateLoadStatus<>(template, template.id(), directory, false, errors, loadedStatus.repairs());
@@ -172,6 +177,7 @@ public final class RoomTemplateRegistry {
     }
 
     public RoomTemplate duplicateRoom(String oldId, String newId) throws IOException {
+        TopLevelIdentity.requireAvailable(roomsDirectory, "room", newId, null);
         Path source = templateDirectory(oldId);
         Path target = templateDirectory(newId);
         if (!Files.isDirectory(source)) {
@@ -182,13 +188,14 @@ public final class RoomTemplateRegistry {
         }
         RoomTemplate sourceTemplate = loadVisibleTemplateForOperation(oldId, source, "duplication");
         copyDirectory(source, target);
-        RoomTemplate renamed = new RoomTemplate(newId, sourceTemplate.category(), sourceTemplate.weight(), sourceTemplate.minimumConnections(), sourceTemplate.tags(), sourceTemplate.size(), sourceTemplate.spawn(), sourceTemplate.doors(), sourceTemplate.markers(), sourceTemplate.featureSlots(), target.resolve("room.nbt"));
+        RoomTemplate renamed = new RoomTemplate(newId, sourceTemplate.category(), sourceTemplate.weight(), sourceTemplate.minimumConnections(), sourceTemplate.tags(), sourceTemplate.size(), sourceTemplate.spawn(), sourceTemplate.doors(), sourceTemplate.markers(), sourceTemplate.featureSlots(), sourceTemplate.lootBindings(), target.resolve("room.nbt"));
         RoomTemplateIO.save(renamed, target);
         reload();
         return renamed;
     }
 
     public RoomTemplate renameRoom(String oldId, String newId) throws IOException {
+        TopLevelIdentity.requireAvailable(roomsDirectory, "room", newId, oldId);
         Path source = templateDirectory(oldId);
         Path target = templateDirectory(newId);
         if (!Files.isDirectory(source)) {
@@ -199,7 +206,7 @@ public final class RoomTemplateRegistry {
         }
         RoomTemplate sourceTemplate = loadVisibleTemplateForOperation(oldId, source, "rename");
         Files.move(source, target);
-        RoomTemplate renamed = new RoomTemplate(newId, sourceTemplate.category(), sourceTemplate.weight(), sourceTemplate.minimumConnections(), sourceTemplate.tags(), sourceTemplate.size(), sourceTemplate.spawn(), sourceTemplate.doors(), sourceTemplate.markers(), sourceTemplate.featureSlots(), target.resolve("room.nbt"));
+        RoomTemplate renamed = new RoomTemplate(newId, sourceTemplate.category(), sourceTemplate.weight(), sourceTemplate.minimumConnections(), sourceTemplate.tags(), sourceTemplate.size(), sourceTemplate.spawn(), sourceTemplate.doors(), sourceTemplate.markers(), sourceTemplate.featureSlots(), sourceTemplate.lootBindings(), target.resolve("room.nbt"));
         RoomTemplateIO.save(renamed, target);
         reload();
         return renamed;

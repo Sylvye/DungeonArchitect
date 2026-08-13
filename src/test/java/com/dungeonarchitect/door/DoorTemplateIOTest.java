@@ -4,12 +4,14 @@ import com.dungeonarchitect.domain.Direction3;
 import com.dungeonarchitect.domain.DoorGateway;
 import com.dungeonarchitect.domain.DoorTemplate;
 import com.dungeonarchitect.domain.IntVector3;
+import com.dungeonarchitect.domain.RoomMarker;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -26,8 +28,9 @@ final class DoorTemplateIOTest {
             "ceiling_hatch",
             new IntVector3(3, 1, 5),
             Set.of("hatch"),
+            List.of(new RoomMarker("reward", "generic", new IntVector3(1, 0, 2))),
             List.of(),
-            List.of(),
+            Map.of("reward", "door_loot"),
             new DoorGateway(new IntVector3(1, 0, 2), new IntVector3(1, 1, 1), Direction3.UP),
             doorDir.resolve("door.nbt")
         );
@@ -39,6 +42,8 @@ final class DoorTemplateIOTest {
         assertEquals(template.size(), loaded.size());
         assertEquals(template.tags(), loaded.tags());
         assertEquals(template.gateway(), loaded.gateway());
+        assertEquals(template.markers(), loaded.markers());
+        assertEquals(template.lootBindings(), loaded.lootBindings());
         assertEquals(template.structureFile(), loaded.structureFile());
     }
 }

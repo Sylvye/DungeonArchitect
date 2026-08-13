@@ -2,12 +2,15 @@ package com.dungeonarchitect.feature;
 
 import com.dungeonarchitect.domain.FeatureTemplate;
 import com.dungeonarchitect.domain.IntVector3;
+import com.dungeonarchitect.domain.RoomMarker;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Set;
+import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -19,7 +22,11 @@ final class FeatureTemplateIOTest {
     void roundTripsFeatureMetadata() throws Exception {
         Path featureDir = tempDir.resolve("chest_pile");
         Files.createDirectories(featureDir);
-        FeatureTemplate template = new FeatureTemplate("chest_pile", new IntVector3(2, 3, 4), Set.of("loot", "stone"), featureDir.resolve("feature.nbt"));
+        FeatureTemplate template = new FeatureTemplate(
+            "chest_pile", new IntVector3(2, 3, 4), Set.of("loot", "stone"),
+            List.of(new RoomMarker("reward", "generic", new IntVector3(1, 0, 1))),
+            Map.of("reward", "feature_loot"), featureDir.resolve("feature.nbt")
+        );
 
         FeatureTemplateIO.save(template, featureDir);
         FeatureTemplate loaded = FeatureTemplateIO.load(featureDir);
@@ -27,6 +34,8 @@ final class FeatureTemplateIOTest {
         assertEquals(template.id(), loaded.id());
         assertEquals(template.size(), loaded.size());
         assertEquals(template.tags(), loaded.tags());
+        assertEquals(template.markers(), loaded.markers());
+        assertEquals(template.lootBindings(), loaded.lootBindings());
         assertEquals(template.structureFile(), loaded.structureFile());
     }
 }

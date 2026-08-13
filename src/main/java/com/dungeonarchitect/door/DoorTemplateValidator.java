@@ -46,6 +46,7 @@ public final class DoorTemplateValidator {
         }
         try {
             BoundingBox3i bounds = BoundingBox3i.fromMinAndSize(IntVector3.ZERO, template.size());
+            com.dungeonarchitect.template.IdentityRules.validateDoorComponents(template.id(), template.markers(), template.featureSlots(), result);
             if (template.gateway() == null) {
                 result.add(template.id() + ": missing gateway");
             } else {

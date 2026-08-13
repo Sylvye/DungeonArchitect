@@ -96,6 +96,22 @@ final class AuthoringManagerComponentSelectionTest {
     }
 
     @Test
+    void retainedRoomEditOnlyStagesChangesWhilePlayerIsInEditWorld() {
+        AuthoringManager manager = manager();
+        World editWorld = fakeWorld();
+        Player playerOutsideWorkspace = fakePlayer(fakeWorld("world"));
+        manager.session(playerOutsideWorkspace).loadTemplateForEdit(template(), editWorld, new IntVector3(10, 80, 10));
+
+        assertTrue(manager.editingSession(playerOutsideWorkspace, "room").isPresent());
+        assertTrue(manager.editingSessionInWorkspace(playerOutsideWorkspace, "room").isEmpty());
+
+        Player playerInWorkspace = fakePlayer(editWorld);
+        manager.session(playerInWorkspace).loadTemplateForEdit(template(), editWorld, new IntVector3(10, 80, 10));
+
+        assertTrue(manager.editingSessionInWorkspace(playerInWorkspace, "room").isPresent());
+    }
+
+    @Test
     void roomCommandsRejectFeatureAndDoorSessionsBeforeSaving() {
         Player player = fakePlayer();
         AuthoringManager manager = manager();
@@ -151,12 +167,17 @@ final class AuthoringManagerComponentSelectionTest {
     }
 
     private Player fakePlayer() {
+        return fakePlayer(null);
+    }
+
+    private Player fakePlayer(World world) {
         UUID id = UUID.randomUUID();
         return (Player) Proxy.newProxyInstance(
             Player.class.getClassLoader(),
             new Class<?>[] {Player.class},
             (proxy, method, args) -> switch (method.getName()) {
                 case "getUniqueId" -> id;
+                case "getWorld" -> world;
                 case "toString" -> "fakePlayer";
                 default -> throw new UnsupportedOperationException(method.getName());
             }
@@ -164,13 +185,17 @@ final class AuthoringManagerComponentSelectionTest {
     }
 
     private World fakeWorld() {
+        return fakeWorld("da_edit");
+    }
+
+    private World fakeWorld(String name) {
         UUID id = UUID.randomUUID();
         return (World) Proxy.newProxyInstance(
             World.class.getClassLoader(),
             new Class<?>[] {World.class},
             (proxy, method, args) -> switch (method.getName()) {
                 case "getUID" -> id;
-                case "getName" -> "da_edit";
+                case "getName" -> name;
                 case "toString" -> "fakeWorld";
                 default -> throw new UnsupportedOperationException(method.getName());
             }

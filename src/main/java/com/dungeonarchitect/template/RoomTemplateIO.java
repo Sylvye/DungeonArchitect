@@ -99,7 +99,7 @@ public final class RoomTemplateIO {
             ));
         }
 
-        RoomTemplate template = new RoomTemplate(id, category, weight, minimumConnections, tags, size, spawn, doors, markers, featureSlots, structureFile);
+        RoomTemplate template = new RoomTemplate(id, category, weight, minimumConnections, tags, size, spawn, doors, markers, featureSlots, lootBindings(yaml), structureFile);
         return new TemplateLoadStatus<>(template, template.id(), roomDirectory, true, errors, repairLog);
         } catch (RuntimeException ex) {
             if (repairs == null) {
@@ -111,6 +111,7 @@ public final class RoomTemplateIO {
     }
 
     public static void save(RoomTemplate template, Path roomDirectory) throws IOException {
+        IdentityRules.assertRoomComponents(template.doors(), template.markers(), template.featureSlots());
         Files.createDirectories(roomDirectory);
         YamlConfiguration yaml = new YamlConfiguration();
         yaml.set("id", template.id());
@@ -170,6 +171,7 @@ public final class RoomTemplateIO {
             markers.add(item);
         }
         yaml.set("markers", markers);
+        yaml.set("lootBindings", new LinkedHashMap<>(template.lootBindings()));
 
         List<Map<String, Object>> slots = new ArrayList<>();
         for (RoomFeatureSlot slot : template.featureSlots()) {
@@ -306,6 +308,16 @@ public final class RoomTemplateIO {
 
     private static List<Integer> list(IntVector3 vector) {
         return List.of(vector.x(), vector.y(), vector.z());
+    }
+
+    private static Map<String, String> lootBindings(ConfigurationSection yaml) {
+        Map<String, String> bindings = new LinkedHashMap<>();
+        ConfigurationSection section = yaml.getConfigurationSection("lootBindings");
+        if (section != null) for (String marker : section.getKeys(false)) {
+            String table = section.getString(marker);
+            if (table != null && !table.isBlank()) bindings.put(marker, table);
+        }
+        return bindings;
     }
 
     private static <E extends Enum<E>> E enumValue(Class<E> type, String value) {

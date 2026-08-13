@@ -98,6 +98,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
                 case "rooms" -> rooms(sender, args);
                 case "features" -> menuManager.openFeatures(requirePlayer(sender));
                 case "doors" -> menuManager.openDoors(requirePlayer(sender));
+                case "loot" -> menuManager.openLootTables(requirePlayer(sender));
                 case "config" -> menuManager.openConfig(requirePlayer(sender));
                 case "dungeons" -> menuManager.openDungeons(requirePlayer(sender));
                 case "exit" -> exit(sender);
@@ -121,18 +122,18 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
     private void help(CommandSender sender) {
         sender.sendMessage(Component.text("/da | /da help"));
         sender.sendMessage(Component.text("/da wand | /da selector"));
-        sender.sendMessage(Component.text("/da gui | rooms | rooms edit [room] | features | doors | config | dungeons"));
+        sender.sendMessage(Component.text("/da gui | rooms | rooms edit [room] | features | doors | loot | config | dungeons"));
         sender.sendMessage(Component.text("/da room create <id> | edit <id> | cancel | bounds | door [slotName] [socketType] [facing]"));
-        sender.sendMessage(Component.text("/da room marker add <name> [type] | feature [slotName] | save [id] | inspect <id> | validate <id|all>"));
+        sender.sendMessage(Component.text("/da room marker <add|remove> <name> [type] | feature [slotName] | save [id] | inspect <id> | validate <id|all>"));
         sender.sendMessage(Component.text("/da room rename <oldId> <newId> | duplicate <oldId> <newId> | delete <id>"));
-        sender.sendMessage(Component.text("/da door create <id> | bounds | gateway | marker add <name> [type] | feature [slotName] | save [id] | edit <id> | inspect <id> | validate <id|all>"));
+        sender.sendMessage(Component.text("/da door create <id> | bounds | gateway | marker <add|remove> <name> [type] | feature [slotName] | save [id] | edit <id> | inspect <id> | validate <id|all>"));
         sender.sendMessage(Component.text("/da door rename <oldId> <newId> | duplicate <oldId> <newId> | delete <id>"));
-        sender.sendMessage(Component.text("/da feature create <id> | bounds | save [id] | edit <id> | inspect <id> | validate <id|all>"));
+        sender.sendMessage(Component.text("/da feature create <id> | bounds | marker <add|remove> <name> [type] | save [id] | edit <id> | inspect <id> | validate <id|all>"));
         sender.sendMessage(Component.text("/da feature rename <oldId> <newId> | duplicate <oldId> <newId> | delete <id>"));
         sender.sendMessage(Component.text("/da room component <select|remove|bounds|rename> [door|marker|feature] [id] [newId]"));
         sender.sendMessage(Component.text("/da <room|door> component <select|remove|bounds|rename|rotate|face> ..."));
         sender.sendMessage(Component.text("/da <room|door> component <rotate|face> <N|E|S|W|up|down>"));
-        sender.sendMessage(Component.text("/da feature component (feature templates have no nested editable components)"));
+        sender.sendMessage(Component.text("/da feature component <select|remove|bounds|rename> marker [id] [newId]"));
         sender.sendMessage(Component.text("/da room save [id] | inspect <id> | validate <id|all> | delete <id>"));
         sender.sendMessage(Component.text("/da reload | diagnose [room|door|feature] [id|all] | generate <roomCount> [seed]"));
         sender.sendMessage(Component.text("/da list | debug instance [id|#n] | debug room"));
@@ -266,9 +267,14 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
     }
 
     private void marker(Player player, String[] args) {
-        requireArgs(args, 4, "/da room marker add <name> [type]");
+        requireArgs(args, 4, "/da room marker <add|remove> <name> [type]");
+        if (args[2].equalsIgnoreCase("remove")) {
+            boolean removed = authoringManager.removeComponent(player, "marker", args[3]);
+            player.sendMessage(Component.text(removed ? "Removed marker " + args[3] + "." : "No matching marker named " + args[3] + "."));
+            return;
+        }
         if (!args[2].equalsIgnoreCase("add")) {
-            throw new IllegalArgumentException("Usage: /da room marker add <name> [type]");
+            throw new IllegalArgumentException("Usage: /da room marker <add|remove> <name> [type]");
         }
         var local = authoringManager.targetedLocalPosition(player)
             .orElseThrow(() -> new IllegalArgumentException("Look at a block inside selected bounds"));
@@ -335,6 +341,18 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
             case "rename" -> renameFeature(sender, args);
             case "duplicate" -> duplicateFeature(sender, args);
             case "delete" -> deleteFeature(sender, args);
+            case "marker" -> {
+                requireArgs(args, 4, "/da feature marker <add|remove> <name> [type]");
+                if (args[2].equalsIgnoreCase("remove")) {
+                    boolean removed = authoringManager.removeComponent(player, "marker", args[3]);
+                    player.sendMessage(Component.text(removed ? "Removed feature marker " + args[3] + "." : "No matching marker named " + args[3] + "."));
+                    return;
+                }
+                if (!args[2].equalsIgnoreCase("add")) throw new IllegalArgumentException("Usage: /da feature marker <add|remove> <name> [type]");
+                var local = authoringManager.targetedLocalPosition(player).orElseThrow(() -> new IllegalArgumentException("Look at a block inside selected bounds"));
+                authoringManager.addFeatureMarker(player, args[3], args.length >= 5 ? args[4] : "generic", local);
+                player.sendMessage(Component.text("Added feature marker " + args[3] + " at " + local + "."));
+            }
             case "component" -> component(player, args, ComponentCommandContext.FEATURE);
             default -> throw new IllegalArgumentException("Unknown feature command " + args[1]);
         }
@@ -370,9 +388,14 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
                 }
             }
             case "marker" -> {
-                requireArgs(args, 4, "/da door marker add <name> [type]");
+                requireArgs(args, 4, "/da door marker <add|remove> <name> [type]");
+                if (args[2].equalsIgnoreCase("remove")) {
+                    boolean removed = authoringManager.removeComponent(player, "marker", args[3]);
+                    player.sendMessage(Component.text(removed ? "Removed door marker " + args[3] + "." : "No matching marker named " + args[3] + "."));
+                    return;
+                }
                 if (!args[2].equalsIgnoreCase("add")) {
-                    throw new IllegalArgumentException("Usage: /da door marker add <name> [type]");
+                    throw new IllegalArgumentException("Usage: /da door marker <add|remove> <name> [type]");
                 }
                 var local = authoringManager.targetedLocalPosition(player)
                     .orElseThrow(() -> new IllegalArgumentException("Look at a block inside selected bounds"));
@@ -1042,7 +1065,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
     @Override
     public @Nullable List<String> onTabComplete(@NotNull CommandSender sender, @NotNull Command command, @NotNull String label, @NotNull String[] args) {
         if (args.length == 1) {
-            return prefix(args[0], List.of("help", "version", "reload", "wand", "selector", "gui", "rooms", "features", "doors", "config", "dungeons", "exit", "room", "feature", "door", "generate", "list", "diagnose", "debug", "teleport", "destroy"));
+            return prefix(args[0], List.of("help", "version", "reload", "wand", "selector", "gui", "rooms", "features", "doors", "loot", "config", "dungeons", "exit", "room", "feature", "door", "generate", "list", "diagnose", "debug", "teleport", "destroy"));
         }
         if (args[0].equalsIgnoreCase("diagnose")) {
             if (args.length == 2) {
@@ -1116,13 +1139,13 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
             return prefix(args[4], enumOptions(Direction3.class));
         }
         if (args[0].equalsIgnoreCase("room") && args.length == 3 && args[1].equalsIgnoreCase("marker")) {
-            return prefix(args[2], List.of("add"));
+            return prefix(args[2], List.of("add", "remove"));
         }
         if (args[0].equalsIgnoreCase("room") && args.length == 3 && args[1].equalsIgnoreCase("feature")) {
             return prefix(args[2], List.of("feature_1"));
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("feature")) {
-            return prefix(args[1], List.of("create", "bounds", "save", "edit", "inspect", "validate", "rename", "duplicate", "delete", "component"));
+            return prefix(args[1], List.of("create", "bounds", "marker", "save", "edit", "inspect", "validate", "rename", "duplicate", "delete", "component"));
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("door")) {
             return prefix(args[1], List.of("create", "bounds", "gateway", "marker", "feature", "save", "edit", "inspect", "validate", "rename", "duplicate", "delete", "component"));
@@ -1140,10 +1163,13 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
             return prefix(args[2], ids);
         }
         if (args.length == 3 && args[0].equalsIgnoreCase("door") && args[1].equalsIgnoreCase("marker")) {
-            return prefix(args[2], List.of("add"));
+            return prefix(args[2], List.of("add", "remove"));
         }
         if (args.length == 3 && args[0].equalsIgnoreCase("feature") && List.of("edit", "inspect", "delete", "rename", "duplicate").contains(args[1].toLowerCase(Locale.ROOT))) {
             return prefix(args[2], featureRegistry.visible().stream().map(FeatureTemplate::id).toList());
+        }
+        if (args.length == 3 && args[0].equalsIgnoreCase("feature") && args[1].equalsIgnoreCase("marker")) {
+            return prefix(args[2], List.of("add", "remove"));
         }
         if (args.length == 4 && args[0].equalsIgnoreCase("feature") && List.of("rename", "duplicate").contains(args[1].toLowerCase(Locale.ROOT))) {
             return prefix(args[3], List.of("new_id"));

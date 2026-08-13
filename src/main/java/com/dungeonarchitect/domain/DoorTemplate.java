@@ -3,6 +3,7 @@ package com.dungeonarchitect.domain;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Set;
+import java.util.Map;
 
 public record DoorTemplate(
     String id,
@@ -10,6 +11,7 @@ public record DoorTemplate(
     Set<String> tags,
     List<RoomMarker> markers,
     List<RoomFeatureSlot> featureSlots,
+    Map<String, String> lootBindings,
     DoorGateway gateway,
     Path structureFile
 ) {
@@ -27,5 +29,10 @@ public record DoorTemplate(
         tags = tags == null ? Set.of() : Set.copyOf(tags);
         markers = markers == null ? List.of() : List.copyOf(markers);
         featureSlots = featureSlots == null ? List.of() : List.copyOf(featureSlots);
+        lootBindings = lootBindings == null ? Map.of() : Map.copyOf(lootBindings);
+    }
+
+    public DoorTemplate(String id, IntVector3 size, Set<String> tags, List<RoomMarker> markers, List<RoomFeatureSlot> featureSlots, DoorGateway gateway, Path structureFile) {
+        this(id, size, tags, markers, featureSlots, Map.of(), gateway, structureFile);
     }
 }

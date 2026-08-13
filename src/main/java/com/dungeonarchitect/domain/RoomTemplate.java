@@ -3,6 +3,7 @@ package com.dungeonarchitect.domain;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Set;
+import java.util.Map;
 
 public record RoomTemplate(
     String id,
@@ -15,6 +16,7 @@ public record RoomTemplate(
     List<DoorSocket> doors,
     List<RoomMarker> markers,
     List<RoomFeatureSlot> featureSlots,
+    Map<String, String> lootBindings,
     Path structureFile
 ) {
     public RoomTemplate {
@@ -31,6 +33,7 @@ public record RoomTemplate(
         doors = List.copyOf(doors);
         markers = List.copyOf(markers);
         featureSlots = List.copyOf(featureSlots);
+        lootBindings = lootBindings == null ? Map.of() : Map.copyOf(lootBindings);
     }
 
     public RoomTemplate(
@@ -45,6 +48,10 @@ public record RoomTemplate(
         List<RoomFeatureSlot> featureSlots,
         Path structureFile
     ) {
-        this(id, category, weight, 0, tags, size, spawn, doors, markers, featureSlots, structureFile);
+        this(id, category, weight, 0, tags, size, spawn, doors, markers, featureSlots, Map.of(), structureFile);
+    }
+
+    public RoomTemplate(String id, RoomCategory category, int weight, int minimumConnections, Set<String> tags, IntVector3 size, IntVector3 spawn, List<DoorSocket> doors, List<RoomMarker> markers, List<RoomFeatureSlot> featureSlots, Path structureFile) {
+        this(id, category, weight, minimumConnections, tags, size, spawn, doors, markers, featureSlots, Map.of(), structureFile);
     }
 }

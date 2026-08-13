@@ -14,6 +14,7 @@ import com.dungeonarchitect.generation.DoorGeometry;
 import com.dungeonarchitect.runtime.RoomStructurePlacer;
 import com.dungeonarchitect.template.DiagnosticText;
 import com.dungeonarchitect.template.RoomStructureService;
+import com.dungeonarchitect.loot.LootService;
 import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.block.structure.Mirror;
@@ -32,12 +33,17 @@ public final class DoorService {
     private final RoomStructureService structureService;
     private final FeatureService featureService;
     private final Logger logger;
+    private final LootService lootService;
 
     public DoorService(DoorTemplateRegistry registry, RoomStructureService structureService, FeatureService featureService, Logger logger) {
+        this(registry, structureService, featureService, logger, null);
+    }
+    public DoorService(DoorTemplateRegistry registry, RoomStructureService structureService, FeatureService featureService, Logger logger, LootService lootService) {
         this.registry = registry;
         this.structureService = structureService;
         this.featureService = featureService;
         this.logger = logger;
+        this.lootService = lootService;
     }
 
     public void placeDoors(World world, RoomTemplate room, RoomTransform roomTransform, long dungeonSeed, int nodeIndex) throws IOException {
@@ -174,6 +180,9 @@ public final class DoorService {
             new Random(dungeonSeed ^ nodeIndex ^ door.id().hashCode())
         );
         featureService.placeFeatureSlots(world, "door:" + nodeIndex + ":" + slot.id() + ":" + door.id(), door.featureSlots(), doorTransform, dungeonSeed, nodeIndex);
+        if (lootService != null) {
+            lootService.placeLoot(world, door.id(), door.markers(), door.lootBindings(), doorTransform, dungeonSeed, "door:" + nodeIndex + ":" + slot.id());
+        }
     }
 
     private static boolean contains(BoundingBox3i outer, BoundingBox3i inner) {
