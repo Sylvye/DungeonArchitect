@@ -10,6 +10,7 @@ public record FeatureTemplate(
     IntVector3 size,
     Set<String> tags,
     List<RoomMarker> markers,
+    List<RoomFeatureSlot> featureSlots,
     Map<String, String> lootBindings,
     Path structureFile
 ) {
@@ -26,10 +27,15 @@ public record FeatureTemplate(
         }
         tags = Set.copyOf(tags);
         markers = markers == null ? List.of() : List.copyOf(markers);
+        featureSlots = featureSlots == null ? List.of() : List.copyOf(featureSlots);
         lootBindings = lootBindings == null ? Map.of() : Map.copyOf(lootBindings);
     }
 
     public FeatureTemplate(String id, IntVector3 size, Set<String> tags, Path structureFile) {
-        this(id, size, tags, List.of(), Map.of(), structureFile);
+        this(id, size, tags, List.of(), List.of(), Map.of(), structureFile);
+    }
+
+    public FeatureTemplate(String id, IntVector3 size, Set<String> tags, List<RoomMarker> markers, Map<String, String> lootBindings, Path structureFile) {
+        this(id, size, tags, markers, List.of(), lootBindings, structureFile);
     }
 }

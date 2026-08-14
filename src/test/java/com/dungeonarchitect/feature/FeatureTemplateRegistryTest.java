@@ -8,6 +8,11 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Set;
+import java.util.List;
+import java.util.Map;
+import com.dungeonarchitect.domain.RoomFeatureSlot;
+import com.dungeonarchitect.domain.FeatureSlotEntry;
+import com.dungeonarchitect.domain.Direction3;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -101,5 +106,46 @@ final class FeatureTemplateRegistryTest {
         assertTrue(Files.exists(tempDir.resolve("source").resolve("feature.nbt")));
         assertFalse(Files.exists(tempDir.resolve("copy")));
         assertEquals("renamed", FeatureTemplateIO.load(tempDir.resolve("renamed")).id());
+    }
+
+    @Test
+    void quarantinesCyclicFeaturesButKeepsThemVisible() throws Exception {
+        saveNested("a", "b");
+        saveNested("b", "a");
+        FeatureTemplateRegistry registry = new FeatureTemplateRegistry(tempDir, null, new FeatureNestingPolicy());
+
+        var result = registry.reload();
+
+        assertFalse(result.valid());
+        assertTrue(registry.getVisible("a").isPresent());
+        assertTrue(registry.getVisible("b").isPresent());
+        assertTrue(registry.get("a").isEmpty());
+        assertTrue(registry.get("b").isEmpty());
+        assertTrue(registry.status("a").orElseThrow().errors().stream().anyMatch(error -> error.contains("cycle")));
+    }
+
+    @Test
+    void prospectiveValidationRejectsAncestorDepthRegression() throws Exception {
+        saveNested("a", "b");
+        saveNested("b", "c");
+        saveNested("c", null);
+        saveNested("d", null);
+        FeatureTemplateRegistry registry = new FeatureTemplateRegistry(tempDir, null, new FeatureNestingPolicy(3, 256));
+        registry.reload();
+        FeatureTemplate c = registry.get("c").orElseThrow();
+        RoomFeatureSlot child = new RoomFeatureSlot("child", IntVector3.ZERO, new IntVector3(1, 1, 1), Direction3.NORTH, List.of(new FeatureSlotEntry("d", 1)));
+        FeatureTemplate changed = new FeatureTemplate(c.id(), c.size(), c.tags(), c.markers(), List.of(child), c.lootBindings(), c.structureFile());
+
+        assertFalse(registry.validateProspective(changed).valid());
+        assertTrue(registry.validateProspective(changed).errors().stream().anyMatch(error -> error.contains("depth 4")));
+    }
+
+    private void saveNested(String id, String childId) throws Exception {
+        Path directory = tempDir.resolve(id);
+        Files.createDirectories(directory);
+        Files.writeString(directory.resolve("feature.nbt"), "fake");
+        List<RoomFeatureSlot> slots = childId == null ? List.of() : List.of(new RoomFeatureSlot(
+            "child", IntVector3.ZERO, new IntVector3(1, 1, 1), Direction3.NORTH, List.of(new FeatureSlotEntry(childId, 1))));
+        FeatureTemplateIO.save(new FeatureTemplate(id, new IntVector3(1, 1, 1), Set.of(), List.of(), slots, Map.of(), directory.resolve("feature.nbt")), directory);
     }
 }

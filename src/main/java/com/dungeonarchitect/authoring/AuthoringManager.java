@@ -78,6 +78,7 @@ public final class AuthoringManager {
     private final Map<UUID, Boolean> preparingWorkspaces = new HashMap<>();
     private final RoomTemplateValidator validator = new RoomTemplateValidator();
     private final FeatureTemplateValidator featureValidator;
+    private com.dungeonarchitect.feature.FeatureTemplateRegistry featureRegistry;
     private final DoorTemplateValidator doorValidator;
     private final com.dungeonarchitect.template.RoomStructureService structureService;
 
@@ -364,6 +365,18 @@ public final class AuthoringManager {
         return isInEditWorld(player) ? editingDoorSession(player, doorId) : Optional.empty();
     }
 
+    public Optional<AuthoringSession> editingFeatureSession(Player player, String featureId) {
+        AuthoringSession session = sessions.get(player.getUniqueId());
+        if (session == null || !session.editingExistingFeature() || !session.roomId().equalsIgnoreCase(featureId)) {
+            return Optional.empty();
+        }
+        return Optional.of(session);
+    }
+
+    public Optional<AuthoringSession> editingFeatureSessionInWorkspace(Player player, String featureId) {
+        return isInEditWorld(player) ? editingFeatureSession(player, featureId) : Optional.empty();
+    }
+
     /** Removes a globally deleted tag from all in-memory authoring sessions. */
     public void removeTag(TagDomain domain, String tag) {
         sessions.values().forEach(session -> session.removeTag(domain, tag));
@@ -544,6 +557,21 @@ public final class AuthoringManager {
         return slot;
     }
 
+    public RoomFeatureSlot createNestedFeatureSlotFromSelection(Player player, String requestedId) {
+        AuthoringSession session = session(player);
+        requireFeatureSession(session);
+        SelectionBounds featureBounds = session.roomBounds()
+            .orElseThrow(() -> new IllegalStateException("Save feature bounds first with /da feature bounds"));
+        SelectionBounds current = session.currentSelection()
+            .orElseThrow(() -> new IllegalStateException("Select the nested feature slot region with the wand first"));
+        SelectionBounds local = current.toLocal(featureBounds);
+        String id = requestedId == null || requestedId.isBlank() ? "feature_" + session.nextFeatureNumber() : requestedId;
+        RoomFeatureSlot slot = new RoomFeatureSlot(id, local.min(), local.size(), BukkitVectors.direction(player.getFacing()));
+        session.addFeatureSlot(slot);
+        selectComponent(player, "feature", slot.id());
+        return slot;
+    }
+
     public void addMarker(Player player, String name, String type, IntVector3 localPosition) {
         AuthoringSession session = session(player);
         requireRoomSession(session);
@@ -645,9 +673,19 @@ public final class AuthoringManager {
         Path structureFile = featureDirectory.resolve("feature.nbt");
         server.getStructureManager().saveStructure(structureFile.toFile(), structure);
         structureService.invalidate(structureFile);
-        FeatureTemplate template = new FeatureTemplate(session.roomId(), bounds.size(), session.tags(), session.markers(), session.lootBindings(), featureDirectory.resolve("feature.nbt"));
+        FeatureTemplate template = new FeatureTemplate(session.roomId(), bounds.size(), session.tags(), session.markers(), session.featureSlots(), session.lootBindings(), featureDirectory.resolve("feature.nbt"));
+        if (featureRegistry != null) {
+            TemplateValidationResult prospective = featureRegistry.validateProspective(template);
+            if (!prospective.valid()) {
+                throw new IllegalStateException(prospective.errors().getFirst());
+            }
+        }
         FeatureTemplateIO.save(template, featureDirectory);
         return featureValidator.validate(template);
+    }
+
+    public void featureRegistry(com.dungeonarchitect.feature.FeatureTemplateRegistry featureRegistry) {
+        this.featureRegistry = featureRegistry;
     }
 
     public TemplateValidationResult saveDoor(Player player, String requestedId) throws IOException {

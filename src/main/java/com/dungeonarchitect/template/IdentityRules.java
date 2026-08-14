@@ -32,6 +32,10 @@ public final class IdentityRules {
         requireAvailable(name, componentNames(java.util.List.of(), markers, java.util.List.of(), false), excludedName);
     }
 
+    public static void requireFeatureComponentAvailable(String name, Collection<RoomMarker> markers, Collection<RoomFeatureSlot> features, String excludedName) {
+        requireAvailable(name, componentNames(java.util.List.of(), markers, features, false), excludedName);
+    }
+
     public static void validateRoomComponents(String owner, Collection<DoorSocket> doors, Collection<RoomMarker> markers, Collection<RoomFeatureSlot> features, TemplateValidationResult result) {
         validate(owner, componentNames(doors, markers, features, false), result);
     }
@@ -44,6 +48,10 @@ public final class IdentityRules {
         validate(owner, componentNames(java.util.List.of(), markers, java.util.List.of(), false), result);
     }
 
+    public static void validateFeatureComponents(String owner, Collection<RoomMarker> markers, Collection<RoomFeatureSlot> features, TemplateValidationResult result) {
+        validate(owner, componentNames(java.util.List.of(), markers, features, false), result);
+    }
+
     public static void assertRoomComponents(Collection<DoorSocket> doors, Collection<RoomMarker> markers, Collection<RoomFeatureSlot> features) {
         assertUnique(componentNames(doors, markers, features, false));
     }
@@ -54,6 +62,10 @@ public final class IdentityRules {
 
     public static void assertFeatureMarkers(Collection<RoomMarker> markers) {
         assertUnique(componentNames(java.util.List.of(), markers, java.util.List.of(), false));
+    }
+
+    public static void assertFeatureComponents(Collection<RoomMarker> markers, Collection<RoomFeatureSlot> features) {
+        assertUnique(componentNames(java.util.List.of(), markers, features, false));
     }
 
     private static void requireAvailable(String name, List<Name> existing, String excludedName) {

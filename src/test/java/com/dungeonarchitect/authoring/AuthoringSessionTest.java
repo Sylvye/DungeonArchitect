@@ -8,6 +8,7 @@ import com.dungeonarchitect.domain.RoomFeatureSlot;
 import com.dungeonarchitect.domain.RoomMarker;
 import com.dungeonarchitect.domain.RoomTemplate;
 import com.dungeonarchitect.domain.SocketType;
+import com.dungeonarchitect.domain.FeatureTemplate;
 import org.bukkit.World;
 import org.junit.jupiter.api.Test;
 
@@ -15,6 +16,7 @@ import java.lang.reflect.Proxy;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Set;
+import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -179,6 +181,20 @@ final class AuthoringSessionTest {
         assertEquals(new IntVector3(14, 83, 0), bounds.max());
         assertEquals(template.size(), bounds.size());
         assertEquals(2, session.nextDoorNumber());
+        assertEquals(2, session.nextFeatureNumber());
+    }
+
+    @Test
+    void loadFeatureForEditRetainsNestedSlots() {
+        RoomFeatureSlot nested = new RoomFeatureSlot("detail", new IntVector3(1, 0, 1), new IntVector3(2, 2, 2), Direction3.EAST);
+        FeatureTemplate template = new FeatureTemplate("composite", new IntVector3(4, 4, 4), Set.of(), List.of(), List.of(nested), Map.of(), Path.of("feature.nbt"));
+        AuthoringSession session = new AuthoringSession("blank");
+
+        session.loadFeatureForEdit(template, fakeWorld(), new IntVector3(10, 80, 10));
+
+        assertTrue(session.featureSession());
+        assertTrue(session.editingExistingFeature());
+        assertEquals(List.of(nested), session.featureSlots());
         assertEquals(2, session.nextFeatureNumber());
     }
 

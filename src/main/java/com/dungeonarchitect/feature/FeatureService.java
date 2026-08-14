@@ -22,6 +22,8 @@ import java.io.IOException;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Random;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.logging.Logger;
 
 public final class FeatureService {
@@ -29,19 +31,25 @@ public final class FeatureService {
     private final RoomStructureService structureService;
     private final Logger logger;
     private final LootService lootService;
+    private final FeatureNestingPolicy nestingPolicy;
 
     public FeatureService(FeatureTemplateRegistry registry, RoomStructureService structureService) {
-        this(registry, structureService, Logger.getLogger("DungeonArchitect"), null);
+        this(registry, structureService, Logger.getLogger("DungeonArchitect"), null, registry.nestingPolicy());
     }
 
     public FeatureService(FeatureTemplateRegistry registry, RoomStructureService structureService, Logger logger) {
-        this(registry, structureService, logger, null);
+        this(registry, structureService, logger, null, registry.nestingPolicy());
     }
     public FeatureService(FeatureTemplateRegistry registry, RoomStructureService structureService, Logger logger, LootService lootService) {
+        this(registry, structureService, logger, lootService, registry.nestingPolicy());
+    }
+
+    public FeatureService(FeatureTemplateRegistry registry, RoomStructureService structureService, Logger logger, LootService lootService, FeatureNestingPolicy nestingPolicy) {
         this.registry = registry;
         this.structureService = structureService;
         this.logger = logger;
         this.lootService = lootService;
+        this.nestingPolicy = nestingPolicy;
     }
 
     public void placeFeatures(World world, RoomTemplate template, RoomTransform roomTransform, long dungeonSeed, int nodeIndex) throws IOException {
@@ -49,6 +57,10 @@ public final class FeatureService {
     }
 
     public void placeFeatureSlots(World world, String ownerId, List<RoomFeatureSlot> slots, RoomTransform roomTransform, long dungeonSeed, int nodeIndex) throws IOException {
+        placeFeatureSlots(world, ownerId, slots, roomTransform, dungeonSeed, nodeIndex, null);
+    }
+
+    private void placeFeatureSlots(World world, String ownerId, List<RoomFeatureSlot> slots, RoomTransform roomTransform, long dungeonSeed, int nodeIndex, ExpansionContext inherited) throws IOException {
         for (RoomFeatureSlot slot : slots) {
             FeatureRollResult roll = roll(slot, new Random(rollSeed(dungeonSeed, nodeIndex, ownerId, slot.id())));
             if (roll.status() == FeatureRollStatus.EMPTY || roll.status() == FeatureRollStatus.NO_ENTRIES) {
@@ -59,7 +71,16 @@ public final class FeatureService {
                 continue;
             }
             FeatureTemplate feature = registry.get(roll.selectedFeatureId()).orElseThrow();
-            placeFeature(world, ownerId, roomTransform, slot, feature, roll.rotation(), dungeonSeed, nodeIndex);
+            ExpansionContext context = inherited == null ? new ExpansionContext(nestingPolicy) : inherited;
+            if (!context.enter(feature.id())) {
+                logger.warning("Skipped unsafe nested feature path " + context.pathWith(feature.id()) + ": " + context.rejectionReason(feature.id()));
+                continue;
+            }
+            try {
+                placeFeature(world, ownerId, roomTransform, slot, feature, roll.rotation(), dungeonSeed, nodeIndex, context);
+            } finally {
+                context.leave();
+            }
         }
     }
 
@@ -130,7 +151,7 @@ public final class FeatureService {
         return value;
     }
 
-    private void placeFeature(World world, String ownerId, RoomTransform roomTransform, RoomFeatureSlot slot, FeatureTemplate feature, Rotation featureRotation, long dungeonSeed, int nodeIndex) throws IOException {
+    private void placeFeature(World world, String ownerId, RoomTransform roomTransform, RoomFeatureSlot slot, FeatureTemplate feature, Rotation featureRotation, long dungeonSeed, int nodeIndex, ExpansionContext context) throws IOException {
         Structure structure = structureService.loadStructure(feature.structureFile());
         IntVector3 nbtSize = new IntVector3(structure.getSize().getBlockX(), structure.getSize().getBlockY(), structure.getSize().getBlockZ());
         if (!nbtSize.equals(feature.size())) {
@@ -158,8 +179,10 @@ public final class FeatureService {
             RoomStructurePlacer.STRUCTURE_INTEGRITY,
             new Random(dungeonSeed ^ nodeIndex ^ feature.id().hashCode())
         );
+        String nestedOwner = ownerId + ":" + slot.id() + ":" + feature.id();
+        placeFeatureSlots(world, nestedOwner, feature.featureSlots(), featureTransform, dungeonSeed, nodeIndex, context);
         if (lootService != null) {
-            lootService.placeLoot(world, feature.id(), feature.markers(), feature.lootBindings(), featureTransform, dungeonSeed, ownerId + ":" + slot.id() + ":" + feature.id());
+            lootService.placeLoot(world, feature.id(), feature.markers(), feature.lootBindings(), featureTransform, dungeonSeed, nestedOwner);
         }
     }
 
@@ -198,6 +221,39 @@ public final class FeatureService {
             case CLOCKWISE_180 -> StructureRotation.CLOCKWISE_180;
             case COUNTERCLOCKWISE_90 -> StructureRotation.COUNTERCLOCKWISE_90;
         };
+    }
+
+    private static final class ExpansionContext {
+        private final FeatureNestingPolicy policy;
+        private final Deque<String> stack = new ArrayDeque<>();
+        private int placements;
+
+        private ExpansionContext(FeatureNestingPolicy policy) {
+            this.policy = policy;
+        }
+
+        private boolean enter(String featureId) {
+            if (stack.contains(featureId) || stack.size() + 1 > policy.maxDepth() || placements + 1 > policy.maxExpandedPlacements()) {
+                return false;
+            }
+            stack.addLast(featureId);
+            placements++;
+            return true;
+        }
+
+        private void leave() {
+            stack.removeLast();
+        }
+
+        private String pathWith(String featureId) {
+            return String.join(" -> ", stack) + (stack.isEmpty() ? "" : " -> ") + featureId;
+        }
+
+        private String rejectionReason(String featureId) {
+            if (stack.contains(featureId)) return "cycle detected";
+            if (stack.size() + 1 > policy.maxDepth()) return "maximum depth " + policy.maxDepth() + " exceeded";
+            return "maximum expanded placements " + policy.maxExpandedPlacements() + " exceeded";
+        }
     }
 
     public enum FeatureRollStatus {

@@ -11,6 +11,7 @@ import com.dungeonarchitect.door.DoorService;
 import com.dungeonarchitect.door.DoorTemplateRegistry;
 import com.dungeonarchitect.feature.FeatureService;
 import com.dungeonarchitect.feature.FeatureTemplateRegistry;
+import com.dungeonarchitect.feature.FeatureNestingPolicy;
 import com.dungeonarchitect.gui.ChatPromptManager;
 import com.dungeonarchitect.gui.MenuManager;
 import com.dungeonarchitect.gui.TagCatalog;
@@ -45,14 +46,17 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
     private AssetRenameCoordinator assetRenameCoordinator;
     private TagCatalog tagCatalog;
     private DungeonArchitectAPI api;
+    private FeatureNestingPolicy featureNestingPolicy;
 
     @Override
     public void onEnable() {
         saveDefaultConfig();
 
         Path dataPath = getDataFolder().toPath();
+        featureNestingPolicy = new FeatureNestingPolicy();
+        updateFeatureNestingPolicy();
         structureService = new RoomStructureService(getServer());
-        featureTemplateRegistry = new FeatureTemplateRegistry(dataPath.resolve("features"), structureService);
+        featureTemplateRegistry = new FeatureTemplateRegistry(dataPath.resolve("features"), structureService, featureNestingPolicy);
         featureTemplateRegistry.reload();
         doorTemplateRegistry = new DoorTemplateRegistry(dataPath.resolve("doors"), structureService, featureTemplateRegistry);
         doorTemplateRegistry.reload();
@@ -109,6 +113,7 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
             defaultWeight,
             structureService
         );
+        authoringManager.featureRegistry(featureTemplateRegistry);
 
         getServer().getPluginManager().registerEvents(new AuthoringListener(authoringManager), this);
         getServer().getPluginManager().registerEvents(new PlayerRoomListener(dungeonManager), this);
@@ -155,6 +160,7 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
 
     private void reloadContent() {
         reloadConfig();
+        updateFeatureNestingPolicy();
         structureService.clearCache();
         featureTemplateRegistry.reload();
         doorTemplateRegistry.reload();
@@ -162,6 +168,20 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
         lootTableRegistry.reload();
         synchronizeTags();
         logDiagnostics();
+    }
+
+    private void updateFeatureNestingPolicy() {
+        int depth = getConfig().getInt("features.max-nesting-depth", FeatureNestingPolicy.DEFAULT_MAX_DEPTH);
+        int placements = getConfig().getInt("features.max-expanded-placements", FeatureNestingPolicy.DEFAULT_MAX_EXPANDED_PLACEMENTS);
+        if (depth <= 0) {
+            getLogger().warning("features.max-nesting-depth must be positive; using " + FeatureNestingPolicy.DEFAULT_MAX_DEPTH);
+            depth = FeatureNestingPolicy.DEFAULT_MAX_DEPTH;
+        }
+        if (placements <= 0) {
+            getLogger().warning("features.max-expanded-placements must be positive; using " + FeatureNestingPolicy.DEFAULT_MAX_EXPANDED_PLACEMENTS);
+            placements = FeatureNestingPolicy.DEFAULT_MAX_EXPANDED_PLACEMENTS;
+        }
+        featureNestingPolicy.update(depth, placements);
     }
 
     private void synchronizeTags() {

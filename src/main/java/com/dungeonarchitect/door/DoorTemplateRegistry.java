@@ -88,6 +88,15 @@ public final class DoorTemplateRegistry {
                     }
                     TemplateValidationResult templateResult = validator.validate(template);
                     errors.addAll(templateResult.errors());
+                    if (featureRegistry != null) {
+                        for (RoomFeatureSlot slot : template.featureSlots()) {
+                            for (FeatureSlotEntry entry : slot.entries()) {
+                                if (!entry.featureId().equals(FeatureSlotEntry.EMPTY) && featureRegistry.get(entry.featureId()).isEmpty()) {
+                                    errors.add(template.id() + ": feature slot " + slot.id() + " references invalid feature " + entry.featureId());
+                                }
+                            }
+                        }
+                    }
                     result.addAll(errors);
                     result.addRepairs(repairs);
                     boolean valid = errors.isEmpty();
@@ -273,6 +282,10 @@ public final class DoorTemplateRegistry {
                 }
                 var selected = featureRegistry.get(entry.featureId());
                 if (selected.isEmpty()) {
+                    if (featureRegistry.getVisible(entry.featureId()).isPresent()) {
+                        entries.add(entry);
+                        continue;
+                    }
                     changed = true;
                     repairs.add(template.id() + ": removed missing or invalid feature " + entry.featureId() + " from slot " + slot.id());
                     continue;
@@ -290,7 +303,7 @@ public final class DoorTemplateRegistry {
         if (!changed) {
             return new CleanupResult(template, false, List.of());
         }
-        return new CleanupResult(new DoorTemplate(template.id(), template.size(), template.tags(), template.markers(), slots, template.gateway(), template.structureFile()), true, repairs);
+        return new CleanupResult(new DoorTemplate(template.id(), template.size(), template.tags(), template.markers(), slots, template.lootBindings(), template.gateway(), template.structureFile()), true, repairs);
     }
 
     private record CleanupResult(DoorTemplate template, boolean changed, List<String> repairs) {

@@ -240,6 +240,7 @@ public final class AuthoringSession {
         lootBindings.clear();
         lootBindings.putAll(template.lootBindings());
         featureSlots.clear();
+        featureSlots.addAll(template.featureSlots());
     }
 
     public void loadDoorForEdit(DoorTemplate template, World world, IntVector3 origin) {
@@ -301,7 +302,7 @@ public final class AuthoringSession {
 
     public void addMarker(String name, String type, IntVector3 localPosition) {
         if (doorSession()) IdentityRules.requireDoorComponentAvailable(name, markers, featureSlots, null);
-        else if (featureSession()) IdentityRules.requireFeatureMarkerAvailable(name, markers, null);
+        else if (featureSession()) IdentityRules.requireFeatureComponentAvailable(name, markers, featureSlots, null);
         else IdentityRules.requireRoomComponentAvailable(name, doors, markers, featureSlots, null);
         markers.add(new RoomMarker(name, type, localPosition));
     }
@@ -357,7 +358,7 @@ public final class AuthoringSession {
 
     public boolean renameMarker(String oldId, String newId) {
         if (doorSession()) IdentityRules.requireDoorComponentAvailable(newId, markers, featureSlots, oldId);
-        else if (featureSession()) IdentityRules.requireFeatureMarkerAvailable(newId, markers, oldId);
+        else if (featureSession()) IdentityRules.requireFeatureComponentAvailable(newId, markers, featureSlots, oldId);
         else IdentityRules.requireRoomComponentAvailable(newId, doors, markers, featureSlots, oldId);
         for (int i = 0; i < markers.size(); i++) {
             RoomMarker marker = markers.get(i);
@@ -391,6 +392,7 @@ public final class AuthoringSession {
 
     public boolean renameFeatureSlot(String oldId, String newId) {
         if (doorSession()) IdentityRules.requireDoorComponentAvailable(newId, markers, featureSlots, oldId);
+        else if (featureSession()) IdentityRules.requireFeatureComponentAvailable(newId, markers, featureSlots, oldId);
         else IdentityRules.requireRoomComponentAvailable(newId, doors, markers, featureSlots, oldId);
         for (int i = 0; i < featureSlots.size(); i++) {
             RoomFeatureSlot slot = featureSlots.get(i);
@@ -444,12 +446,14 @@ public final class AuthoringSession {
 
     public void addFeatureSlot(String id, String poolId, IntVector3 localPosition, Direction3 facing) {
         if (doorSession()) IdentityRules.requireDoorComponentAvailable(id, markers, featureSlots, null);
+        else if (featureSession()) IdentityRules.requireFeatureComponentAvailable(id, markers, featureSlots, null);
         else IdentityRules.requireRoomComponentAvailable(id, doors, markers, featureSlots, null);
         featureSlots.add(new RoomFeatureSlot(id, poolId, localPosition, facing));
     }
 
     public void addFeatureSlot(RoomFeatureSlot slot) {
         if (doorSession()) IdentityRules.requireDoorComponentAvailable(slot.id(), markers, featureSlots, null);
+        else if (featureSession()) IdentityRules.requireFeatureComponentAvailable(slot.id(), markers, featureSlots, null);
         else IdentityRules.requireRoomComponentAvailable(slot.id(), doors, markers, featureSlots, null);
         featureSlots.add(slot);
     }

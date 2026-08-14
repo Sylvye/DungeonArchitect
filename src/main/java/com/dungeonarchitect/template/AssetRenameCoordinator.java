@@ -7,6 +7,8 @@ import com.dungeonarchitect.door.DoorTemplateRegistry;
 import com.dungeonarchitect.feature.FeatureTemplateRegistry;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 
 /** Coordinates persisted asset reference rewrites and dependency-ordered reloads. */
 public final class AssetRenameCoordinator {
@@ -22,10 +24,26 @@ public final class AssetRenameCoordinator {
 
     public FeatureTemplate renameFeature(String oldId, String newId) throws IOException {
         FeatureTemplate renamed = features.renameFeature(oldId, newId);
+        features.replaceFeatureReferences(oldId, renamed.id());
         doors.replaceFeatureReferences(oldId, renamed.id());
         rooms.replaceFeatureReferences(oldId, renamed.id());
         reloadAll();
         return renamed;
+    }
+
+    public void deleteFeature(String featureId) throws IOException {
+        List<String> owners = new ArrayList<>(features.featureOwnersReferencing(featureId));
+        doors.visible().stream()
+            .filter(owner -> owner.featureSlots().stream().flatMap(slot -> slot.entries().stream()).anyMatch(entry -> entry.featureId().equalsIgnoreCase(featureId)))
+            .map(owner -> "door " + owner.id()).forEach(owners::add);
+        rooms.visible().stream()
+            .filter(owner -> owner.featureSlots().stream().flatMap(slot -> slot.entries().stream()).anyMatch(entry -> entry.featureId().equalsIgnoreCase(featureId)))
+            .map(owner -> "room " + owner.id()).forEach(owners::add);
+        if (!owners.isEmpty()) {
+            throw new IllegalStateException("Feature " + featureId + " is referenced by " + String.join(", ", owners.stream().sorted().toList()));
+        }
+        features.deleteFeature(featureId);
+        reloadAll();
     }
 
     public DoorTemplate renameDoor(String oldId, String newId) throws IOException {

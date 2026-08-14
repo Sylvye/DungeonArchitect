@@ -337,6 +337,10 @@ public final class RoomTemplateRegistry {
                 }
                 var selected = featureRegistry.get(entry.featureId());
                 if (selected.isEmpty()) {
+                    if (featureRegistry.getVisible(entry.featureId()).isPresent()) {
+                        entries.add(entry);
+                        continue;
+                    }
                     changed = true;
                     repairs.add(template.id() + ": removed missing or invalid feature " + entry.featureId() + " from slot " + slot.id());
                     continue;
@@ -354,7 +358,7 @@ public final class RoomTemplateRegistry {
         if (!changed) {
             return new CleanupResult(template, false, List.of());
         }
-        return new CleanupResult(new RoomTemplate(template.id(), template.category(), template.weight(), template.minimumConnections(), template.tags(), template.size(), template.spawn(), doors, template.markers(), features, template.structureFile()), true, repairs);
+        return new CleanupResult(new RoomTemplate(template.id(), template.category(), template.weight(), template.minimumConnections(), template.tags(), template.size(), template.spawn(), doors, template.markers(), features, template.lootBindings(), template.structureFile()), true, repairs);
     }
 
     private record CleanupResult(RoomTemplate template, boolean changed, List<String> repairs) {

@@ -26,7 +26,8 @@ The checked-in Gradle wrapper uses Gradle 8.14.3.
 - `/da room component face [N|E|S|W|up|down]` sets the selected room component's facing without moving it, when that facing is valid.
 - `/da door component` manages the active door template's gateway, markers, and feature slots; unsupported type/action combinations are rejected.
 - `/da door component rotate|face [N|E|S|W|up|down]` supports the selected gateway or feature slot.
-- `/da feature component` is recognized but reports that feature templates have no nested editable components.
+- `/da feature feature [name]` creates a weighted nested feature slot from the current selection.
+- `/da feature component` selects, resizes, renames, rotates, faces, or removes nested feature slots and markers.
 - `/da room feature <name>` adds a random feature marker at the targeted block.
 - `/da room save [id]` exports `room.nbt` and `room.yml`.
 - `/da room rename <oldId> <newId>` and `/da room duplicate <oldId> <newId>` manage room template ids.
@@ -34,6 +35,7 @@ The checked-in Gradle wrapper uses Gradle 8.14.3.
 - `/da feature create <id>`, `/da feature bounds`, `/da feature save [id]`, `/da feature rename <oldId> <newId>`, `/da feature duplicate <oldId> <newId>`, and `/da feature delete <id>` manage reusable feature templates.
 - `/da door create <id>`, `/da door bounds`, `/da door gateway`, `/da door save [id]`, `/da door rename <oldId> <newId>`, `/da door duplicate <oldId> <newId>`, and `/da door delete <id>` manage reusable door templates.
 - `/da gui`, `/da rooms`, `/da features`, `/da doors`, `/da loot`, `/da config`, and `/da dungeons` open inventory GUIs.
+- In the loot editor, left-click or shift-left-click an inventory item to add a one-item template without changing your inventory. Left-click an entry to remove it and right-click it to configure generated amounts and weight. Completed changes save immediately; **Done** only closes the editor.
 - `/da reload` reloads templates and feature pools.
 - `/da generate <roomCount> [seed]` creates an isolated dungeon world and teleports the player to the start room.
 - `/da debug room`, `/da debug instance`, `/da list`, `/da teleport [instance] <roomIndex>`, `/da destroy [instance]`, and `/da exit` support debugging and dungeon management.
@@ -43,4 +45,5 @@ The checked-in Gradle wrapper uses Gradle 8.14.3.
 - Room templates are saved under `plugins/DungeonArchitect/rooms/<id>/`.
 - The first generator is deterministic, socket-based, and rejects bounding-box collisions before any blocks are placed.
 - Random features are metadata-driven weighted slots configured in `feature-pools.yml`.
+- Feature templates may contain weighted feature slots. The dependency graph must be acyclic and is limited by `features.max-nesting-depth` (default 4) and `features.max-expanded-placements` (default 256).
 - If an old template was saved before size-based capture, re-save it from the original build area. `/da room inspect <id>` shows the metadata size and actual `room.nbt` size.

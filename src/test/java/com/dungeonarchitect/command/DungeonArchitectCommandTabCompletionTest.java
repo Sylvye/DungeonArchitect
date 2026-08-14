@@ -60,6 +60,8 @@ final class DungeonArchitectCommandTabCompletionTest {
         assertTrue(!doorTypes.contains("door"));
 
         assertContains(command.onTabComplete(null, null, "da", new String[] {"feature", "component", ""}), "select", "remove", "bounds", "rename");
+        assertContains(command.onTabComplete(null, null, "da", new String[] {"feature", "component", "select", ""}), "marker", "feature");
+        assertContains(command.onTabComplete(null, null, "da", new String[] {"feature", ""}), "feature");
     }
 
     @Test

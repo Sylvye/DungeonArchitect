@@ -7,6 +7,7 @@ import com.dungeonarchitect.domain.FeatureSlotEntry;
 import com.dungeonarchitect.domain.DoorSlotEntry;
 import com.dungeonarchitect.domain.DoorTemplate;
 import com.dungeonarchitect.domain.FeatureTemplate;
+import com.dungeonarchitect.domain.RoomFeatureSlot;
 import com.dungeonarchitect.domain.RoomTemplate;
 import com.dungeonarchitect.domain.SocketType;
 import com.dungeonarchitect.feature.FeatureMatcher;
@@ -128,7 +129,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
         sender.sendMessage(Component.text("/da room rename <oldId> <newId> | duplicate <oldId> <newId> | delete <id>"));
         sender.sendMessage(Component.text("/da door create <id> | bounds | gateway | marker <add|remove> <name> [type] | feature [slotName] | save [id] | edit <id> | inspect <id> | validate <id|all>"));
         sender.sendMessage(Component.text("/da door rename <oldId> <newId> | duplicate <oldId> <newId> | delete <id>"));
-        sender.sendMessage(Component.text("/da feature create <id> | bounds | marker <add|remove> <name> [type] | save [id] | edit <id> | inspect <id> | validate <id|all>"));
+        sender.sendMessage(Component.text("/da feature create <id> | bounds | feature [slotName] | marker <add|remove> <name> [type] | save [id] | edit <id> | inspect <id> | validate <id|all>"));
         sender.sendMessage(Component.text("/da feature rename <oldId> <newId> | duplicate <oldId> <newId> | delete <id>"));
         sender.sendMessage(Component.text("/da room component <select|remove|bounds|rename> [door|marker|feature] [id] [newId]"));
         sender.sendMessage(Component.text("/da <room|door> component <select|remove|bounds|rename|rotate|face> ..."));
@@ -141,7 +142,8 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
     }
 
     private void reload(CommandSender sender) {
-        assetRenameCoordinator.reloadAll();
+        if (menuManager != null) menuManager.reloadContent();
+        else assetRenameCoordinator.reloadAll();
         TemplateValidationResult featureResult = featureRegistry.lastValidation();
         TemplateValidationResult doorResult = doorRegistry.lastValidation();
         TemplateValidationResult result = templateRegistry.lastValidation();
@@ -292,7 +294,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
     private void featureCommand(CommandSender sender, String[] args) {
         Player player = requirePlayer(sender);
         if (args.length < 2) {
-            throw new IllegalArgumentException("Usage: /da feature <create|bounds|save|edit|inspect|validate|rename|duplicate|delete|component>");
+            throw new IllegalArgumentException("Usage: /da feature <create|bounds|feature|marker|save|edit|inspect|validate|rename|duplicate|delete|component>");
         }
         switch (args[1].toLowerCase(Locale.ROOT)) {
             case "create" -> {
@@ -352,6 +354,11 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
                 var local = authoringManager.targetedLocalPosition(player).orElseThrow(() -> new IllegalArgumentException("Look at a block inside selected bounds"));
                 authoringManager.addFeatureMarker(player, args[3], args.length >= 5 ? args[4] : "generic", local);
                 player.sendMessage(Component.text("Added feature marker " + args[3] + " at " + local + "."));
+            }
+            case "feature" -> {
+                String slotName = args.length >= 3 ? args[2] : null;
+                RoomFeatureSlot slot = authoringManager.createNestedFeatureSlotFromSelection(player, slotName);
+                player.sendMessage(Component.text("Added nested feature slot " + slot.id() + " at " + slot.position() + " size=" + slot.size() + "."));
             }
             case "component" -> component(player, args, ComponentCommandContext.FEATURE);
             default -> throw new IllegalArgumentException("Unknown feature command " + args[1]);
@@ -670,6 +677,9 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
             .orElseThrow(() -> new IllegalArgumentException("Unknown feature template " + args[2]));
         sender.sendMessage(Component.text("Feature " + template.id()));
         sender.sendMessage(Component.text("metadata size=" + template.size() + " tags=" + template.tags() + " structure=" + template.structureFile()));
+        sender.sendMessage(Component.text("featureSlots=" + template.featureSlots().size()));
+        featureRegistry.metrics(template.id()).ifPresent(metrics -> sender.sendMessage(Component.text("nestingDepth=" + metrics.depth() + " worstCasePlacements=" + metrics.expandedPlacements())));
+        template.featureSlots().forEach(slot -> sender.sendMessage(Component.text("featureSlot " + slot.id() + " pos=" + slot.position() + " size=" + slot.size() + " entries=" + slot.entries().size())));
         try {
             sender.sendMessage(Component.text("feature.nbt size=" + structureService.loadSize(template.structureFile())));
         } catch (Exception ex) {
@@ -685,14 +695,15 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
         }
         FeatureTemplate template = featureRegistry.getVisible(args[2])
             .orElseThrow(() -> new IllegalArgumentException("Unknown feature template " + args[2]));
-        sendValidation(sender, featureValidator.validate(template));
+        TemplateValidationResult result = featureValidator.validate(template);
+        featureRegistry.status(template.id()).ifPresent(status -> result.addAll(status.errors()));
+        sendValidation(sender, result);
     }
 
     private void deleteFeature(CommandSender sender, String[] args) {
         requireArgs(args, 3, "/da feature delete <id>");
         try {
-            featureRegistry.deleteFeature(args[2]);
-            assetRenameCoordinator.reloadAll();
+            assetRenameCoordinator.deleteFeature(args[2]);
             sender.sendMessage(Component.text("Deleted feature " + args[2] + "."));
         } catch (Exception ex) {
             throw new IllegalArgumentException("Failed to delete feature: " + ex.getMessage(), ex);
@@ -867,14 +878,15 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
             result.addDiagnostics(featureRegistry.lastValidation().diagnostics());
             result.addRepairs(featureRegistry.lastValidation().repairs());
             for (FeatureTemplate template : featureRegistry.visible()) {
-                result.addDiagnostics(TemplateDiagnostics.analyzeFeature(template).diagnostics());
+                result.addDiagnostics(TemplateDiagnostics.analyzeFeature(template, featureRegistry).diagnostics());
             }
             return result;
         }
         FeatureTemplate template = featureRegistry.getVisible(args[2])
             .orElseThrow(() -> new IllegalArgumentException("Unknown feature template " + args[2]));
         TemplateValidationResult result = featureValidator.validate(template);
-        result.addDiagnostics(TemplateDiagnostics.analyzeFeature(template).diagnostics());
+        featureRegistry.status(template.id()).ifPresent(status -> result.addAll(status.errors()));
+        result.addDiagnostics(TemplateDiagnostics.analyzeFeature(template, featureRegistry).diagnostics());
         return result;
     }
 
@@ -1145,7 +1157,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
             return prefix(args[2], List.of("feature_1"));
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("feature")) {
-            return prefix(args[1], List.of("create", "bounds", "marker", "save", "edit", "inspect", "validate", "rename", "duplicate", "delete", "component"));
+            return prefix(args[1], List.of("create", "bounds", "marker", "feature", "save", "edit", "inspect", "validate", "rename", "duplicate", "delete", "component"));
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("door")) {
             return prefix(args[1], List.of("create", "bounds", "gateway", "marker", "feature", "save", "edit", "inspect", "validate", "rename", "duplicate", "delete", "component"));
@@ -1170,6 +1182,9 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
         }
         if (args.length == 3 && args[0].equalsIgnoreCase("feature") && args[1].equalsIgnoreCase("marker")) {
             return prefix(args[2], List.of("add", "remove"));
+        }
+        if (args.length == 3 && args[0].equalsIgnoreCase("feature") && args[1].equalsIgnoreCase("feature")) {
+            return prefix(args[2], List.of("feature_1"));
         }
         if (args.length == 4 && args[0].equalsIgnoreCase("feature") && List.of("rename", "duplicate").contains(args[1].toLowerCase(Locale.ROOT))) {
             return prefix(args[3], List.of("new_id"));

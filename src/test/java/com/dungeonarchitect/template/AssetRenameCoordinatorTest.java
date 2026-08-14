@@ -26,6 +26,8 @@ import java.util.Set;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import java.util.Map;
 
 final class AssetRenameCoordinatorTest {
     @TempDir
@@ -38,6 +40,12 @@ final class AssetRenameCoordinatorTest {
         Files.createDirectories(oldFeature);
         Files.writeString(oldFeature.resolve("feature.nbt"), "fake");
         FeatureTemplateIO.save(new FeatureTemplate("old_feature", new IntVector3(1, 1, 1), Set.of(), oldFeature.resolve("feature.nbt")), oldFeature);
+        Path wrapper = features.resolve("wrapper");
+        Files.createDirectories(wrapper);
+        Files.writeString(wrapper.resolve("feature.nbt"), "fake");
+        FeatureTemplateIO.save(new FeatureTemplate("wrapper", new IntVector3(1, 1, 1), Set.of(), List.of(), List.of(
+            new RoomFeatureSlot("nested", IntVector3.ZERO, new IntVector3(1, 1, 1), Direction3.NORTH, List.of(new FeatureSlotEntry("old_feature", 1)))
+        ), Map.of(), wrapper.resolve("feature.nbt")), wrapper);
         FeatureTemplateRegistry featureRegistry = new FeatureTemplateRegistry(features, null);
         featureRegistry.reload();
 
@@ -63,6 +71,7 @@ final class AssetRenameCoordinatorTest {
         AssetRenameCoordinator coordinator = new AssetRenameCoordinator(roomRegistry, featureRegistry, doorRegistry);
 
         coordinator.renameFeature("old_feature", "new_feature");
+        assertEquals("new_feature", FeatureTemplateIO.load(wrapper).featureSlots().getFirst().entries().getFirst().featureId());
         assertTrue(!RoomTemplateIO.load(room).doors().getFirst().entries().isEmpty(), roomRegistry.lastValidation().repairs().toString());
         coordinator.renameDoor("old_door", "new_door");
 
@@ -71,6 +80,33 @@ final class AssetRenameCoordinatorTest {
         assertEquals("new_feature", updatedRoom.featureSlots().getFirst().entries().getFirst().featureId());
         assertFalse(updatedRoom.doors().getFirst().entries().isEmpty(), roomRegistry.lastValidation().repairs().toString());
         assertEquals("new_door", updatedRoom.doors().getFirst().entries().getFirst().doorId());
+    }
+
+    @Test
+    void referencedFeatureDeletionIsBlockedAndListsOwner() throws Exception {
+        Path features = tempDir.resolve("features");
+        Path child = features.resolve("child");
+        Files.createDirectories(child);
+        Files.writeString(child.resolve("feature.nbt"), "fake");
+        FeatureTemplateIO.save(new FeatureTemplate("child", new IntVector3(1, 1, 1), Set.of(), child.resolve("feature.nbt")), child);
+        Path parent = features.resolve("parent");
+        Files.createDirectories(parent);
+        Files.writeString(parent.resolve("feature.nbt"), "fake");
+        FeatureTemplateIO.save(new FeatureTemplate("parent", new IntVector3(1, 1, 1), Set.of(), List.of(), List.of(
+            new RoomFeatureSlot("nested", IntVector3.ZERO, new IntVector3(1, 1, 1), Direction3.NORTH, List.of(new FeatureSlotEntry("child", 1)))
+        ), Map.of(), parent.resolve("feature.nbt")), parent);
+        FeatureTemplateRegistry featureRegistry = new FeatureTemplateRegistry(features, null);
+        featureRegistry.reload();
+        DoorTemplateRegistry doorRegistry = new DoorTemplateRegistry(tempDir.resolve("doors"), null, featureRegistry);
+        doorRegistry.reload();
+        RoomTemplateRegistry roomRegistry = new RoomTemplateRegistry(tempDir.resolve("rooms"), null, featureRegistry, doorRegistry);
+        roomRegistry.reload();
+        AssetRenameCoordinator coordinator = new AssetRenameCoordinator(roomRegistry, featureRegistry, doorRegistry);
+
+        IllegalStateException error = assertThrows(IllegalStateException.class, () -> coordinator.deleteFeature("child"));
+
+        assertTrue(error.getMessage().contains("feature parent"));
+        assertTrue(Files.isDirectory(child));
     }
 
     @Test
@@ -95,5 +131,30 @@ final class AssetRenameCoordinatorTest {
         assertTrue(result.repairs().stream().anyMatch(repair -> repair.contains("removed missing or invalid feature missing from slot missing")), result.repairs().toString());
         assertTrue(result.repairs().stream().anyMatch(repair -> repair.contains("removed incompatible feature large from slot small")), result.repairs().toString());
         assertTrue(DoorTemplateIO.load(door).featureSlots().stream().allMatch(slot -> slot.entries().isEmpty()));
+    }
+
+    @Test
+    void doorRetainsReferenceToVisibleQuarantinedFeature() throws Exception {
+        Path badFeature = tempDir.resolve("features").resolve("bad");
+        Files.createDirectories(badFeature);
+        FeatureTemplateIO.save(new FeatureTemplate("bad", new IntVector3(1, 1, 1), Set.of(), badFeature.resolve("feature.nbt")), badFeature);
+        FeatureTemplateRegistry featureRegistry = new FeatureTemplateRegistry(tempDir.resolve("features"), null);
+        featureRegistry.reload();
+        assertTrue(featureRegistry.getVisible("bad").isPresent());
+        assertTrue(featureRegistry.get("bad").isEmpty());
+
+        Path door = tempDir.resolve("doors").resolve("door");
+        Files.createDirectories(door);
+        Files.writeString(door.resolve("door.nbt"), "fake");
+        DoorTemplateIO.save(new DoorTemplate("door", new IntVector3(1, 2, 1), Set.of(), List.of(), List.of(
+            new RoomFeatureSlot("nested", IntVector3.ZERO, new IntVector3(1, 1, 1), Direction3.NORTH, List.of(new FeatureSlotEntry("bad", 1)))
+        ), new DoorGateway(IntVector3.ZERO, new IntVector3(1, 2, 1), Direction3.NORTH), door.resolve("door.nbt")), door);
+        DoorTemplateRegistry doorRegistry = new DoorTemplateRegistry(tempDir.resolve("doors"), null, featureRegistry);
+
+        doorRegistry.reload();
+
+        assertTrue(doorRegistry.getVisible("door").isPresent());
+        assertTrue(doorRegistry.get("door").isEmpty());
+        assertEquals("bad", DoorTemplateIO.load(door).featureSlots().getFirst().entries().getFirst().featureId());
     }
 }

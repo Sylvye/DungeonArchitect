@@ -31,6 +31,10 @@ public final class ChatPromptManager implements Listener {
         player.sendMessage(Component.text(message + " Type cancel to abort."));
     }
 
+    public void discard(UUID playerId) {
+        prompts.remove(playerId);
+    }
+
     @EventHandler
     public void onChat(AsyncPlayerChatEvent event) {
         Prompt prompt = prompts.remove(event.getPlayer().getUniqueId());

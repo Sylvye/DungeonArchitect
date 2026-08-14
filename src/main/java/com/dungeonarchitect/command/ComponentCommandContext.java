@@ -17,7 +17,8 @@ enum ComponentCommandContext {
         "feature", Set.of("select", "remove", "bounds", "rename", "rotate", "face")
     )),
     FEATURE(Map.of(
-        "marker", Set.of("select", "remove", "bounds", "rename")
+        "marker", Set.of("select", "remove", "bounds", "rename"),
+        "feature", Set.of("select", "remove", "bounds", "rename", "rotate", "face")
     ));
 
     private final Map<String, Set<String>> actionsByType;

@@ -6,6 +6,7 @@ import com.dungeonarchitect.domain.DoorSlotEntry;
 import com.dungeonarchitect.domain.DoorSocket;
 import com.dungeonarchitect.domain.DoorTemplate;
 import com.dungeonarchitect.domain.FeatureSlotEntry;
+import com.dungeonarchitect.domain.FeatureTemplate;
 import com.dungeonarchitect.domain.IntVector3;
 import com.dungeonarchitect.domain.RoomCategory;
 import com.dungeonarchitect.domain.RoomFeatureSlot;
@@ -51,7 +52,7 @@ final class TemplateDiagnosticsTest {
         assertEquals(3, result.warnings().size(), result.warnings().toString());
         assertTrue(result.warnings().stream().anyMatch(warning -> warning.contains("door slot empty_door has no door template assigned")));
         assertTrue(result.warnings().stream().anyMatch(warning -> warning.contains("door slot virtual_door has no door template assigned")));
-        assertTrue(result.warnings().stream().anyMatch(warning -> warning.contains("feature slot virtual_feature has no feature assigned")));
+        assertTrue(result.warnings().stream().anyMatch(warning -> warning.contains("feature slot virtual_feature only selects empty")));
     }
 
     @Test
@@ -75,6 +76,31 @@ final class TemplateDiagnosticsTest {
         TemplateValidationResult result = TemplateDiagnostics.analyzeDoor(door, null);
 
         assertEquals(1, result.warnings().size(), result.warnings().toString());
-        assertTrue(result.warnings().getFirst().contains("feature slot trim has no feature assigned"));
+        assertTrue(result.warnings().getFirst().contains("feature slot trim only selects empty"));
+    }
+
+    @Test
+    void warnsWhenANestedFeatureSlotOnlySelectsEmpty() {
+        FeatureTemplate feature = new FeatureTemplate(
+            "random_chest",
+            new IntVector3(1, 1, 1),
+            Set.of(),
+            List.of(),
+            List.of(new RoomFeatureSlot(
+                "chest",
+                IntVector3.ZERO,
+                new IntVector3(1, 1, 1),
+                Direction3.NORTH,
+                List.of(new FeatureSlotEntry(FeatureSlotEntry.EMPTY, 1))
+            )),
+            java.util.Map.of(),
+            Path.of("feature.nbt")
+        );
+
+        TemplateValidationResult result = TemplateDiagnostics.analyzeFeature(feature);
+
+        assertEquals(1, result.warnings().size());
+        assertTrue(result.warnings().getFirst().contains("random_chest: feature slot chest only selects empty"));
+        assertTrue(result.warnings().getFirst().contains("chest feature with a loot binding"));
     }
 }

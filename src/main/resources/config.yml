@@ -13,3 +13,7 @@ authoring:
   wand-material: "BLAZE_ROD"
   default-category: "GENERIC"
   default-weight: 10
+
+features:
+  max-nesting-depth: 4
+  max-expanded-placements: 256

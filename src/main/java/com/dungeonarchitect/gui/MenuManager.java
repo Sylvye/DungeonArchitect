@@ -42,9 +42,7 @@ import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.format.TextDecoration;
 import org.bukkit.Bukkit;
-import org.bukkit.GameMode;
 import org.bukkit.Material;
-import org.bukkit.NamespacedKey;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
@@ -57,10 +55,8 @@ import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.server.PluginDisableEvent;
 import org.bukkit.inventory.Inventory;
-import org.bukkit.inventory.InventoryView;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
-import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.Plugin;
 
 import java.io.File;
@@ -98,9 +94,8 @@ public final class MenuManager implements Listener {
     private final Map<UUID, TagSelection> tagSelections = new HashMap<>();
     private final Map<UUID, LootEditSession> lootEdits = new HashMap<>();
     private final Map<UUID, LootMultiEditSession> lootMultiEdits = new HashMap<>();
+    private final LootEditorLeaseRegistry lootLeases = new LootEditorLeaseRegistry();
     private final Set<UUID> suppressLootClose = new LinkedHashSet<>();
-    private final NamespacedKey lootEditorEntryKey;
-    private final NamespacedKey lootEditorSessionKey;
     private final RoomTemplateValidator validator = new RoomTemplateValidator();
 
     public MenuManager(Plugin plugin, AuthoringManager authoringManager, RoomTemplateRegistry templateRegistry, FeatureTemplateRegistry featureRegistry, DoorTemplateRegistry doorRegistry, DungeonManager dungeonManager, ChatPromptManager prompts, Runnable reloadAll) {
@@ -123,8 +118,6 @@ public final class MenuManager implements Listener {
         this.featureRegistry = featureRegistry;
         this.doorRegistry = doorRegistry;
         this.lootRegistry = lootRegistry;
-        this.lootEditorEntryKey = new NamespacedKey(plugin, "loot_editor_entry");
-        this.lootEditorSessionKey = new NamespacedKey(plugin, "loot_editor_session");
         this.dungeonManager = dungeonManager;
         this.prompts = prompts;
         this.assetRenameCoordinator = assetRenameCoordinator;
@@ -149,13 +142,17 @@ public final class MenuManager implements Listener {
         int slot = 0;
         for (LootTableStatus status : lootRegistry.statuses()) {
             LootTable table = status.table();
+            LootEditorLeaseRegistry.Lease lease = lootLeases.lease(status.id()).orElse(null);
             List<String> lore = new ArrayList<>();
             if (table != null) lore.addAll(List.of("Rolls: " + table.minimumRolls() + "-" + table.maximumRolls(), "Entries: " + table.entries().size()));
             lore.addAll(status.errors());
+            if (lease != null) lore.add("Currently edited by " + lease.ownerName() + ".");
             lore.add(status.valid() ? "Click to edit. Right click to delete." : "Invalid entry. Fix the listed errors, then reload.");
             button(menu, slot++, status.valid() ? Material.CHEST : Material.RED_CONCRETE, status.id(), lore, p -> {
                 if (table != null) openLootEditor(p, table); else p.sendMessage(Component.text("Loot table " + status.id() + " cannot be loaded: " + String.join("; ", status.errors())));
-            }, p -> openDeleteLootConfirm(p, status.id()));
+            }, p -> {
+                if (!denyLockedLootTable(p, status.id())) openDeleteLootConfirm(p, status.id());
+            });
             if (slot >= 45) break;
         }
         button(menu, 49, Material.LIME_CONCRETE, "Create Loot Table", List.of("Enter a new id in chat."), p -> prompts.prompt(p, "Loot table id", id -> {
@@ -167,19 +164,37 @@ public final class MenuManager implements Listener {
     }
 
     private void openLootEditor(Player player, LootTable table) {
-        LootEditSession session = new LootEditSession(table);
-        Bukkit.getScheduler().runTask(plugin, () -> openLootEditorNow(player, session));
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            LootTable current = lootRegistry.get(table.id()).orElse(null);
+            if (current == null) {
+                player.sendMessage(Component.text("Loot table " + table.id() + " no longer exists. Reopen the list to refresh it."));
+                openLootTables(player);
+                return;
+            }
+            LootEditorLeaseRegistry.Lease lease = lootLeases.lease(current.id()).orElse(null);
+            if (lease != null && !lease.ownerId().equals(player.getUniqueId())) {
+                player.sendMessage(Component.text(lease.ownerName() + " is editing loot table " + current.id() + ". Try again when they are done."));
+                return;
+            }
+            LootTable editorTable = current;
+            if (LootEditorTemplates.requiresNormalization(current)) {
+                editorTable = LootEditorTemplates.normalize(current);
+                if (!saveLootCandidate(player, editorTable)) return;
+            }
+            LootEditSession previous = lootEdits.get(player.getUniqueId());
+            if (previous != null && !previous.closed) closeLootEditorSession(player, previous);
+            lootLeases.acquire(current.id(), player.getUniqueId(), player.getName());
+            LootEditSession session = new LootEditSession(editorTable, player.getUniqueId(), player.getName());
+            openLootEditorNow(player, session);
+        });
     }
 
     private void openLootEditorNow(Player player, LootEditSession session) {
         if (!player.isOnline() || session.closed) return;
-        LootEditSession previous = lootEdits.get(player.getUniqueId());
-        if (previous != null && previous != session && !previous.closed) discardLootEditorSession(player, previous);
         if (session.inventory == null) {
             session.inventory = Bukkit.createInventory(new MenuHolder("da:loot:" + session.sessionId), 54, Component.text("Loot: " + session.id));
         }
         lootEdits.put(player.getUniqueId(), session);
-        validateLootEditorState(player, session);
         renderLootEditor(player, session);
         player.openInventory(session.inventory);
         player.updateInventory();
@@ -194,7 +209,9 @@ public final class MenuManager implements Listener {
         session.inventory.clear();
         Menu menu = new Menu(session.inventory, new HashMap<>(), new HashMap<>(), new HashMap<>(), new HashMap<>());
         renderLootPage(session.inventory, session);
-        button(menu, 45, Material.ARROW, "Back", List.of("Discard changes and return to Loot Tables."), p -> discardAndExitLootEditor(p, session));
+        button(menu, 45, Material.ARROW, "Previous Page", List.of("Show the previous page."), p -> {
+            queueLootTransaction(p, session, () -> session.page = Math.max(0, session.page - 1));
+        });
         button(menu, 46, Material.WRITABLE_BOOK, "Multi-edit", List.of("Select multiple entries to configure together."), p -> {
             queueLootTransaction(p, session, () -> {
                 suppressLootClose.add(p.getUniqueId());
@@ -202,16 +219,24 @@ public final class MenuManager implements Listener {
             });
         });
         menu.inventory.setItem(47, GuiItems.item(Material.PAPER, "Page " + (session.page + 1) + "/" + session.pageCount(), List.of("Entries are sorted by weight.")));
-        button(menu, 48, Material.ARROW, "Next Page", List.of("Go to a new or existing page."), p -> {
-            queueLootTransaction(p, session, () -> session.page = (session.page + 1) % session.pageCount());
+        button(menu, 48, Material.ARROW, "Next Page", List.of("Show the next page."), p -> {
+            queueLootTransaction(p, session, () -> session.page = Math.min(session.pageCount() - 1, session.page + 1));
         });
-        menu.inventory.setItem(49, GuiItems.item(Material.GRAY_STAINED_GLASS_PANE, "", List.of()));
+        menu.inventory.setItem(49, GuiItems.item(Material.KNOWLEDGE_BOOK, "Editor Help", List.of(
+            "Left-click an inventory item to add its template.",
+            "Your inventory is never changed.",
+            "Stored template amount is always one.",
+            "Configure min/max for generated stack sizes.",
+            "Left-click an entry to remove it.",
+            "Right-click an entry to configure it.",
+            "Every completed change saves immediately."
+        )));
         button(menu, 50, session.showWeights ? Material.GLOWSTONE_DUST : Material.GUNPOWDER, "Show Weights: " + (session.showWeights ? "On" : "Off"), List.of("Show weight and roll chance on entries."), p -> {
             queueLootTransaction(p, session, () -> session.showWeights = !session.showWeights);
         });
         button(menu, 51, Material.HOPPER, "Min Rolls: " + session.minimumRolls, List.of("Click to set the minimum number of rolls."), p -> promptLootRollBound(p, session, true));
         button(menu, 52, Material.HOPPER, "Max Rolls: " + session.maximumRolls, List.of("Click to set the maximum number of rolls."), p -> promptLootRollBound(p, session, false));
-        button(menu, 53, Material.EMERALD_BLOCK, "Save", List.of("Save this loot table and return to the list."), p -> saveAndExitLootEditor(p, session));
+        button(menu, 53, Material.EMERALD_BLOCK, "Done", List.of("All completed changes are already saved."), p -> finishLootEditor(p, session));
         actions.put(player.getUniqueId(), new PlayerMenuActions(menu.actions, menu.rightClickActions, menu.shiftLeftActions, menu.shiftRightActions));
     }
 
@@ -224,7 +249,13 @@ public final class MenuManager implements Listener {
                     if (rolls < 0 || (minimum && rolls > session.maximumRolls) || (!minimum && rolls < session.minimumRolls)) {
                         throw new IllegalArgumentException("Roll bounds must satisfy 0 <= min <= max");
                     }
-                    if (minimum) session.minimumRolls = rolls; else session.maximumRolls = rolls;
+                    int candidateMinimum = minimum ? rolls : session.minimumRolls;
+                    int candidateMaximum = minimum ? session.maximumRolls : rolls;
+                    LootTable candidate = new LootTable(session.id, candidateMinimum, candidateMaximum, session.values());
+                    if (saveLootCandidate(player, candidate)) {
+                        session.minimumRolls = candidateMinimum;
+                        session.maximumRolls = candidateMaximum;
+                    }
                 } catch (RuntimeException ex) {
                     player.sendMessage(Component.text("Edit failed: " + ex.getMessage()));
                 }
@@ -253,8 +284,11 @@ public final class MenuManager implements Listener {
                 DraftLootEntry draft = session.entry(draftId);
                 if (draft == null) { openLootEditorNow(player, session); return; }
                 LootEntry updated = updateLootEntry(draft.value(), field, Integer.parseInt(value.trim()));
-                session.replace(draftId, updated);
-                session.sort();
+                LootTable candidate = session.tableReplacing(draftId, updated);
+                if (saveLootCandidate(player, candidate)) {
+                    session.replace(draftId, updated);
+                    session.sort();
+                }
             } catch (RuntimeException ex) {
                 player.sendMessage(Component.text("Edit failed: " + ex.getMessage()));
             }
@@ -355,12 +389,17 @@ public final class MenuManager implements Listener {
     }
 
     private void applyLootMultiEdit(Player player, LootMultiEditSession multi) {
+        Map<String, LootEntry> replacements = new LinkedHashMap<>();
         for (String id : multi.selectedIds) {
             DraftLootEntry draft = multi.editor.entry(id);
-            if (draft == null) continue;
-            LootEntry entry = draft.value();
-            multi.editor.replace(id, new LootEntry(entry.item(), multi.weight, multi.minimumAmount, multi.maximumAmount, multi.maximumPerContainer));
+            if (draft != null) replacements.put(id, new LootEntry(draft.value().item(), multi.weight, multi.minimumAmount, multi.maximumAmount, multi.maximumPerContainer));
         }
+        LootTable candidate = multi.editor.tableReplacing(replacements);
+        if (!saveLootCandidate(player, candidate)) {
+            openLootMultiConfigNow(player, multi);
+            return;
+        }
+        replacements.forEach(multi.editor::replace);
         multi.editor.sort();
         lootMultiEdits.remove(player.getUniqueId());
         returnToLootEditor(player, multi.editor);
@@ -371,27 +410,33 @@ public final class MenuManager implements Listener {
         returnToLootEditor(player, multi.editor);
     }
 
-    private void saveAndExitLootEditor(Player player, LootEditSession session) {
+    private void finishLootEditor(Player player, LootEditSession session) {
         queueLootTransaction(player, session, () -> {
-            try {
-                lootRegistry.save(new LootTable(session.id, session.minimumRolls, session.maximumRolls, session.values()));
-                session.closed = true;
-                lootEdits.remove(player.getUniqueId(), session);
-                suppressLootClose.add(player.getUniqueId());
-                player.sendMessage(Component.text("Loot table saved."));
-                openLootTables(player);
-            } catch (Exception ex) { player.sendMessage(Component.text("Save failed: " + ex.getMessage())); }
+            closeLootEditorSession(player, session);
+            suppressLootClose.add(player.getUniqueId());
+            openLootTables(player);
         });
     }
 
+    private boolean saveLootCandidate(Player player, LootTable candidate) {
+        try {
+            lootRegistry.save(candidate);
+            return true;
+        } catch (Exception ex) {
+            player.sendMessage(Component.text("Loot table change was not saved: " + ex.getMessage() + ". Your previous settings are unchanged."));
+            return false;
+        }
+    }
+
     private void openDeleteLootConfirm(Player player, String tableId) {
+        if (denyLockedLootTable(player, tableId)) return;
         Menu menu = menu("da:delete-loot:" + tableId, 27, "Delete Loot Table?");
         button(menu, 11, Material.RED_CONCRETE, "Confirm Delete", List.of("Delete " + tableId + " and clear its bindings."), p -> {
+            if (denyLockedLootTable(p, tableId)) { openLootTables(p); return; }
             try {
                 lootRegistry.delete(tableId);
                 clearLootBindings(tableId);
-                reloadAll.run();
-                lootEdits.remove(p.getUniqueId());
+                reloadContent();
                 p.sendMessage(Component.text("Deleted loot table and cleared its bindings."));
                 openLootTables(p);
             } catch (Exception ex) { p.sendMessage(Component.text("Delete failed: " + ex.getMessage())); openLootTables(p); }
@@ -400,22 +445,22 @@ public final class MenuManager implements Listener {
         open(player, menu);
     }
 
-    private void discardAndExitLootEditor(Player player, LootEditSession session) {
-        queueLootTransaction(player, session, () -> {
-            discardLootEditorSession(player, session);
-            suppressLootClose.add(player.getUniqueId());
-            openLootTables(player);
-        });
-    }
-
-    private void discardLootEditorSession(Player player, LootEditSession session) {
+    private void closeLootEditorSession(Player player, LootEditSession session) {
         if (session.closed) return;
-        validateLootEditorState(player, session);
         session.closed = true;
         session.drafts.clear();
         session.transactions.clear();
         lootEdits.remove(player.getUniqueId(), session);
         lootMultiEdits.remove(player.getUniqueId());
+        lootLeases.release(session.id, session.ownerId);
+        prompts.discard(player.getUniqueId());
+    }
+
+    private boolean denyLockedLootTable(Player player, String tableId) {
+        LootEditorLeaseRegistry.Lease lease = lootLeases.lease(tableId).orElse(null);
+        if (lease == null || lease.ownerId().equals(player.getUniqueId())) return false;
+        player.sendMessage(Component.text(lease.ownerName() + " is editing loot table " + tableId + ". Try again when they are done."));
+        return true;
     }
 
     private void renderLootPage(Inventory inventory, LootEditSession session) {
@@ -423,14 +468,14 @@ public final class MenuManager implements Listener {
         int totalWeight = session.values().stream().mapToInt(LootEntry::weight).sum();
         for (int slot = 0; slot < 45 && slot < pageEntries.size(); slot++) {
             DraftLootEntry entry = pageEntries.get(slot);
-            ItemStack item = taggedLootEditorItem(session, entry, totalWeight);
+            ItemStack item = lootEditorItem(session, entry, totalWeight);
             inventory.setItem(slot, item);
         }
     }
 
-    private ItemStack taggedLootEditorItem(LootEditSession session, DraftLootEntry draft, int totalWeight) {
+    private ItemStack lootEditorItem(LootEditSession session, DraftLootEntry draft, int totalWeight) {
         LootEntry entry = draft.value();
-        ItemStack item = cleanLootEditorItem(entry.item());
+        ItemStack item = entry.item();
         if (session.showWeights) {
             int visualWeight = Math.max(1, Math.min(entry.weight(), 99));
             item.setData(DataComponentTypes.MAX_STACK_SIZE, visualWeight);
@@ -446,29 +491,17 @@ public final class MenuManager implements Listener {
             item.setItemMeta(meta);
         }
         ItemMeta meta = item.getItemMeta();
-        meta.getPersistentDataContainer().set(lootEditorSessionKey, PersistentDataType.STRING, session.sessionId);
-        meta.getPersistentDataContainer().set(lootEditorEntryKey, PersistentDataType.STRING, draft.id());
+        List<Component> lore = new ArrayList<>();
+        if (meta.lore() != null) lore.addAll(meta.lore());
+        lore.add(Component.text("Left-click: remove", NamedTextColor.GRAY).decoration(TextDecoration.ITALIC, false));
+        lore.add(Component.text("Right-click: configure", NamedTextColor.GRAY).decoration(TextDecoration.ITALIC, false));
+        meta.lore(lore);
         item.setItemMeta(meta);
         return item;
     }
 
     private ItemStack cleanLootEditorItem(ItemStack item) {
-        ItemStack clean = item.clone();
-        boolean proxy = lootEditorId(clean) != null || lootEditorSessionId(clean) != null;
-        if (proxy) clean.unsetData(DataComponentTypes.MAX_STACK_SIZE);
-        ItemMeta meta = clean.getItemMeta();
-        meta.getPersistentDataContainer().remove(lootEditorEntryKey);
-        meta.getPersistentDataContainer().remove(lootEditorSessionKey);
-        clean.setItemMeta(meta);
-        return clean;
-    }
-
-    private String lootEditorId(ItemStack item) {
-        return item.hasItemMeta() ? item.getItemMeta().getPersistentDataContainer().get(lootEditorEntryKey, PersistentDataType.STRING) : null;
-    }
-
-    private String lootEditorSessionId(ItemStack item) {
-        return item.hasItemMeta() ? item.getItemMeta().getPersistentDataContainer().get(lootEditorSessionKey, PersistentDataType.STRING) : null;
+        return item.clone();
     }
 
     private void clearLootBindings(String tableId) {
@@ -482,7 +515,7 @@ public final class MenuManager implements Listener {
         }
         for (FeatureTemplate feature : featureRegistry.visible()) {
             Map<String, String> bindings = new LinkedHashMap<>(feature.lootBindings());
-            if (bindings.values().removeIf(value -> value.equalsIgnoreCase(tableId))) saveFeatureTemplate(new FeatureTemplate(feature.id(), feature.size(), feature.tags(), feature.markers(), bindings, feature.structureFile()));
+            if (bindings.values().removeIf(value -> value.equalsIgnoreCase(tableId))) saveFeatureTemplate(new FeatureTemplate(feature.id(), feature.size(), feature.tags(), feature.markers(), feature.featureSlots(), bindings, feature.structureFile()));
         }
     }
 
@@ -984,7 +1017,7 @@ public final class MenuManager implements Listener {
             }
             tagCatalog.remove(selection.domain, tag);
             authoringManager.removeTag(selection.domain, tag);
-            reloadAll.run();
+            reloadContent();
             player.sendMessage(Component.text("Deleted " + tag + " from " + result.affectedFields() + " tag field(s)."));
             cancelTagSelection(player);
         } catch (IOException ex) {
@@ -1578,7 +1611,18 @@ public final class MenuManager implements Listener {
         List<UnavailableCandidate> unavailable = new ArrayList<>();
         for (FeatureTemplate feature : featureRegistry.visible()) {
             TemplateLoadStatus<FeatureTemplate> status = featureRegistry.status(feature.id()).orElse(null);
-            List<String> conflicts = SlotMultiEditMatcher.featureConflicts(selectedSlots, feature, status);
+            List<String> conflicts = new ArrayList<>(SlotMultiEditMatcher.featureConflicts(selectedSlots, feature, status));
+            if (conflicts.isEmpty() && session.owner == MultiEditOwner.FEATURE_TEMPLATE
+                && session.featureDraft.stream().noneMatch(entry -> entry.featureId().equalsIgnoreCase(feature.id()))) {
+                FeatureTemplate owner = featureRegistry.getVisible(session.ownerId).orElseThrow();
+                List<FeatureSlotEntry> draft = new ArrayList<>(session.featureDraft);
+                draft.add(new FeatureSlotEntry(feature.id(), 1));
+                List<RoomFeatureSlot> prospectiveSlots = currentFeatureSlots(player, session).stream()
+                    .map(candidateSlot -> selected(session, candidateSlot.id()) ? candidateSlot.withEntries(draft) : candidateSlot)
+                    .toList();
+                FeatureTemplate prospective = new FeatureTemplate(owner.id(), owner.size(), owner.tags(), owner.markers(), prospectiveSlots, owner.lootBindings(), owner.structureFile());
+                conflicts.addAll(featureRegistry.validateProspective(prospective).errors());
+            }
             if (!conflicts.isEmpty()) {
                 unavailable.add(new UnavailableCandidate(feature.id(), conflicts, "Size: " + DiagnosticText.size(feature.size())));
                 continue;
@@ -1636,6 +1680,8 @@ public final class MenuManager implements Listener {
             applyMultiDoorEdit(player, session);
         } else if (session.slotType == MultiEditSlotType.FEATURE && session.owner == MultiEditOwner.ROOM) {
             applyMultiRoomFeatureEdit(player, session);
+        } else if (session.slotType == MultiEditSlotType.FEATURE && session.owner == MultiEditOwner.FEATURE_TEMPLATE) {
+            applyMultiNestedFeatureEdit(player, session);
         } else if (session.slotType == MultiEditSlotType.FEATURE) {
             applyMultiDoorFeatureEdit(player, session);
         } else {
@@ -1721,6 +1767,26 @@ public final class MenuManager implements Listener {
         openDoorComponents(player, template.id(), "feature");
     }
 
+    private void applyMultiNestedFeatureEdit(Player player, MultiEditSession session) {
+        FeatureTemplate template = featureRegistry.getVisible(session.ownerId).orElseThrow();
+        AuthoringSession activeEdit = authoringManager.editingFeatureSessionInWorkspace(player, template.id()).orElse(null);
+        List<RoomFeatureSlot> source = activeEdit == null ? template.featureSlots() : activeEdit.featureSlots();
+        List<RoomFeatureSlot> slots = source.stream()
+            .map(slot -> selected(session, slot.id()) ? slot.withEntries(List.copyOf(session.featureDraft)) : slot)
+            .toList();
+        FeatureTemplate prospective = new FeatureTemplate(template.id(), template.size(), template.tags(), template.markers(), slots, template.lootBindings(), template.structureFile());
+        TemplateValidationResult safety = featureRegistry.validateProspective(prospective);
+        if (!safety.valid()) throw new IllegalArgumentException(safety.errors().getFirst());
+        if (activeEdit != null) {
+            slots.stream().filter(slot -> selected(session, slot.id())).forEach(slot -> replaceFeatureSlot(activeEdit, slot));
+            player.sendMessage(Component.text("Updated " + session.selectedSlotIds.size() + " nested feature slots in the edit workspace. Use Save Edit to persist them."));
+        } else {
+            saveFeatureTemplate(prospective);
+            player.sendMessage(Component.text("Updated " + session.selectedSlotIds.size() + " nested feature slots."));
+        }
+        openNestedFeatureSlots(player, template.id());
+    }
+
     private void applyMultiMarkerEdit(Player player, MultiEditSession session) {
         if (!session.markerLootBindingConfigured) {
             openMultiEditMarkerConfig(player, session);
@@ -1742,7 +1808,7 @@ public final class MenuManager implements Listener {
             case FEATURE_TEMPLATE -> {
                 FeatureTemplate template = featureRegistry.getVisible(session.ownerId).orElseThrow(() -> new IllegalArgumentException("Unknown feature " + session.ownerId));
                 Map<String, String> bindings = updatedMarkerBindings(template.lootBindings(), session);
-                saveFeatureTemplate(new FeatureTemplate(template.id(), template.size(), template.tags(), template.markers(), bindings, template.structureFile()));
+                saveFeatureTemplate(new FeatureTemplate(template.id(), template.size(), template.tags(), template.markers(), template.featureSlots(), bindings, template.structureFile()));
                 openFeatureMarkers(player, template.id());
             }
         }
@@ -1778,8 +1844,10 @@ public final class MenuManager implements Listener {
             }
         } else if (session.owner == MultiEditOwner.ROOM) {
             openComponents(player, session.ownerId, session.slotType == MultiEditSlotType.DOOR ? "door" : "feature");
-        } else {
+        } else if (session.owner == MultiEditOwner.DOOR_TEMPLATE) {
             openDoorComponents(player, session.ownerId, "feature");
+        } else {
+            openNestedFeatureSlots(player, session.ownerId);
         }
     }
 
@@ -2018,6 +2086,13 @@ public final class MenuManager implements Listener {
                 }
             }
             return templateRegistry.getVisible(session.ownerId).map(RoomTemplate::featureSlots).orElse(List.of());
+        }
+        if (session.owner == MultiEditOwner.FEATURE_TEMPLATE) {
+            if (player != null && authoringManager.isInEditWorld(player)) {
+                AuthoringSession activeEdit = authoringManager.editingFeatureSession(player, session.ownerId).orElse(null);
+                if (activeEdit != null) return activeEdit.featureSlots();
+            }
+            return featureRegistry.getVisible(session.ownerId).map(FeatureTemplate::featureSlots).orElse(List.of());
         }
         if (player != null && authoringManager.isInEditWorld(player)) {
             AuthoringSession activeEdit = retainedDoorEdit(player, session.ownerId);
@@ -2309,7 +2384,7 @@ public final class MenuManager implements Listener {
                     tags.add(tag.trim());
                 }
             }
-            saveFeatureTemplate(new FeatureTemplate(template.id(), template.size(), tags, template.markers(), template.lootBindings(), template.structureFile()));
+            saveFeatureTemplate(new FeatureTemplate(template.id(), template.size(), tags, template.markers(), template.featureSlots(), template.lootBindings(), template.structureFile()));
             p.sendMessage(Component.text("Feature tags updated."));
             openFeature(p, featureId);
         }));
@@ -2342,11 +2417,105 @@ public final class MenuManager implements Listener {
             openFeature(p, featureId);
         });
         button(menu, 28, Material.REDSTONE_TORCH, "Markers: " + template.markers().size(), template.markers().stream().map(RoomMarker::name).toList(), p -> openFeatureMarkers(p, featureId));
+        button(menu, 30, Material.CHEST, "Feature Slots: " + template.featureSlots().size(), template.featureSlots().stream().map(RoomFeatureSlot::id).toList(), p -> openNestedFeatureSlots(p, featureId));
         button(menu, 36, Material.NAME_TAG, "Rename Feature", List.of("Move this feature template to a new id."), p -> promptRenameFeature(p, template.id()));
         button(menu, 38, Material.MAP, "Duplicate Feature", List.of("Copy this feature template to a new id."), p -> promptDuplicateFeature(p, template.id()));
         button(menu, 40, Material.RED_CONCRETE, "Delete Feature", List.of("Permanently delete this feature template."), p -> openDeleteFeatureConfirm(p, template.id()));
         button(menu, 49, Material.ARROW, "Back", List.of(), this::openFeatures);
         open(player, menu);
+    }
+
+    private void openNestedFeatureSlots(Player player, String featureId) {
+        FeatureTemplate template = featureRegistry.getVisible(featureId).orElseThrow();
+        AuthoringSession activeEdit = authoringManager.editingFeatureSessionInWorkspace(player, featureId).orElse(null);
+        List<RoomFeatureSlot> slots = activeEdit == null ? template.featureSlots() : activeEdit.featureSlots();
+        Menu menu = menu("da:nested-feature-slots:" + featureId, 54, "Feature Slots: " + featureId);
+        int index = 0;
+        for (RoomFeatureSlot slot : slots) {
+            button(menu, index++, Material.CHEST, slot.id(), List.of("Position: " + slot.position(), "Size: " + slot.size(), "Entries: " + slot.entries().size(), "Click to configure.", "Right click to select in edit world."), p -> openNestedFeatureSlot(p, featureId, slot.id()), p -> {
+                try { authoringManager.highlightComponent(p, "feature", slot.id()); }
+                catch (RuntimeException ex) { p.sendMessage(Component.text(ex.getMessage())); }
+                openNestedFeatureSlots(p, featureId);
+            });
+            if (index >= 45) break;
+        }
+        button(menu, 45, Material.HOPPER, "Multi-edit", List.of("Configure multiple nested feature slots."), p -> beginMultiEdit(p, MultiEditOwner.FEATURE_TEMPLATE, featureId, MultiEditSlotType.FEATURE));
+        button(menu, 49, Material.ARROW, "Back", List.of(), p -> openFeature(p, featureId));
+        open(player, menu);
+    }
+
+    private void openNestedFeatureSlot(Player player, String ownerId, String slotId) {
+        FeatureTemplate owner = featureRegistry.getVisible(ownerId).orElseThrow();
+        AuthoringSession activeEdit = authoringManager.editingFeatureSessionInWorkspace(player, ownerId).orElse(null);
+        List<RoomFeatureSlot> slots = activeEdit == null ? owner.featureSlots() : activeEdit.featureSlots();
+        RoomFeatureSlot featureSlot = slots.stream().filter(slot -> slot.id().equalsIgnoreCase(slotId)).findFirst().orElseThrow();
+        Menu menu = menu("da:nested-feature-slot:" + ownerId + ":" + slotId, 54, "Nested Feature: " + slotId);
+        button(menu, 4, Material.HOPPER, "Slot " + slotId, List.of("Size: " + featureSlot.size(), "Position: " + featureSlot.position()), p -> openNestedFeatureSlot(p, ownerId, slotId));
+        int index = 9;
+        button(menu, index++, Material.BARRIER, "empty", entryLore(featureSlot, FeatureSlotEntry.EMPTY, "Virtual feature; pastes nothing."), p -> toggleNestedFeatureEntry(p, owner, featureSlot, FeatureSlotEntry.EMPTY, 1), null, p -> promptNestedFeatureWeight(p, owner, featureSlot, FeatureSlotEntry.EMPTY));
+        for (FeatureTemplate candidate : featureRegistry.visible()) {
+            FeatureMatcher.FeatureMatchResult match = FeatureMatcher.match(featureSlot, candidate);
+            if (!match.matched()) {
+                button(menu, index++, Material.GRAY_CONCRETE, candidate.id(), List.of("Unavailable: " + match.reason()), p -> p.sendMessage(Component.text(match.reason())));
+            } else {
+                RoomFeatureSlot toggled = toggled(featureSlot, candidate.id(), 1);
+                List<String> safety = prospectiveFeature(owner, slots, toggled).errors();
+                boolean removal = featureSlot.entries().stream().anyMatch(entry -> entry.featureId().equalsIgnoreCase(candidate.id()));
+                if (!removal && !safety.isEmpty()) {
+                    button(menu, index++, Material.GRAY_CONCRETE, candidate.id(), List.of("Unsafe nesting:", safety.getFirst()), p -> p.sendMessage(Component.text(safety.getFirst())));
+                } else {
+                    Rotation rotation = match.rotation();
+                    button(menu, index++, Material.STRUCTURE_BLOCK, candidate.id(), entryLore(featureSlot, candidate.id(), "Size: " + candidate.size(), "Rotation: " + rotation), p -> toggleNestedFeatureEntry(p, owner, featureSlot, candidate.id(), 1), null, p -> promptNestedFeatureWeight(p, owner, featureSlot, candidate.id()));
+                }
+            }
+            if (index >= 45) break;
+        }
+        button(menu, 49, Material.ARROW, "Back", List.of(), p -> openNestedFeatureSlots(p, ownerId));
+        open(player, menu);
+    }
+
+    private RoomFeatureSlot toggled(RoomFeatureSlot slot, String featureId, int defaultWeight) {
+        List<FeatureSlotEntry> entries = new ArrayList<>(slot.entries());
+        boolean removed = entries.removeIf(entry -> entry.featureId().equalsIgnoreCase(featureId));
+        if (!removed) entries.add(new FeatureSlotEntry(featureId, defaultWeight));
+        return slot.withEntries(entries);
+    }
+
+    private TemplateValidationResult prospectiveFeature(FeatureTemplate owner, List<RoomFeatureSlot> sourceSlots, RoomFeatureSlot updatedSlot) {
+        List<RoomFeatureSlot> slots = new ArrayList<>(sourceSlots);
+        slots.replaceAll(slot -> slot.id().equalsIgnoreCase(updatedSlot.id()) ? updatedSlot : slot);
+        return featureRegistry.validateProspective(new FeatureTemplate(owner.id(), owner.size(), owner.tags(), owner.markers(), slots, owner.lootBindings(), owner.structureFile()));
+    }
+
+    private void toggleNestedFeatureEntry(Player player, FeatureTemplate owner, RoomFeatureSlot slot, String featureId, int defaultWeight) {
+        saveNestedFeatureSlot(player, owner, toggled(slot, featureId, defaultWeight));
+    }
+
+    private void promptNestedFeatureWeight(Player player, FeatureTemplate owner, RoomFeatureSlot slot, String featureId) {
+        prompts.prompt(player, "Enter weight for " + featureId, value -> {
+            int weight = Integer.parseInt(value);
+            List<FeatureSlotEntry> entries = new ArrayList<>(slot.entries());
+            entries.removeIf(entry -> entry.featureId().equalsIgnoreCase(featureId));
+            entries.add(new FeatureSlotEntry(featureId, weight));
+            saveNestedFeatureSlot(player, owner, slot.withEntries(entries));
+        });
+    }
+
+    private void saveNestedFeatureSlot(Player player, FeatureTemplate owner, RoomFeatureSlot updatedSlot) {
+        AuthoringSession activeEdit = authoringManager.editingFeatureSessionInWorkspace(player, owner.id()).orElse(null);
+        List<RoomFeatureSlot> source = activeEdit == null ? owner.featureSlots() : activeEdit.featureSlots();
+        TemplateValidationResult safety = prospectiveFeature(owner, source, updatedSlot);
+        if (!safety.valid()) throw new IllegalArgumentException(safety.errors().getFirst());
+        if (activeEdit != null) {
+            replaceFeatureSlot(activeEdit, updatedSlot);
+            player.sendMessage(Component.text("Nested feature slot updated in the edit workspace. Use Save Edit to persist it."));
+        } else {
+            List<RoomFeatureSlot> slots = new ArrayList<>(source);
+            slots.replaceAll(slot -> slot.id().equalsIgnoreCase(updatedSlot.id()) ? updatedSlot : slot);
+            saveFeatureTemplate(new FeatureTemplate(owner.id(), owner.size(), owner.tags(), owner.markers(), slots, owner.lootBindings(), owner.structureFile()));
+            authoringManager.editingFeatureSession(player, owner.id()).ifPresent(session -> replaceFeatureSlot(session, updatedSlot));
+        }
+        openNestedFeatureSlot(player, owner.id(), updatedSlot.id());
     }
 
     private void openDoorMarkerLoot(Player player, String doorId, String marker) {
@@ -2382,7 +2551,7 @@ public final class MenuManager implements Listener {
                 if (removed) {
                     Map<String, String> bindings = new LinkedHashMap<>(template.lootBindings());
                     bindings.keySet().removeIf(name -> name.equalsIgnoreCase(markerId));
-                    saveFeatureTemplate(new FeatureTemplate(template.id(), template.size(), template.tags(), markers, bindings, template.structureFile()));
+                    saveFeatureTemplate(new FeatureTemplate(template.id(), template.size(), template.tags(), markers, template.featureSlots(), bindings, template.structureFile()));
                 }
             }
             p.sendMessage(Component.text(removed ? "Deleted marker " + markerId + "." : "No matching marker named " + markerId + "."));
@@ -2395,7 +2564,7 @@ public final class MenuManager implements Listener {
     private void openFeatureMarkerLoot(Player player, String featureId, String marker) {
         FeatureTemplate feature = featureRegistry.getVisible(featureId).orElseThrow();
         openLootBindingPicker(player, "da:feature-loot:" + featureId + ":" + marker, marker, feature.lootBindings(), bindings -> {
-            saveFeatureTemplate(new FeatureTemplate(feature.id(), feature.size(), feature.tags(), feature.markers(), bindings, feature.structureFile()));
+            saveFeatureTemplate(new FeatureTemplate(feature.id(), feature.size(), feature.tags(), feature.markers(), feature.featureSlots(), bindings, feature.structureFile()));
             openFeatureMarkers(player, featureId);
         }, () -> openFeatureMarkers(player, featureId));
     }
@@ -2414,8 +2583,7 @@ public final class MenuManager implements Listener {
         Menu menu = menu("da:delete-feature:" + featureId, 27, "Delete Feature?");
         button(menu, 11, Material.RED_CONCRETE, "Confirm Delete", List.of("Permanently deletes " + featureId), p -> {
             try {
-                featureRegistry.deleteFeature(featureId);
-                assetRenameCoordinator.reloadAll();
+                assetRenameCoordinator.deleteFeature(featureId);
                 p.sendMessage(Component.text("Deleted feature " + featureId));
                 openFeatures(p);
             } catch (IOException ex) {
@@ -2450,7 +2618,7 @@ public final class MenuManager implements Listener {
         int slot = fillConfig(menu, config, new File(plugin.getDataFolder(), "config.yml"), "", 0);
         button(menu, Math.min(slot, 45), Material.CHEST, "Features", List.of("Open captured feature templates."), this::openFeatures);
         button(menu, 49, Material.EMERALD, "Reload", List.of("Reload config, rooms, and features."), p -> {
-            reloadAll.run();
+            reloadContent();
             p.sendMessage(Component.text("DungeonArchitect reloaded."));
             openConfig(p);
         });
@@ -2527,7 +2695,7 @@ public final class MenuManager implements Listener {
             button(menu, target, Material.COMPARATOR, fullPath + ": " + value, List.of("Click to edit."), p -> prompts.prompt(p, "Enter value for " + fullPath, input -> {
                 yaml.set(fullPath, parseScalar(input));
                 saveYaml(yaml, file);
-                reloadAll.run();
+                reloadContent();
                 p.sendMessage(Component.text(fullPath + " updated."));
                 openConfig(p);
             }));
@@ -2564,6 +2732,8 @@ public final class MenuManager implements Listener {
     private void saveFeatureTemplate(FeatureTemplate template) {
         Path featureDir = template.structureFile().getParent();
         try {
+            TemplateValidationResult prospective = featureRegistry.validateProspective(template);
+            if (!prospective.valid()) throw new IllegalArgumentException(prospective.errors().getFirst());
             FeatureTemplateIO.save(template, featureDir);
             featureRegistry.reload();
             templateRegistry.reload();
@@ -2799,39 +2969,29 @@ public final class MenuManager implements Listener {
         }
         if (raw >= top.getSize()) {
             LootEditorInteractionRules.Intent intent = LootEditorInteractionRules.classify(
-                LootEditorInteractionRules.Region.PLAYER, event.getAction(), event.getClick(), !isAir(event.getCurrentItem()));
-            if (intent == LootEditorInteractionRules.Intent.INSERT_PLAYER && !isAir(event.getCurrentItem())) {
-                event.setCancelled(true); queuePlayerInventoryInsertion(player, session, event);
-            } else if (intent == LootEditorInteractionRules.Intent.COLLECT) {
-                event.setCancelled(true); queueCollectToCursor(player, session, event.getCursor());
+                LootEditorInteractionRules.Region.PLAYER, event.getClick(), !isAir(event.getCurrentItem()));
+            if (intent == LootEditorInteractionRules.Intent.ADD_TEMPLATE) {
+                event.setCancelled(true);
+                queueLootTemplateAdd(player, session, event.getCurrentItem());
+            } else if (intent == LootEditorInteractionRules.Intent.RESYNC) {
+                event.setCancelled(true);
+                player.updateInventory();
             }
             return;
         }
         if (raw < 0 || raw >= 45) return;
 
         event.setCancelled(true);
-        DraftLootEntry draft = draftFromProxy(session, event.getCurrentItem());
-        ItemStack cursor = cloneOrNull(event.getCursor());
+        DraftLootEntry draft = session.pageEntry(raw);
         LootEditorInteractionRules.Intent intent = LootEditorInteractionRules.classify(
-            LootEditorInteractionRules.Region.EDITOR, event.getAction(), event.getClick(), draft != null);
+            LootEditorInteractionRules.Region.EDITOR, event.getClick(), draft != null);
         switch (intent) {
             case CONFIGURE -> queueLootTransaction(player, session, () -> {
                 suppressLootClose.add(player.getUniqueId());
                 openLootEntryConfigNow(player, session, draft.id());
             });
-            case COLLECT -> queueCollectToCursor(player, session, cursor);
-            case CLONE -> queueCreativeClone(player, session, draft);
-            case EXTRACT_CURSOR -> queueExtractToCursor(player, session, draft, cursor);
-            case EXTRACT_INVENTORY -> queueExtractToInventory(player, session, draft);
-            case DROP_ENTRY -> queueDropEntry(player, session, draft);
-            case INSERT_CURSOR -> queueInsertFromCursor(player, session, cursor, raw);
-            case REPLACE_CURSOR -> queueReplaceFromCursor(player, session, draft, cursor);
-            case HOTBAR_SWAP -> queueHotbarSwap(player, session, draft, event.getClick(), event.getHotbarButton());
-            case UNKNOWN -> {
-                plugin.getLogger().warning("Ignored unknown loot-editor inventory action from " + player.getName());
-                queueLootTransaction(player, session, () -> { });
-            }
-            default -> queueLootTransaction(player, session, () -> { });
+            case REMOVE_ENTRY -> queueRemoveLootEntry(player, session, draft);
+            default -> player.updateInventory();
         }
     }
 
@@ -2847,19 +3007,15 @@ public final class MenuManager implements Listener {
         try {
             while (!session.transactions.isEmpty()) {
                 if (!player.isOnline() || session.closed || lootEdits.get(player.getUniqueId()) != session) break;
-                if (player.getOpenInventory().getTopInventory() != session.inventory) break;
                 Runnable transaction = session.transactions.removeFirst();
-                LootTransactionSnapshot snapshot = new LootTransactionSnapshot(session.snapshot(), session.page, session.nextDraftId, cloneContents(player.getInventory().getContents()), cloneOrNull(player.getItemOnCursor()));
+                LootTransactionSnapshot snapshot = new LootTransactionSnapshot(session.snapshot(), session.page, session.nextDraftId);
                 try {
                     transaction.run();
-                    session.revision++;
                 } catch (RuntimeException ex) {
                     session.restore(snapshot.drafts(), snapshot.page(), snapshot.nextDraftId());
-                    player.getInventory().setContents(cloneContents(snapshot.playerContents()));
-                    player.setItemOnCursor(cloneOrNull(snapshot.cursor()));
                     session.transactions.clear();
                     plugin.getLogger().warning("Loot editor transaction failed for " + player.getName() + ": " + ex.getMessage());
-                    player.sendMessage(Component.text("Loot edit failed safely; no items were moved."));
+                    player.sendMessage(Component.text("Loot edit failed safely; the previous table settings are unchanged."));
                     break;
                 }
             }
@@ -2867,218 +3023,43 @@ public final class MenuManager implements Listener {
             session.transactions.clear();
             session.transactionPending = false;
             if (!session.closed && lootEdits.get(player.getUniqueId()) == session && player.getOpenInventory().getTopInventory() == session.inventory) {
-                validateLootEditorState(player, session);
                 renderLootEditor(player, session);
             }
             if (player.isOnline()) player.updateInventory();
         }
     }
 
-    private void queueInsertFromCursor(Player player, LootEditSession session, ItemStack expectedCursor, int rawSlot) {
-        if (isAir(expectedCursor)) { player.updateInventory(); return; }
-        ItemStack template = cleanLootTemplate(expectedCursor, session);
+    private void queueLootTemplateAdd(Player player, LootEditSession session, ItemStack source) {
+        if (isAir(source)) return;
+        ItemStack template = LootEditorTemplates.normalize(source);
         queueLootTransaction(player, session, () -> {
-            if (!sameStack(player.getItemOnCursor(), expectedCursor) || !isAir(session.inventory.getItem(rawSlot))) return;
-            session.add(new LootEntry(template, 1, 1, 1));
-            player.setItemOnCursor(decrement(expectedCursor));
+            LootEntry entry = new LootEntry(template, 1, 1, 1, 1);
+            List<LootEntry> entries = new ArrayList<>(session.values());
+            entries.add(entry);
+            if (!saveLootCandidate(player, new LootTable(session.id, session.minimumRolls, session.maximumRolls, entries))) return;
+            DraftLootEntry added = session.add(entry);
+            session.sort();
+            session.page = session.pageOf(added.id());
         });
     }
 
-    private void queueExtractToCursor(Player player, LootEditSession session, DraftLootEntry draft, ItemStack expectedCursor) {
-        if (draft == null || !isAir(expectedCursor)) { player.updateInventory(); return; }
-        queueLootTransaction(player, session, () -> {
-            if (!isAir(player.getItemOnCursor()) || session.entry(draft.id()) == null) return;
-            session.remove(draft.id());
-            player.setItemOnCursor(cleanLootEditorItem(draft.value().item()));
-        });
-    }
-
-    private void queueExtractToInventory(Player player, LootEditSession session, DraftLootEntry draft) {
+    private void queueRemoveLootEntry(Player player, LootEditSession session, DraftLootEntry draft) {
         if (draft == null) { player.updateInventory(); return; }
         queueLootTransaction(player, session, () -> {
-            ItemStack clean = cleanLootEditorItem(draft.value().item());
-            if (!canFitOne(player.getInventory().getStorageContents(), clean) || !session.remove(draft.id())) return;
-            Map<Integer, ItemStack> overflow = player.getInventory().addItem(clean);
-            if (!overflow.isEmpty()) {
-                session.restore(draft);
-            }
-        });
-    }
-
-    private void queueDropEntry(Player player, LootEditSession session, DraftLootEntry draft) {
-        if (draft == null) { player.updateInventory(); return; }
-        queueLootTransaction(player, session, () -> {
-            if (!session.remove(draft.id())) return;
-            player.getWorld().dropItemNaturally(player.getLocation(), cleanLootEditorItem(draft.value().item()));
-        });
-    }
-
-    private void queueReplaceFromCursor(Player player, LootEditSession session, DraftLootEntry draft, ItemStack expectedCursor) {
-        if (draft == null || isAir(expectedCursor)) { player.updateInventory(); return; }
-        ItemStack template = cleanLootTemplate(expectedCursor, session);
-        queueLootTransaction(player, session, () -> {
-            if (!sameStack(player.getItemOnCursor(), expectedCursor) || session.entry(draft.id()) == null) return;
-            ItemStack excess = decrement(expectedCursor);
-            session.replace(draft.id(), new LootEntry(template, 1, 1, 1));
-            player.setItemOnCursor(cleanLootEditorItem(draft.value().item()));
-            if (!isAir(excess)) giveLootEditorItem(player, excess);
-        });
-    }
-
-    private void queuePlayerInventoryInsertion(Player player, LootEditSession session, InventoryClickEvent event) {
-        Inventory source = event.getClickedInventory();
-        int slot = event.getSlot();
-        ItemStack expected = cloneOrNull(event.getCurrentItem());
-        if (source == null || isAir(expected)) return;
-        ItemStack template = cleanLootTemplate(expected, session);
-        queueLootTransaction(player, session, () -> {
-            if (!sameStack(source.getItem(slot), expected)) return;
-            session.add(new LootEntry(template, 1, 1, 1));
-            source.setItem(slot, decrement(expected));
-        });
-    }
-
-    private void queueHotbarSwap(Player player, LootEditSession session, DraftLootEntry draft, ClickType click, int hotbarSlot) {
-        boolean offhand = click == ClickType.SWAP_OFFHAND;
-        if (!offhand && (hotbarSlot < 0 || hotbarSlot >= 9)) { player.updateInventory(); return; }
-        ItemStack expectedSource = cloneOrNull(offhand ? player.getInventory().getItemInOffHand() : player.getInventory().getItem(hotbarSlot));
-        queueLootTransaction(player, session, () -> {
-            ItemStack currentSource = offhand ? player.getInventory().getItemInOffHand() : player.getInventory().getItem(hotbarSlot);
-            if (!sameStack(currentSource, expectedSource)) return;
-            if (draft == null && isAir(expectedSource)) return;
-            if (draft == null) {
-                session.add(new LootEntry(cleanLootTemplate(expectedSource, session), 1, 1, 1));
-                setHotbarSource(player, offhand, hotbarSlot, decrement(expectedSource));
-                return;
-            }
             if (session.entry(draft.id()) == null) return;
-            ItemStack removed = cleanLootEditorItem(draft.value().item());
-            if (isAir(expectedSource)) {
+            List<LootEntry> entries = session.entries().stream()
+                .filter(candidate -> !candidate.id().equals(draft.id()))
+                .map(DraftLootEntry::value)
+                .toList();
+            if (saveLootCandidate(player, new LootTable(session.id, session.minimumRolls, session.maximumRolls, entries))) {
                 session.remove(draft.id());
-                setHotbarSource(player, offhand, hotbarSlot, removed);
-                return;
+                session.sort();
             }
-            session.replace(draft.id(), new LootEntry(cleanLootTemplate(expectedSource, session), 1, 1, 1));
-            setHotbarSource(player, offhand, hotbarSlot, removed);
-            ItemStack excess = decrement(expectedSource);
-            if (!isAir(excess)) giveLootEditorItem(player, excess);
         });
-    }
-
-    private void setHotbarSource(Player player, boolean offhand, int hotbarSlot, ItemStack item) {
-        if (offhand) player.getInventory().setItemInOffHand(item);
-        else if (hotbarSlot >= 0 && hotbarSlot < 9) player.getInventory().setItem(hotbarSlot, item);
-    }
-
-    private void queueCreativeClone(Player player, LootEditSession session, DraftLootEntry draft) {
-        if (draft == null || player.getGameMode() != GameMode.CREATIVE) { player.updateInventory(); return; }
-        queueLootTransaction(player, session, () -> {
-            ItemStack clone = cleanLootEditorItem(draft.value().item());
-            clone.setAmount(Math.max(1, clone.getMaxStackSize()));
-            player.setItemOnCursor(clone);
-        });
-    }
-
-    private void queueCollectToCursor(Player player, LootEditSession session, ItemStack expectedCursor) {
-        if (isAir(expectedCursor)) { player.updateInventory(); return; }
-        ItemStack cleanCursor = cleanLootTemplate(expectedCursor, session);
-        cleanCursor.setAmount(expectedCursor.getAmount());
-        queueLootTransaction(player, session, () -> {
-            if (!sameStack(player.getItemOnCursor(), expectedCursor)) return;
-            int capacity = Math.max(0, cleanCursor.getMaxStackSize() - cleanCursor.getAmount());
-            if (capacity == 0) return;
-            for (DraftLootEntry candidate : new ArrayList<>(session.entries())) {
-                if (capacity == 0) break;
-                if (cleanLootEditorItem(candidate.value().item()).isSimilar(cleanCursor) && session.remove(candidate.id())) {
-                    cleanCursor.setAmount(cleanCursor.getAmount() + 1);
-                    capacity--;
-                }
-            }
-            ItemStack[] storage = player.getInventory().getStorageContents();
-            for (int slot = 0; slot < storage.length && capacity > 0; slot++) {
-                ItemStack item = storage[slot];
-                if (isAir(item) || !cleanLootEditorItem(item).isSimilar(cleanCursor)) continue;
-                int moved = Math.min(capacity, item.getAmount());
-                item.setAmount(item.getAmount() - moved);
-                storage[slot] = item.getAmount() == 0 ? null : item;
-                cleanCursor.setAmount(cleanCursor.getAmount() + moved);
-                capacity -= moved;
-            }
-            player.getInventory().setStorageContents(storage);
-            player.setItemOnCursor(cleanCursor);
-        });
-    }
-
-    private void giveLootEditorItem(Player player, ItemStack item) {
-        Map<Integer, ItemStack> overflow = player.getInventory().addItem(item);
-        overflow.values().forEach(value -> player.getWorld().dropItemNaturally(player.getLocation(), value));
-    }
-
-    private DraftLootEntry draftFromProxy(LootEditSession session, ItemStack item) {
-        if (isAir(item) || !session.sessionId.equals(lootEditorSessionId(item))) return null;
-        return session.entry(lootEditorId(item));
-    }
-
-    private ItemStack cleanLootTemplate(ItemStack source, LootEditSession session) {
-        DraftLootEntry proxy = draftFromProxy(session, source);
-        ItemStack clean = proxy == null ? cleanLootEditorItem(source) : cleanLootEditorItem(proxy.value().item());
-        clean.setAmount(1);
-        return clean;
-    }
-
-    private void validateLootEditorState(Player player, LootEditSession session) {
-        for (DraftLootEntry draft : new ArrayList<>(session.entries())) {
-            ItemStack clean = cleanLootEditorItem(draft.value().item());
-            clean.setAmount(1);
-            if (!sameStack(clean, draft.value().item()) || draft.value().item().getAmount() != 1) {
-                session.replace(draft.id(), new LootEntry(clean, draft.value().weight(), draft.value().minimumAmount(), draft.value().maximumAmount(), draft.value().maximumPerContainer()));
-            }
-        }
-        ItemStack cursor = player.getItemOnCursor();
-        if (!isAir(cursor) && lootEditorSessionId(cursor) != null) player.setItemOnCursor(cleanLootTemplate(cursor, session));
-        ItemStack[] contents = player.getInventory().getContents();
-        for (int slot = 0; slot < contents.length; slot++) {
-            ItemStack item = contents[slot];
-            if (!isAir(item) && lootEditorSessionId(item) != null) player.getInventory().setItem(slot, cleanLootTemplate(item, session));
-        }
-    }
-
-    private static boolean canFitOne(ItemStack[] contents, ItemStack item) {
-        for (ItemStack existing : contents) {
-            if (isAir(existing)) return true;
-            if (existing.isSimilar(item) && existing.getAmount() < existing.getMaxStackSize()) return true;
-        }
-        return false;
-    }
-
-    private static ItemStack decrement(ItemStack item) {
-        if (isAir(item) || item.getAmount() <= 1) return null;
-        ItemStack remaining = item.clone();
-        remaining.setAmount(item.getAmount() - 1);
-        return remaining;
-    }
-
-    private static ItemStack cloneOrNull(ItemStack item) {
-        return isAir(item) ? null : item.clone();
-    }
-
-    private static ItemStack[] cloneContents(ItemStack[] contents) {
-        ItemStack[] copy = new ItemStack[contents.length];
-        for (int index = 0; index < contents.length; index++) copy[index] = cloneOrNull(contents[index]);
-        return copy;
-    }
-
-    private static int amount(ItemStack item) {
-        return isAir(item) ? 0 : item.getAmount();
     }
 
     private static boolean isAir(ItemStack item) {
         return item == null || item.getType().isAir() || item.getAmount() <= 0;
-    }
-
-    private static boolean sameStack(ItemStack first, ItemStack second) {
-        if (isAir(first) || isAir(second)) return isAir(first) && isAir(second);
-        return first.getAmount() == second.getAmount() && first.isSimilar(second);
     }
 
     @EventHandler
@@ -3086,41 +3067,7 @@ public final class MenuManager implements Listener {
         if (!(event.getWhoClicked() instanceof Player player) || !(event.getInventory().getHolder() instanceof MenuHolder holder) || !holder.id().startsWith("da:loot:")) return;
         if (event.getRawSlots().stream().noneMatch(slot -> slot >= 0 && slot < 45)) return;
         event.setCancelled(true);
-        LootEditSession session = lootEdits.get(player.getUniqueId());
-        if (session == null) { player.updateInventory(); return; }
-        InventoryView view = event.getView();
-        ItemStack expectedCursor = cloneOrNull(event.getOldCursor());
-        List<Integer> topTargets = event.getNewItems().keySet().stream()
-            .filter(slot -> slot >= 0 && slot < 45 && isAir(view.getItem(slot)))
-            .sorted().toList();
-        Map<Integer, ItemStack> expectedBottom = new LinkedHashMap<>();
-        Map<Integer, ItemStack> desiredBottom = new LinkedHashMap<>();
-        int bottomAdded = 0;
-        for (Map.Entry<Integer, ItemStack> change : event.getNewItems().entrySet()) {
-            int raw = change.getKey();
-            if (raw < 54) continue;
-            ItemStack before = cloneOrNull(view.getItem(raw));
-            ItemStack after = cloneOrNull(change.getValue());
-            expectedBottom.put(raw, before);
-            desiredBottom.put(raw, after);
-            bottomAdded += Math.max(0, amount(after) - amount(before));
-        }
-        LootEditorInteractionRules.DragTransfer transfer = LootEditorInteractionRules.dragTransfer(amount(expectedCursor), bottomAdded, topTargets.size());
-        int insertions = transfer.insertedEntries();
-        queueLootTransaction(player, session, () -> {
-            if (!sameStack(player.getItemOnCursor(), expectedCursor)) return;
-            for (int target : topTargets) if (!isAir(session.inventory.getItem(target))) return;
-            for (Map.Entry<Integer, ItemStack> expected : expectedBottom.entrySet()) {
-                if (!sameStack(player.getOpenInventory().getItem(expected.getKey()), expected.getValue())) return;
-            }
-            ItemStack template = cleanLootTemplate(expectedCursor, session);
-            for (int index = 0; index < insertions; index++) session.add(new LootEntry(template, 1, 1, 1));
-            desiredBottom.forEach((slot, item) -> player.getOpenInventory().setItem(slot, cloneOrNull(item)));
-            int remaining = transfer.cursorRemainder();
-            ItemStack cursor = cloneOrNull(expectedCursor);
-            if (cursor != null) cursor.setAmount(Math.max(0, remaining));
-            player.setItemOnCursor(remaining == 0 ? null : cursor);
-        });
+        player.updateInventory();
     }
 
     @EventHandler
@@ -3149,7 +3096,7 @@ public final class MenuManager implements Listener {
             if (session.closed || lootEdits.get(player.getUniqueId()) != session) return;
             if (session.transactionPending) { scheduleLootClose(player, session); return; }
             if (isLootSessionMenu(player.getOpenInventory().getTopInventory())) return;
-            discardLootEditorSession(player, session);
+            closeLootEditorSession(player, session);
             player.updateInventory();
         });
     }
@@ -3159,7 +3106,7 @@ public final class MenuManager implements Listener {
         UUID playerId = event.getPlayer().getUniqueId();
         suppressLootClose.remove(playerId);
         LootEditSession session = lootEdits.get(playerId);
-        if (session != null) discardLootEditorSession(event.getPlayer(), session);
+        if (session != null) closeLootEditorSession(event.getPlayer(), session);
     }
 
     @EventHandler
@@ -3167,8 +3114,31 @@ public final class MenuManager implements Listener {
         if (event.getPlugin() != plugin) return;
         for (Map.Entry<UUID, LootEditSession> entry : new ArrayList<>(lootEdits.entrySet())) {
             Player player = Bukkit.getPlayer(entry.getKey());
-            if (player != null) discardLootEditorSession(player, entry.getValue());
+            if (player != null) closeLootEditorSession(player, entry.getValue());
+            else lootLeases.release(entry.getValue().id, entry.getValue().ownerId);
         }
+    }
+
+    private void prepareForReload() {
+        for (Map.Entry<UUID, LootEditSession> entry : new ArrayList<>(lootEdits.entrySet())) {
+            Player player = Bukkit.getPlayer(entry.getKey());
+            if (player == null) {
+                lootLeases.release(entry.getValue().id, entry.getValue().ownerId);
+                continue;
+            }
+            closeLootEditorSession(player, entry.getValue());
+            player.closeInventory();
+            player.sendMessage(Component.text("Loot editor closed for reload. All completed changes were already saved."));
+        }
+        lootEdits.clear();
+        lootMultiEdits.clear();
+        lootLeases.clear();
+        suppressLootClose.clear();
+    }
+
+    public void reloadContent() {
+        prepareForReload();
+        reloadAll.run();
     }
 
     private record Menu(Inventory inventory, Map<Integer, MenuAction> actions, Map<Integer, MenuAction> rightClickActions, Map<Integer, MenuAction> shiftLeftActions, Map<Integer, MenuAction> shiftRightActions) {
@@ -3242,20 +3212,23 @@ public final class MenuManager implements Listener {
     private static final class LootEditSession {
         private final String id;
         private final String sessionId = UUID.randomUUID().toString();
+        private final UUID ownerId;
+        private final String ownerName;
         private int minimumRolls;
         private int maximumRolls;
         private boolean showWeights;
         private int page;
         private long nextDraftId;
-        private long revision;
         private boolean transactionPending;
         private boolean closed;
         private Inventory inventory;
         private final Deque<Runnable> transactions = new ArrayDeque<>();
         private final List<DraftLootEntry> drafts = new ArrayList<>();
 
-        private LootEditSession(LootTable table) {
+        private LootEditSession(LootTable table, UUID ownerId, String ownerName) {
             id = table.id(); minimumRolls = table.minimumRolls(); maximumRolls = table.maximumRolls();
+            this.ownerId = ownerId;
+            this.ownerName = ownerName;
             table.entries().forEach(this::add);
             sort();
         }
@@ -3278,12 +3251,21 @@ public final class MenuManager implements Listener {
             return drafts.subList(start, Math.min(start + 45, drafts.size()));
         }
 
-        private boolean remove(String draftId) {
-            return drafts.removeIf(draft -> draft.id().equals(draftId));
+        private DraftLootEntry pageEntry(int slot) {
+            if (slot < 0 || slot >= 45) return null;
+            int index = page * 45 + slot;
+            return index < drafts.size() ? drafts.get(index) : null;
         }
 
-        private void restore(DraftLootEntry draft) {
-            if (entry(draft.id()) == null) drafts.add(draft);
+        private int pageOf(String draftId) {
+            for (int index = 0; index < drafts.size(); index++) {
+                if (drafts.get(index).id().equals(draftId)) return LootEditorInteractionRules.pageOf(index);
+            }
+            return Math.min(page, pageCount() - 1);
+        }
+
+        private boolean remove(String draftId) {
+            return drafts.removeIf(draft -> draft.id().equals(draftId));
         }
 
         private void replace(String draftId, LootEntry value) {
@@ -3309,12 +3291,23 @@ public final class MenuManager implements Listener {
             page = Math.min(page, pageCount() - 1);
         }
 
-        private int pageCount() { return Math.max(1, drafts.size() / 45 + 1); }
+        private LootTable tableReplacing(String draftId, LootEntry replacement) {
+            return tableReplacing(Map.of(draftId, replacement));
+        }
+
+        private LootTable tableReplacing(Map<String, LootEntry> replacements) {
+            List<LootEntry> values = drafts.stream()
+                .map(draft -> replacements.getOrDefault(draft.id(), draft.value()))
+                .toList();
+            return new LootTable(id, minimumRolls, maximumRolls, values);
+        }
+
+        private int pageCount() { return LootEditorInteractionRules.pageCount(drafts.size()); }
     }
 
     private record DraftLootEntry(String id, LootEntry value) { }
 
-    private record LootTransactionSnapshot(List<DraftLootEntry> drafts, int page, long nextDraftId, ItemStack[] playerContents, ItemStack cursor) { }
+    private record LootTransactionSnapshot(List<DraftLootEntry> drafts, int page, long nextDraftId) { }
 
     private static final class LootMultiEditSession {
         private final LootEditSession editor;

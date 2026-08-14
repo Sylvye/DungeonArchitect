@@ -16,39 +16,54 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.LinkedHashSet;
 
 public final class FeatureTemplateRegistry {
     private final Path featuresDirectory;
     private final FeatureTemplateValidator validator;
+    private final FeatureNestingPolicy nestingPolicy;
+    private final FeatureGraphValidator graphValidator;
     private Map<String, FeatureTemplate> templates = Map.of();
     private Map<String, FeatureTemplate> visibleTemplates = Map.of();
     private Map<String, TemplateLoadStatus<FeatureTemplate>> statusById = Map.of();
     private List<TemplateLoadStatus<FeatureTemplate>> loadStatuses = List.of();
     private TemplateValidationResult lastValidation = new TemplateValidationResult();
+    private FeatureGraphValidator.Analysis graphAnalysis = new FeatureGraphValidator.Analysis(Map.of(), Map.of());
 
     public FeatureTemplateRegistry(Path featuresDirectory, RoomStructureService structureService) {
+        this(featuresDirectory, structureService, new FeatureNestingPolicy());
+    }
+
+    public FeatureTemplateRegistry(Path featuresDirectory, RoomStructureService structureService, FeatureNestingPolicy nestingPolicy) {
         this.featuresDirectory = featuresDirectory;
         this.validator = new FeatureTemplateValidator(structureService);
+        this.nestingPolicy = nestingPolicy;
+        this.graphValidator = new FeatureGraphValidator(nestingPolicy);
     }
 
     FeatureTemplateRegistry(Path featuresDirectory, com.dungeonarchitect.template.StructureSizeReader sizeReader, boolean ignored) {
         this.featuresDirectory = featuresDirectory;
         this.validator = new FeatureTemplateValidator(sizeReader, true);
+        this.nestingPolicy = new FeatureNestingPolicy();
+        this.graphValidator = new FeatureGraphValidator(nestingPolicy);
     }
 
     public TemplateValidationResult reload() {
         TemplateValidationResult result = new TemplateValidationResult();
         Map<String, FeatureTemplate> loaded = new LinkedHashMap<>();
         Map<String, FeatureTemplate> visible = new LinkedHashMap<>();
-        Map<String, TemplateLoadStatus<FeatureTemplate>> statusesById = new LinkedHashMap<>();
-        List<TemplateLoadStatus<FeatureTemplate>> statuses = new ArrayList<>();
+        Map<String, Path> directories = new LinkedHashMap<>();
+        Map<String, List<String>> localErrors = new LinkedHashMap<>();
+        Map<String, List<String>> repairsById = new LinkedHashMap<>();
+        List<TemplateLoadStatus<FeatureTemplate>> unrecoverable = new ArrayList<>();
         try {
             Files.createDirectories(featuresDirectory);
             try (var stream = Files.list(featuresDirectory)) {
                 for (Path directory : stream.filter(Files::isDirectory).sorted(Comparator.comparing(Path::toString)).toList()) {
                     TemplateLoadStatus<FeatureTemplate> loadedStatus = FeatureTemplateIO.loadRecovering(directory, validator.sizeReader());
                     if (!loadedStatus.loadable()) {
-                        statuses.add(loadedStatus);
+                        unrecoverable.add(loadedStatus);
                         result.addAll(loadedStatus.errors());
                         result.addRepairs(loadedStatus.repairs());
                         continue;
@@ -62,28 +77,34 @@ public final class FeatureTemplateRegistry {
                     }
                     if (visible.containsKey(template.id())) {
                         errors.add("Duplicate feature id " + template.id());
-                        TemplateLoadStatus<FeatureTemplate> duplicate = new TemplateLoadStatus<>(template, template.id(), directory, false, errors, loadedStatus.repairs());
-                        statuses.add(duplicate);
+                        unrecoverable.add(new TemplateLoadStatus<>(template, template.id(), directory, false, errors, loadedStatus.repairs()));
                         result.addAll(errors);
                         result.addRepairs(loadedStatus.repairs());
                         continue;
                     }
                     TemplateValidationResult templateResult = validator.validate(template);
                     errors.addAll(templateResult.errors());
-                    result.addAll(errors);
-                    result.addRepairs(loadedStatus.repairs());
-                    boolean valid = errors.isEmpty();
-                    TemplateLoadStatus<FeatureTemplate> status = new TemplateLoadStatus<>(template, template.id(), directory, valid, errors, loadedStatus.repairs());
-                    statuses.add(status);
                     visible.put(template.id(), template);
-                    statusesById.put(template.id(), status);
-                    if (valid) {
-                        loaded.put(template.id(), template);
-                    }
+                    directories.put(template.id(), directory);
+                    localErrors.put(template.id(), List.copyOf(errors));
+                    repairsById.put(template.id(), loadedStatus.repairs());
                 }
             }
         } catch (IOException ex) {
             result.add("Failed to scan features directory: " + ex.getMessage());
+        }
+        graphAnalysis = graphValidator.analyze(visible, localErrors);
+        Map<String, TemplateLoadStatus<FeatureTemplate>> statusesById = new LinkedHashMap<>();
+        List<TemplateLoadStatus<FeatureTemplate>> statuses = new ArrayList<>(unrecoverable);
+        for (FeatureTemplate template : visible.values()) {
+            List<String> errors = graphAnalysis.errors(template.id());
+            List<String> repairs = repairsById.getOrDefault(template.id(), List.of());
+            TemplateLoadStatus<FeatureTemplate> status = new TemplateLoadStatus<>(template, template.id(), directories.get(template.id()), errors.isEmpty(), errors, repairs);
+            statuses.add(status);
+            statusesById.put(template.id(), status);
+            result.addAll(errors);
+            result.addRepairs(repairs);
+            if (errors.isEmpty()) loaded.put(template.id(), template);
         }
         templates = Map.copyOf(loaded);
         visibleTemplates = Map.copyOf(visible);
@@ -133,6 +154,41 @@ public final class FeatureTemplateRegistry {
         return lastValidation;
     }
 
+    public FeatureNestingPolicy nestingPolicy() {
+        return nestingPolicy;
+    }
+
+    public Optional<FeatureGraphValidator.Metrics> metrics(String featureId) {
+        return Optional.ofNullable(graphAnalysis.metrics(featureId));
+    }
+
+    /** Validates an in-memory replacement against the complete prospective graph. */
+    public TemplateValidationResult validateProspective(FeatureTemplate candidate) {
+        Map<String, FeatureTemplate> prospective = new LinkedHashMap<>(visibleTemplates);
+        prospective.put(candidate.id(), candidate);
+        Map<String, List<String>> local = new LinkedHashMap<>();
+        for (FeatureTemplate feature : prospective.values()) {
+            local.put(feature.id(), validator.validate(feature).errors());
+        }
+        FeatureGraphValidator.Analysis analysis = graphValidator.analyze(prospective, local);
+        TemplateValidationResult result = new TemplateValidationResult();
+        for (Map.Entry<String, List<String>> entry : analysis.errorsByFeature().entrySet()) {
+            Set<String> prior = new LinkedHashSet<>(graphAnalysis.errors(entry.getKey()));
+            entry.getValue().stream().filter(error -> !prior.contains(error)).forEach(result::add);
+        }
+        return result;
+    }
+
+    public List<String> featureOwnersReferencing(String featureId) {
+        String target = featureId.toLowerCase(java.util.Locale.ROOT);
+        return visibleTemplates.values().stream()
+            .filter(owner -> !owner.id().equalsIgnoreCase(target))
+            .filter(owner -> owner.featureSlots().stream().flatMap(slot -> slot.entries().stream()).anyMatch(entry -> entry.featureId().equalsIgnoreCase(target)))
+            .map(owner -> "feature " + owner.id())
+            .sorted()
+            .toList();
+    }
+
     public void deleteFeature(String featureId) throws IOException {
         Path featureDirectory = templateDirectory(featureId);
         if (!Files.isDirectory(featureDirectory)) {
@@ -159,7 +215,7 @@ public final class FeatureTemplateRegistry {
         }
         FeatureTemplate sourceTemplate = loadVisibleTemplateForOperation(oldId, source, "duplication");
         copyDirectory(source, target);
-        FeatureTemplate renamed = new FeatureTemplate(normalizedNewId, sourceTemplate.size(), sourceTemplate.tags(), sourceTemplate.markers(), sourceTemplate.lootBindings(), target.resolve("feature.nbt"));
+        FeatureTemplate renamed = new FeatureTemplate(normalizedNewId, sourceTemplate.size(), sourceTemplate.tags(), sourceTemplate.markers(), sourceTemplate.featureSlots(), sourceTemplate.lootBindings(), target.resolve("feature.nbt"));
         FeatureTemplateIO.save(renamed, target);
         reload();
         return renamed;
@@ -178,10 +234,32 @@ public final class FeatureTemplateRegistry {
         }
         FeatureTemplate sourceTemplate = loadVisibleTemplateForOperation(oldId, source, "rename");
         Files.move(source, target);
-        FeatureTemplate renamed = new FeatureTemplate(normalizedNewId, sourceTemplate.size(), sourceTemplate.tags(), sourceTemplate.markers(), sourceTemplate.lootBindings(), target.resolve("feature.nbt"));
+        FeatureTemplate renamed = new FeatureTemplate(normalizedNewId, sourceTemplate.size(), sourceTemplate.tags(), sourceTemplate.markers(), sourceTemplate.featureSlots(), sourceTemplate.lootBindings(), target.resolve("feature.nbt"));
         FeatureTemplateIO.save(renamed, target);
         reload();
         return renamed;
+    }
+
+    public void replaceFeatureReferences(String oldFeatureId, String newFeatureId) throws IOException {
+        for (FeatureTemplate template : new ArrayList<>(visibleTemplates.values())) {
+            boolean changed = false;
+            List<com.dungeonarchitect.domain.RoomFeatureSlot> slots = new ArrayList<>();
+            for (com.dungeonarchitect.domain.RoomFeatureSlot slot : template.featureSlots()) {
+                List<com.dungeonarchitect.domain.FeatureSlotEntry> entries = new ArrayList<>();
+                for (com.dungeonarchitect.domain.FeatureSlotEntry entry : slot.entries()) {
+                    if (entry.featureId().equalsIgnoreCase(oldFeatureId)) {
+                        entries.add(new com.dungeonarchitect.domain.FeatureSlotEntry(newFeatureId, entry.weight()));
+                        changed = true;
+                    } else entries.add(entry);
+                }
+                slots.add(slot.withEntries(entries));
+            }
+            if (changed) {
+                FeatureTemplate updated = new FeatureTemplate(template.id(), template.size(), template.tags(), template.markers(), slots, template.lootBindings(), template.structureFile());
+                FeatureTemplateIO.save(updated, template.structureFile().getParent());
+            }
+        }
+        reload();
     }
 
     private Path templateDirectory(String featureId) {

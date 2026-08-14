@@ -44,6 +44,11 @@ public final class TemplateDiagnostics {
         for (RoomTemplate room : rooms.visible()) {
             analyzeRoom(room, rooms, features, doors, result);
         }
+        if (features != null) {
+            for (FeatureTemplate feature : features.visible()) {
+                analyzeFeature(feature, features, result);
+            }
+        }
         if (doors != null) {
             for (DoorTemplate door : doors.visible()) {
                 analyzeDoor(door, features, result);
@@ -65,7 +70,19 @@ public final class TemplateDiagnostics {
     }
 
     public static TemplateValidationResult analyzeFeature(FeatureTemplate feature) {
-        return new TemplateValidationResult();
+        return analyzeFeature(feature, null);
+    }
+
+    public static TemplateValidationResult analyzeFeature(FeatureTemplate feature, FeatureTemplateRegistry features) {
+        TemplateValidationResult result = new TemplateValidationResult();
+        analyzeFeature(feature, features, result);
+        return result;
+    }
+
+    private static void analyzeFeature(FeatureTemplate feature, FeatureTemplateRegistry features, TemplateValidationResult result) {
+        for (RoomFeatureSlot slot : feature.featureSlots()) {
+            analyzeFeatureSlot("feature", feature.id(), slot, features, result);
+        }
     }
 
     private static void analyzeRoom(RoomTemplate room, RoomTemplateRegistry rooms, FeatureTemplateRegistry features, DoorTemplateRegistry doors, TemplateValidationResult result) {
@@ -138,8 +155,8 @@ public final class TemplateDiagnostics {
     private static void analyzeFeatureSlot(String templateType, String templateId, RoomFeatureSlot slot, FeatureTemplateRegistry features, TemplateValidationResult result) {
         if (!hasAssignedFeatureTemplate(slot)) {
             result.addDiagnostic(warning(templateType, templateId, "feature", slot.id(),
-                "feature slot " + slot.id() + " has no feature assigned, so it can only paste nothing",
-                "Open this feature slot and select at least one compatible feature.", slot.position()));
+                "feature slot " + slot.id() + " only selects empty, so it will never paste a feature",
+                "Open this feature slot and select at least one compatible feature; for loot piles, choose a chest feature with a loot binding.", slot.position()));
         }
         for (FeatureSlotEntry entry : slot.entries()) {
             if (entry.featureId().equals(FeatureSlotEntry.EMPTY)) {

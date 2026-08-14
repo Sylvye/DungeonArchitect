@@ -3,6 +3,9 @@ package com.dungeonarchitect.feature;
 import com.dungeonarchitect.domain.FeatureTemplate;
 import com.dungeonarchitect.domain.IntVector3;
 import com.dungeonarchitect.domain.RoomMarker;
+import com.dungeonarchitect.domain.RoomFeatureSlot;
+import com.dungeonarchitect.domain.FeatureSlotEntry;
+import com.dungeonarchitect.domain.Direction3;
 import com.dungeonarchitect.template.StructureSizeReader;
 import com.dungeonarchitect.template.TemplateLoadStatus;
 import org.bukkit.configuration.file.YamlConfiguration;
@@ -25,7 +28,7 @@ public final class FeatureTemplateIO {
         String id = yaml.getString("id", featureDirectory.getFileName().toString());
         IntVector3 size = vector(yaml.getIntegerList("size"));
         Set<String> tags = Set.copyOf(yaml.getStringList("tags"));
-        return new FeatureTemplate(id, size, tags, markers(yaml), lootBindings(yaml), featureDirectory.resolve("feature.nbt"));
+        return new FeatureTemplate(id, size, tags, markers(yaml), featureSlots(yaml), lootBindings(yaml), featureDirectory.resolve("feature.nbt"));
     }
 
     public static TemplateLoadStatus<FeatureTemplate> loadRecovering(Path featureDirectory, StructureSizeReader sizeReader) {
@@ -42,7 +45,7 @@ public final class FeatureTemplateIO {
             }
             IntVector3 size = size(yaml, featureDirectory.resolve("feature.nbt"), sizeReader, id, "feature", repairs);
             Set<String> tags = Set.copyOf(yaml.getStringList("tags"));
-            FeatureTemplate template = new FeatureTemplate(id, size, tags, markers(yaml), lootBindings(yaml), featureDirectory.resolve("feature.nbt"));
+            FeatureTemplate template = new FeatureTemplate(id, size, tags, markers(yaml), featureSlots(yaml), lootBindings(yaml), featureDirectory.resolve("feature.nbt"));
             return new TemplateLoadStatus<>(template, template.id(), featureDirectory, true, errors, repairs);
         } catch (RuntimeException ex) {
             errors.add(id + ": failed to load feature metadata: " + ex.getMessage());
@@ -51,7 +54,7 @@ public final class FeatureTemplateIO {
     }
 
     public static void save(FeatureTemplate template, Path featureDirectory) throws IOException {
-        com.dungeonarchitect.template.IdentityRules.assertFeatureMarkers(template.markers());
+        com.dungeonarchitect.template.IdentityRules.assertFeatureComponents(template.markers(), template.featureSlots());
         Files.createDirectories(featureDirectory);
         YamlConfiguration yaml = new YamlConfiguration();
         yaml.set("id", template.id());
@@ -64,6 +67,24 @@ public final class FeatureTemplateIO {
             markers.add(value);
         }
         yaml.set("markers", markers);
+        List<Map<String, Object>> slots = new ArrayList<>();
+        for (RoomFeatureSlot slot : template.featureSlots()) {
+            Map<String, Object> value = new LinkedHashMap<>();
+            value.put("id", slot.id());
+            value.put("position", list(slot.position()));
+            value.put("size", list(slot.size()));
+            value.put("facing", slot.facing().name());
+            List<Map<String, Object>> entries = new ArrayList<>();
+            for (FeatureSlotEntry entry : slot.entries()) {
+                Map<String, Object> entryValue = new LinkedHashMap<>();
+                entryValue.put("feature", entry.featureId());
+                entryValue.put("weight", entry.weight());
+                entries.add(entryValue);
+            }
+            value.put("entries", entries);
+            slots.add(value);
+        }
+        yaml.set("featureSlots", slots);
         yaml.set("lootBindings", new LinkedHashMap<>(template.lootBindings()));
         yaml.save(featureDirectory.resolve("feature.yml").toFile());
     }
@@ -109,6 +130,35 @@ public final class FeatureTemplateIO {
                 Object type = map.containsKey("type") ? map.get("type") : "generic";
                 result.add(new RoomMarker(String.valueOf(map.get("name")), String.valueOf(type), vector(numbers)));
             }
+        }
+        return result;
+    }
+
+    private static List<RoomFeatureSlot> featureSlots(YamlConfiguration yaml) {
+        List<RoomFeatureSlot> result = new ArrayList<>();
+        for (Object raw : yaml.getList("featureSlots", List.of())) {
+            if (!(raw instanceof Map<?, ?> map)) continue;
+            Object position = map.get("position");
+            Object size = map.get("size");
+            if (!(position instanceof List<?> positions) || !(size instanceof List<?> sizes)) continue;
+            List<FeatureSlotEntry> entries = new ArrayList<>();
+            Object rawEntries = map.get("entries");
+            if (rawEntries instanceof List<?> values) {
+                for (Object rawEntry : values) {
+                    if (!(rawEntry instanceof Map<?, ?> entry)) continue;
+                    Object feature = entry.containsKey("feature") ? entry.get("feature") : FeatureSlotEntry.EMPTY;
+                    Object weight = entry.containsKey("weight") ? entry.get("weight") : 1;
+                    entries.add(new FeatureSlotEntry(String.valueOf(feature), ((Number) weight).intValue()));
+                }
+            }
+            String facing = String.valueOf(map.containsKey("facing") ? map.get("facing") : "NORTH");
+            result.add(new RoomFeatureSlot(
+                String.valueOf(map.get("id")),
+                vector(positions.stream().map(value -> ((Number) value).intValue()).toList()),
+                vector(sizes.stream().map(value -> ((Number) value).intValue()).toList()),
+                Direction3.valueOf(facing.toUpperCase(java.util.Locale.ROOT)),
+                entries
+            ));
         }
         return result;
     }

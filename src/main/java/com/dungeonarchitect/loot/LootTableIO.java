@@ -46,7 +46,7 @@ public final class LootTableIO {
             entries.add(data);
         }
         yaml.set("entries", entries);
-        yaml.save(file.toFile());
+        AtomicFileWriter.write(file, temporary -> yaml.save(temporary.toFile()));
     }
 
     @SuppressWarnings("unchecked")
