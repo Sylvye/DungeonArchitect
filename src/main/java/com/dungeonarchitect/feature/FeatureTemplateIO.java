@@ -85,7 +85,7 @@ public final class FeatureTemplateIO {
             slots.add(value);
         }
         yaml.set("featureSlots", slots);
-        yaml.set("lootBindings", new LinkedHashMap<>(template.lootBindings()));
+        yaml.set("lootBindings", com.dungeonarchitect.loot.LootBindingIO.serialize(template.lootBindings()));
         yaml.save(featureDirectory.resolve("feature.yml").toFile());
     }
 
@@ -163,12 +163,7 @@ public final class FeatureTemplateIO {
         return result;
     }
 
-    private static Map<String, String> lootBindings(YamlConfiguration yaml) {
-        Map<String, String> result = new LinkedHashMap<>();
-        var section = yaml.getConfigurationSection("lootBindings");
-        if (section != null) for (String key : section.getKeys(false)) {
-            String value = section.getString(key); if (value != null && !value.isBlank()) result.put(key, value);
-        }
-        return result;
+    private static Map<String, com.dungeonarchitect.loot.LootBinding> lootBindings(YamlConfiguration yaml) {
+        return com.dungeonarchitect.loot.LootBindingIO.read(yaml);
     }
 }

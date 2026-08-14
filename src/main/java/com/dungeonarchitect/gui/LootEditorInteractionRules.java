@@ -37,4 +37,23 @@ final class LootEditorInteractionRules {
         if (entryIndex < 0) throw new IllegalArgumentException("Entry index cannot be negative");
         return entryIndex / 45;
     }
+
+    static boolean hasPreviousPage(int page) {
+        return page > 0;
+    }
+
+    static boolean hasNextPage(int page, int pageCount) {
+        if (page < 0 || pageCount < 1 || page >= pageCount) {
+            throw new IllegalArgumentException("Page must be within the available page count");
+        }
+        return page + 1 < pageCount;
+    }
+
+    static String pageTitle(String subject, int page, int pageCount) {
+        if (subject == null || subject.isBlank()) throw new IllegalArgumentException("Page title subject cannot be blank");
+        if (page < 0 || pageCount < 1 || page >= pageCount) {
+            throw new IllegalArgumentException("Page must be within the available page count");
+        }
+        return subject + " [" + (page + 1) + "/" + pageCount + "]";
+    }
 }

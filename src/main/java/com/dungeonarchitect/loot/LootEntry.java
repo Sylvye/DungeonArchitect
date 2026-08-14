@@ -3,7 +3,7 @@ package com.dungeonarchitect.loot;
 import org.bukkit.inventory.ItemStack;
 
 /** A weighted configured item used by a loot table. */
-public record LootEntry(ItemStack item, int weight, int minimumAmount, int maximumAmount, int maximumPerContainer) {
+public record LootEntry(ItemStack item, int weight, int minimumAmount, int maximumAmount, int maximumPerContainer) implements LootPoolEntry {
     public LootEntry {
         if (item == null || item.getType().isAir()) {
             throw new IllegalArgumentException("Loot entry requires an item");

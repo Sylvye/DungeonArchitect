@@ -25,6 +25,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.Map;
+import com.dungeonarchitect.loot.LootBinding;
 import java.util.LinkedHashMap;
 import java.util.UUID;
 
@@ -49,7 +50,7 @@ public final class AuthoringSession {
     private final List<DoorSocket> doors = new ArrayList<>();
     private final List<RoomMarker> markers = new ArrayList<>();
     private final List<RoomFeatureSlot> featureSlots = new ArrayList<>();
-    private final Map<String, String> lootBindings = new LinkedHashMap<>();
+    private final Map<String, LootBinding> lootBindings = new LinkedHashMap<>();
 
     public AuthoringSession(String roomId) {
         this.roomId = roomId;
@@ -364,7 +365,7 @@ public final class AuthoringSession {
             RoomMarker marker = markers.get(i);
             if (marker.name().equalsIgnoreCase(oldId)) {
                 markers.set(i, new RoomMarker(newId, marker.type(), marker.position()));
-                String binding = lootBindings.keySet().stream().filter(key -> key.equalsIgnoreCase(oldId)).findFirst().map(lootBindings::remove).orElse(null);
+                LootBinding binding = lootBindings.keySet().stream().filter(key -> key.equalsIgnoreCase(oldId)).findFirst().map(lootBindings::remove).orElse(null);
                 if (binding != null) lootBindings.put(newId, binding);
                 selectedComponent = null;
                 return true;
@@ -492,7 +493,16 @@ public final class AuthoringSession {
         return List.copyOf(markers);
     }
 
-    public Map<String, String> lootBindings() { return Map.copyOf(lootBindings); }
+    public Map<String, LootBinding> lootBindings() { return Map.copyOf(lootBindings); }
+
+    public void removeLootTableBinding(String tableId) {
+        lootBindings.values().removeIf(binding -> binding.tableId().equalsIgnoreCase(tableId));
+    }
+
+    public void replaceLootBindings(Map<String, LootBinding> bindings) {
+        lootBindings.clear();
+        lootBindings.putAll(bindings);
+    }
 
     public List<RoomFeatureSlot> featureSlots() {
         return List.copyOf(featureSlots);

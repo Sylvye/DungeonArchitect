@@ -4,6 +4,7 @@ import java.nio.file.Path;
 import java.util.Set;
 import java.util.List;
 import java.util.Map;
+import com.dungeonarchitect.loot.LootBinding;
 
 public record FeatureTemplate(
     String id,
@@ -11,7 +12,7 @@ public record FeatureTemplate(
     Set<String> tags,
     List<RoomMarker> markers,
     List<RoomFeatureSlot> featureSlots,
-    Map<String, String> lootBindings,
+    Map<String, LootBinding> lootBindings,
     Path structureFile
 ) {
     public FeatureTemplate {
@@ -35,7 +36,7 @@ public record FeatureTemplate(
         this(id, size, tags, List.of(), List.of(), Map.of(), structureFile);
     }
 
-    public FeatureTemplate(String id, IntVector3 size, Set<String> tags, List<RoomMarker> markers, Map<String, String> lootBindings, Path structureFile) {
+    public FeatureTemplate(String id, IntVector3 size, Set<String> tags, List<RoomMarker> markers, Map<String, LootBinding> lootBindings, Path structureFile) {
         this(id, size, tags, markers, List.of(), lootBindings, structureFile);
     }
 }

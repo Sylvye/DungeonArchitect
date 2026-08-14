@@ -12,6 +12,8 @@ import com.dungeonarchitect.door.DoorTemplateMatcher;
 import com.dungeonarchitect.door.DoorTemplateRegistry;
 import com.dungeonarchitect.feature.FeatureMatcher;
 import com.dungeonarchitect.feature.FeatureTemplateRegistry;
+import com.dungeonarchitect.loot.LootTableRegistry;
+import com.dungeonarchitect.loot.LootBinding;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -55,6 +57,26 @@ public final class TemplateDiagnostics {
             }
         }
         return result;
+    }
+
+    public static TemplateValidationResult analyze(RoomTemplateRegistry rooms, FeatureTemplateRegistry features, DoorTemplateRegistry doors, LootTableRegistry loot) {
+        TemplateValidationResult result = analyze(rooms, features, doors);
+        if (loot == null) return result;
+        loot.statuses().forEach(status -> status.errors().forEach(message -> result.addDiagnostic(error("loot", status.id(), "table", null, message, "Repair the referenced table or remove the invalid entry.", null))));
+        rooms.visible().forEach(room -> analyzeLootBindings("room", room.id(), room.markers(), room.lootBindings(), loot, result));
+        if (doors != null) doors.visible().forEach(door -> analyzeLootBindings("door", door.id(), door.markers(), door.lootBindings(), loot, result));
+        if (features != null) features.visible().forEach(feature -> analyzeLootBindings("feature", feature.id(), feature.markers(), feature.lootBindings(), loot, result));
+        return result;
+    }
+
+    private static void analyzeLootBindings(String type, String id, List<com.dungeonarchitect.domain.RoomMarker> markers, java.util.Map<String, LootBinding> bindings, LootTableRegistry loot, TemplateValidationResult result) {
+        bindings.forEach((markerName, binding) -> {
+            if (loot.usable(binding.tableId())) return;
+            var marker = markers.stream().filter(candidate -> candidate.name().equalsIgnoreCase(markerName)).findFirst().orElse(null);
+            result.addDiagnostic(error(type, id, "marker", markerName,
+                "marker " + markerName + " selects missing, invalid, or empty loot table " + binding.tableId(),
+                "Choose a ready loot table or add a reachable item to " + binding.tableId() + ".", marker == null ? null : marker.position()));
+        });
     }
 
     public static TemplateValidationResult analyzeRoom(RoomTemplate room, RoomTemplateRegistry rooms, FeatureTemplateRegistry features, DoorTemplateRegistry doors) {

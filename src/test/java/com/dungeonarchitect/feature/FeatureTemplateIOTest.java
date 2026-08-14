@@ -6,6 +6,7 @@ import com.dungeonarchitect.domain.RoomMarker;
 import com.dungeonarchitect.domain.RoomFeatureSlot;
 import com.dungeonarchitect.domain.FeatureSlotEntry;
 import com.dungeonarchitect.domain.Direction3;
+import com.dungeonarchitect.loot.LootBinding;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -29,7 +30,7 @@ final class FeatureTemplateIOTest {
             "chest_pile", new IntVector3(2, 3, 4), Set.of("loot", "stone"),
             List.of(new RoomMarker("reward", "generic", new IntVector3(1, 0, 1))),
             List.of(new RoomFeatureSlot("detail", IntVector3.ZERO, new IntVector3(2, 2, 2), Direction3.NORTH, List.of(new FeatureSlotEntry("small_detail", 2)))),
-            Map.of("reward", "feature_loot"), featureDir.resolve("feature.nbt")
+            Map.of("reward", new LootBinding("feature_loot", 1, 3)), featureDir.resolve("feature.nbt")
         );
 
         FeatureTemplateIO.save(template, featureDir);

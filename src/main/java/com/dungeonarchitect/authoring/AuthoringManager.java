@@ -382,6 +382,23 @@ public final class AuthoringManager {
         sessions.values().forEach(session -> session.removeTag(domain, tag));
     }
 
+    /** Keeps active workspaces from restoring a globally deleted loot binding. */
+    public void removeLootTableBindings(String tableId) {
+        sessions.values().forEach(session -> session.removeLootTableBinding(tableId));
+    }
+
+    public void synchronizeRoomLootBindings(String id, Map<String, com.dungeonarchitect.loot.LootBinding> bindings) {
+        sessions.values().stream().filter(session -> session.roomSession() && session.roomId().equalsIgnoreCase(id)).forEach(session -> session.replaceLootBindings(bindings));
+    }
+
+    public void synchronizeDoorLootBindings(String id, Map<String, com.dungeonarchitect.loot.LootBinding> bindings) {
+        sessions.values().stream().filter(session -> session.doorSession() && session.roomId().equalsIgnoreCase(id)).forEach(session -> session.replaceLootBindings(bindings));
+    }
+
+    public void synchronizeFeatureLootBindings(String id, Map<String, com.dungeonarchitect.loot.LootBinding> bindings) {
+        sessions.values().stream().filter(session -> session.featureSession() && session.roomId().equalsIgnoreCase(id)).forEach(session -> session.replaceLootBindings(bindings));
+    }
+
     public boolean hasEditableRoomSession(Player player) {
         AuthoringSession session = sessions.get(player.getUniqueId());
         return isRoomComponentSession(session);

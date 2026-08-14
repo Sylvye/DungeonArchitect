@@ -18,10 +18,10 @@ final class LootEditorTemplates {
     }
 
     static LootTable normalize(LootTable table) {
-        return new LootTable(table.id(), table.minimumRolls(), table.maximumRolls(), table.entries().stream().map(LootEditorTemplates::normalize).toList());
+        return new LootTable(table.id(), table.entries().stream().map(entry -> entry instanceof LootEntry item ? normalize(item) : entry).toList());
     }
 
     static boolean requiresNormalization(LootTable table) {
-        return table.entries().stream().anyMatch(entry -> entry.item().getAmount() != 1);
+        return table.entries().stream().anyMatch(entry -> entry instanceof LootEntry item && item.item().getAmount() != 1);
     }
 }

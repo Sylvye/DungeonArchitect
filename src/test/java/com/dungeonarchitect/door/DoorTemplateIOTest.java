@@ -5,6 +5,7 @@ import com.dungeonarchitect.domain.DoorGateway;
 import com.dungeonarchitect.domain.DoorTemplate;
 import com.dungeonarchitect.domain.IntVector3;
 import com.dungeonarchitect.domain.RoomMarker;
+import com.dungeonarchitect.loot.LootBinding;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -30,7 +31,7 @@ final class DoorTemplateIOTest {
             Set.of("hatch"),
             List.of(new RoomMarker("reward", "generic", new IntVector3(1, 0, 2))),
             List.of(),
-            Map.of("reward", "door_loot"),
+            Map.of("reward", new LootBinding("door_loot", 2, 4)),
             new DoorGateway(new IntVector3(1, 0, 2), new IntVector3(1, 1, 1), Direction3.UP),
             doorDir.resolve("door.nbt")
         );

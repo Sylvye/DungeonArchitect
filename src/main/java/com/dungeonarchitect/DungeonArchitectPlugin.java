@@ -17,6 +17,7 @@ import com.dungeonarchitect.gui.MenuManager;
 import com.dungeonarchitect.gui.TagCatalog;
 import com.dungeonarchitect.loot.LootService;
 import com.dungeonarchitect.loot.LootTableRegistry;
+import com.dungeonarchitect.loot.LootRollMigration;
 import com.dungeonarchitect.generation.DeterministicDungeonGenerator;
 import com.dungeonarchitect.runtime.DungeonManager;
 import com.dungeonarchitect.runtime.DungeonWorldManager;
@@ -47,6 +48,7 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
     private TagCatalog tagCatalog;
     private DungeonArchitectAPI api;
     private FeatureNestingPolicy featureNestingPolicy;
+    private AuthoringManager authoringManager;
 
     @Override
     public void onEnable() {
@@ -64,6 +66,7 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
         roomTemplateRegistry.reload();
         lootTableRegistry = new LootTableRegistry(dataPath.resolve("loot-tables"));
         lootTableRegistry.reload();
+        migrateLegacyLoot(dataPath);
         tagCatalog = new TagCatalog(dataPath.resolve("tags.yml"));
         synchronizeTags();
         assetRenameCoordinator = new AssetRenameCoordinator(roomTemplateRegistry, featureTemplateRegistry, doorTemplateRegistry);
@@ -101,7 +104,7 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
         }
         RoomCategory defaultCategory = RoomCategory.valueOf(getConfig().getString("authoring.default-category", "GENERIC").toUpperCase(Locale.ROOT));
         int defaultWeight = getConfig().getInt("authoring.default-weight", 10);
-        AuthoringManager authoringManager = new AuthoringManager(
+        authoringManager = new AuthoringManager(
             this,
             getServer(),
             roomTemplateRegistry.roomsDirectory(),
@@ -166,8 +169,27 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
         doorTemplateRegistry.reload();
         roomTemplateRegistry.reload();
         lootTableRegistry.reload();
+        migrateLegacyLoot(getDataFolder().toPath());
         synchronizeTags();
         logDiagnostics();
+    }
+
+    private void migrateLegacyLoot(Path dataPath) {
+        try {
+            if (!LootRollMigration.migrate(dataPath, lootTableRegistry)) return;
+            featureTemplateRegistry.reload();
+            doorTemplateRegistry.reload();
+            roomTemplateRegistry.reload();
+            lootTableRegistry.reload();
+            if (authoringManager != null) {
+                roomTemplateRegistry.visible().forEach(template -> authoringManager.synchronizeRoomLootBindings(template.id(), template.lootBindings()));
+                doorTemplateRegistry.visible().forEach(template -> authoringManager.synchronizeDoorLootBindings(template.id(), template.lootBindings()));
+                featureTemplateRegistry.visible().forEach(template -> authoringManager.synchronizeFeatureLootBindings(template.id(), template.lootBindings()));
+            }
+            getLogger().info("Migrated legacy loot-table rolls to marker bindings.");
+        } catch (java.io.IOException ex) {
+            throw new IllegalStateException("Failed to migrate legacy loot rolls safely: " + ex.getMessage(), ex);
+        }
     }
 
     private void updateFeatureNestingPolicy() {
@@ -189,8 +211,8 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
     }
 
     private void logDiagnostics() {
-        TemplateValidationResult result = TemplateDiagnostics.analyze(roomTemplateRegistry, featureTemplateRegistry, doorTemplateRegistry);
-        int errors = result.errors().size() + lootTableRegistry.loadErrors().size();
+        TemplateValidationResult result = TemplateDiagnostics.analyze(roomTemplateRegistry, featureTemplateRegistry, doorTemplateRegistry, lootTableRegistry);
+        int errors = result.errors().size();
         int warnings = result.warnings().size();
         if (errors == 0 && warnings == 0 && result.repairs().isEmpty()) {
             getLogger().info("Template diagnostics OK.");
@@ -200,6 +222,5 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
             + ". Run /da diagnose in game for the full report.");
         result.repairs().stream().limit(2).forEach(repair -> getLogger().warning("Repair: " + repair));
         result.diagnostics().stream().limit(3).forEach(diagnostic -> getLogger().warning(diagnostic.severity() + ": " + diagnostic.display()));
-        lootTableRegistry.loadErrors().stream().limit(3).forEach(error -> getLogger().warning("ERROR: " + error));
     }
 }

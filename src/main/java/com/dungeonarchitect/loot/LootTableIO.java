@@ -18,31 +18,44 @@ public final class LootTableIO {
     public static LootTable load(Path file) {
         YamlConfiguration yaml = YamlConfiguration.loadConfiguration(file.toFile());
         String id = yaml.getString("id", stripExtension(file.getFileName().toString()));
-        List<LootEntry> entries = new ArrayList<>();
+        List<LootPoolEntry> entries = new ArrayList<>();
         for (Object raw : yaml.getList("entries", List.of())) {
             ConfigurationSection section = section(raw);
             if (section == null) continue;
+            String type = section.getString("type", section.contains("table") ? "table" : "item");
+            if (type.equalsIgnoreCase("table")) {
+                entries.add(new LootTableEntry(section.getString("table"), section.getInt("weight", 1), section.getInt("maximumPerContainer", 0)));
+                continue;
+            }
             Object itemRaw = section.get("item");
             ItemStack item = itemRaw instanceof ItemStack stack ? stack : ItemStack.deserialize(map(itemRaw));
             entries.add(new LootEntry(item, section.getInt("weight", 1), section.getInt("minimumAmount", item.getAmount()), section.getInt("maximumAmount", item.getAmount()), section.getInt("maximumPerContainer", 0)));
         }
-        return new LootTable(id, yaml.getInt("minimumRolls", 1), yaml.getInt("maximumRolls", 1), entries);
+        Integer legacyMinimum = yaml.contains("minimumRolls") ? yaml.getInt("minimumRolls", 1) : null;
+        Integer legacyMaximum = yaml.contains("maximumRolls") ? yaml.getInt("maximumRolls", 1) : null;
+        return new LootTable(id, entries, legacyMinimum, legacyMaximum);
     }
 
     public static void save(LootTable table, Path file) throws IOException {
         Files.createDirectories(file.getParent());
         YamlConfiguration yaml = new YamlConfiguration();
         yaml.set("id", table.id());
-        yaml.set("minimumRolls", table.minimumRolls());
-        yaml.set("maximumRolls", table.maximumRolls());
         List<Map<String, Object>> entries = new ArrayList<>();
-        for (LootEntry entry : table.entries()) {
+        for (LootPoolEntry poolEntry : table.entries()) {
             Map<String, Object> data = new LinkedHashMap<>();
-            data.put("item", entry.item().serialize());
-            data.put("weight", entry.weight());
-            data.put("minimumAmount", entry.minimumAmount());
-            data.put("maximumAmount", entry.maximumAmount());
-            data.put("maximumPerContainer", entry.maximumPerContainer());
+            if (poolEntry instanceof LootEntry entry) {
+                data.put("type", "item");
+                data.put("item", entry.item().serialize());
+                data.put("weight", entry.weight());
+                data.put("minimumAmount", entry.minimumAmount());
+                data.put("maximumAmount", entry.maximumAmount());
+                data.put("maximumPerContainer", entry.maximumPerContainer());
+            } else if (poolEntry instanceof LootTableEntry entry) {
+                data.put("type", "table");
+                data.put("table", entry.tableId());
+                data.put("weight", entry.weight());
+                data.put("maximumPerContainer", entry.maximumPerContainer());
+            }
             entries.add(data);
         }
         yaml.set("entries", entries);

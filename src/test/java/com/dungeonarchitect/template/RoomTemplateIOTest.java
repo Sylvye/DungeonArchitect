@@ -10,6 +10,7 @@ import com.dungeonarchitect.domain.RoomFeatureSlot;
 import com.dungeonarchitect.domain.RoomMarker;
 import com.dungeonarchitect.domain.RoomTemplate;
 import com.dungeonarchitect.domain.SocketType;
+import com.dungeonarchitect.loot.LootBinding;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -51,7 +52,7 @@ final class RoomTemplateIOTest {
                 Direction3.SOUTH,
                 List.of(new FeatureSlotEntry("empty", 1), new FeatureSlotEntry("chest_pile", 3))
             )),
-            Map.of("reward", "starter_loot"),
+            Map.of("reward", new LootBinding("starter_loot", 2, 5)),
             roomDir.resolve("room.nbt")
         );
 

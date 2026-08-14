@@ -4,6 +4,7 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Set;
 import java.util.Map;
+import com.dungeonarchitect.loot.LootBinding;
 
 public record RoomTemplate(
     String id,
@@ -16,7 +17,7 @@ public record RoomTemplate(
     List<DoorSocket> doors,
     List<RoomMarker> markers,
     List<RoomFeatureSlot> featureSlots,
-    Map<String, String> lootBindings,
+    Map<String, LootBinding> lootBindings,
     Path structureFile
 ) {
     public RoomTemplate {

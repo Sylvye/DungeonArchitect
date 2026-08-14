@@ -171,7 +171,7 @@ public final class RoomTemplateIO {
             markers.add(item);
         }
         yaml.set("markers", markers);
-        yaml.set("lootBindings", new LinkedHashMap<>(template.lootBindings()));
+        yaml.set("lootBindings", com.dungeonarchitect.loot.LootBindingIO.serialize(template.lootBindings()));
 
         List<Map<String, Object>> slots = new ArrayList<>();
         for (RoomFeatureSlot slot : template.featureSlots()) {
@@ -310,14 +310,8 @@ public final class RoomTemplateIO {
         return List.of(vector.x(), vector.y(), vector.z());
     }
 
-    private static Map<String, String> lootBindings(ConfigurationSection yaml) {
-        Map<String, String> bindings = new LinkedHashMap<>();
-        ConfigurationSection section = yaml.getConfigurationSection("lootBindings");
-        if (section != null) for (String marker : section.getKeys(false)) {
-            String table = section.getString(marker);
-            if (table != null && !table.isBlank()) bindings.put(marker, table);
-        }
-        return bindings;
+    private static Map<String, com.dungeonarchitect.loot.LootBinding> lootBindings(ConfigurationSection yaml) {
+        return com.dungeonarchitect.loot.LootBindingIO.read(yaml);
     }
 
     private static <E extends Enum<E>> E enumValue(Class<E> type, String value) {
