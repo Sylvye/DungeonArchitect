@@ -257,6 +257,12 @@ public final class MenuManager implements Listener {
                 openNestedLootPicker(p, session, 0);
             });
         });
+        if (dungeonItemsAvailable()) {
+            button(menu, 48, Material.NETHER_STAR, "Add DungeonItem", List.of("Choose an RPG item template."), p -> {
+                suppressLootClose.add(p.getUniqueId());
+                scheduleLootTransition(p, () -> openDungeonItemsPicker(p, session, 0));
+            });
+        }
         menu.inventory.setItem(49, GuiItems.item(Material.KNOWLEDGE_BOOK, "Editor Help", List.of(
             "Left-click an inventory item to add its template.",
             "Your inventory is never changed.",
@@ -383,6 +389,41 @@ public final class MenuManager implements Listener {
         button(menu, 49, Material.ARROW, "Back", List.of("Return without adding a table."), p -> returnToLootEditor(p, session));
         if (LootEditorInteractionRules.hasNextPage(current, pages)) button(menu, 53, Material.ARROW, "Next Page", List.of(), p -> scheduleLootTransition(p, () -> openNestedLootPicker(p, session, current + 1)));
         open(player, menu);
+    }
+
+    private void openDungeonItemsPicker(Player player, LootEditSession session, int page) {
+        if (!dungeonItemsAvailable()) { player.sendMessage(Component.text("DungeonItems is no longer available.")); returnToLootEditor(player, session); return; }
+        List<DungeonItemsBridge.Entry> candidates = DungeonItemsBridge.entries();
+        int pages = LootEditorInteractionRules.pageCount(candidates.size());
+        int current = Math.max(0, Math.min(page, pages - 1));
+        Menu menu = menu("da:loot-di-picker:" + session.sessionId + ":" + current, 54, LootEditorInteractionRules.pageTitle("Add DungeonItem", current, pages));
+        int start = current * 45;
+        for (int slot = 0; slot < 45 && start + slot < candidates.size(); slot++) {
+            DungeonItemsBridge.Entry info = candidates.get(start + slot);
+            ItemStack preview = info.item().clone();
+            if (preview == null) continue;
+            int target = slot;
+            menu.inventory.setItem(target, preview);
+            menu.actions.put(target, p -> {
+                ItemStack created = DungeonItemsBridge.create(info.id());
+                ItemStack template = created == null ? null : LootEditorTemplates.normalize(created);
+                if (template == null) { p.sendMessage(Component.text("DungeonItem " + info.id() + " is unavailable.")); openDungeonItemsPicker(p, session, current); return; }
+                LootEntry value = new LootEntry(template, 1, 1, 1, 1);
+                LootTable candidate = new LootTable(session.id, java.util.stream.Stream.concat(session.values().stream(), java.util.stream.Stream.of(value)).toList());
+                if (saveLootCandidate(p, candidate)) {
+                    DraftLootEntry added = session.add(value); session.sort(); session.page = session.pageOf(added.id()); openLootEntryConfigNow(p, session, added.id());
+                } else openDungeonItemsPicker(p, session, current);
+            });
+        }
+        if (candidates.isEmpty()) menu.inventory.setItem(22, GuiItems.item(Material.KNOWLEDGE_BOOK, "No DungeonItems", List.of("Create a template with /di create <id>.")));
+        if (LootEditorInteractionRules.hasPreviousPage(current)) button(menu, 45, Material.ARROW, "Previous Page", List.of(), p -> scheduleLootTransition(p, () -> openDungeonItemsPicker(p, session, current - 1)));
+        button(menu, 49, Material.ARROW, "Back", List.of("Return without adding an item."), p -> returnToLootEditor(p, session));
+        if (LootEditorInteractionRules.hasNextPage(current, pages)) button(menu, 53, Material.ARROW, "Next Page", List.of(), p -> scheduleLootTransition(p, () -> openDungeonItemsPicker(p, session, current + 1)));
+        open(player, menu);
+    }
+
+    private boolean dungeonItemsAvailable() {
+        return Bukkit.getPluginManager().isPluginEnabled("DungeonItems");
     }
 
     private void promptLootEntryField(Player player, LootEditSession session, String draftId, LootEntryField field) {

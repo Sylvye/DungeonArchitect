@@ -14,3 +14,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "DungeonArchitect"
+includeBuild("../DungeonItems")

@@ -2,8 +2,9 @@ name: DungeonArchitect
 main: com.dungeonarchitect.DungeonArchitectPlugin
 version: ${version}
 api-version: '1.21'
-author: DungeonArchitect
+author: Sylvye
 description: Developer-authored procedural dungeon foundation for Paper.
+softdepend: [DungeonItems]
 commands:
   da:
     description: DungeonArchitect commands
