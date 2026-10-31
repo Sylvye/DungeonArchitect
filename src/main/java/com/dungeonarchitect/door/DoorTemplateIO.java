@@ -58,10 +58,7 @@ public final class DoorTemplateIO {
                 enumValue(Direction3.class, gatewaySection.getString("facing", "NORTH"))
             );
         }
-        List<RoomMarker> markers = new ArrayList<>();
-        for (ConfigurationSection section : sections(yaml, "markers")) {
-            markers.add(new RoomMarker(section.getString("name"), section.getString("type", "generic"), vector(section.getIntegerList("position"))));
-        }
+        List<RoomMarker> markers = com.dungeonarchitect.template.MarkerIO.load(yaml, lootBindings(yaml));
         List<RoomFeatureSlot> featureSlots = new ArrayList<>();
         for (ConfigurationSection section : sections(yaml, "featureSlots")) {
             List<FeatureSlotEntry> entries = new ArrayList<>();
@@ -99,15 +96,7 @@ public final class DoorTemplateIO {
             yaml.set("gateway.size", list(template.gateway().size()));
             yaml.set("gateway.facing", template.gateway().facing().name());
         }
-        List<Map<String, Object>> markers = new ArrayList<>();
-        for (RoomMarker marker : template.markers()) {
-            Map<String, Object> item = new LinkedHashMap<>();
-            item.put("name", marker.name());
-            item.put("type", marker.type());
-            item.put("position", list(marker.position()));
-            markers.add(item);
-        }
-        yaml.set("markers", markers);
+        yaml.set("markers", com.dungeonarchitect.template.MarkerIO.save(template.markers()));
         yaml.set("lootBindings", com.dungeonarchitect.loot.LootBindingIO.serialize(template.lootBindings()));
         List<Map<String, Object>> slots = new ArrayList<>();
         for (RoomFeatureSlot slot : template.featureSlots()) {

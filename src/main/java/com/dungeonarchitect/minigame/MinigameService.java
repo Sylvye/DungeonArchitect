@@ -69,8 +69,31 @@ public final class MinigameService implements AutoCloseable {
     }
     public void allowedKits(UUID id, List<String> kits) { mainThread(); MinigameRun run = runs.get(id); draft(run); run.kits = List.copyOf(new LinkedHashSet<>(kits)); }
 
+    public Optional<String> unavailableReason(Player player, UUID allowedRun) {
+        if (!player.isOnline()) return Optional.of("Offline");
+        if (player.isDead()) return Optional.of("Player is dead");
+        UUID membershipId = membership.get(player.getUniqueId());
+        boolean ownRun = membershipId != null && membershipId.equals(allowedRun);
+        if (membershipId != null && !membershipId.equals(allowedRun)) return Optional.of("Already in another match");
+        if (dungeons.getDungeon(player).isPresent() && !ownRun) return Optional.of("Already in a dungeon");
+        if (recovery.pending(player.getUniqueId()) && !ownRun) return Optional.of("Awaiting player-state recovery");
+        return Optional.empty();
+    }
+
+    public CompletableFuture<MinigameRun> prepare(MatchSetup setup) {
+        mainThread();
+        if (closed) throw new IllegalStateException("Minigames are shutting down");
+        MinigameRun run = new MinigameRun(setup.preset(), setup.seed());
+        run.teams.putAll(setup.teams()); run.kits = setup.kits();
+        return prepare(run, true);
+    }
+
     public CompletableFuture<MinigameRun> prepare(UUID id) {
-        mainThread(); MinigameRun run = runs.get(id); draft(run);
+        mainThread(); return prepare(runs.get(id), false);
+    }
+
+    private CompletableFuture<MinigameRun> prepare(MinigameRun run, boolean temporary) {
+        draft(run);
         TeamAssignments.validate(run.teams);
         for (UUID playerId : run.teams.keySet()) {
             Player player = Bukkit.getPlayer(playerId);
@@ -85,7 +108,7 @@ public final class MinigameService implements AutoCloseable {
         }
         int largest = run.teams.values().stream().collect(java.util.stream.Collectors.groupingBy(t -> t, java.util.stream.Collectors.counting())).values().stream().mapToInt(Long::intValue).max().orElseThrow();
         List<RoomTemplate> spawns = run.preset().spawnRooms().stream().map(room -> template(room, RoomCategory.TEAM_SPAWN)).sorted(Comparator.comparing(RoomTemplate::id)).toList();
-        for (RoomTemplate spawn : spawns) if (spawnMarkers(spawn).size() < largest) throw new IllegalArgumentException("Spawn template " + spawn.id() + " needs " + largest + " distinct player_spawn markers");
+        for (RoomTemplate spawn : spawns) if (com.dungeonarchitect.runtime.SpawnAreaResolver.areaCount(spawn) == 0 || spawnMarkers(spawn).size() < largest) throw new com.dungeonarchitect.runtime.SpawnAreaException(spawn.id(), spawnMarkers(spawn).size(), largest, false);
         Map<String, Map<String, org.bukkit.inventory.ItemStack>> kits = KitProvider.resolve(run.kits);
         Random random = new Random(run.seed());
         int totalWeight = spawns.stream().mapToInt(RoomTemplate::weight).sum(), roll = random.nextInt(totalWeight);
@@ -94,11 +117,13 @@ public final class MinigameService implements AutoCloseable {
         TeamSpread spread = new TeamSpread(root.id(), Set.copyOf(run.preset().ordinaryRooms()), chosen.id(), new HashSet<>(run.teams.values()).size(), run.preset().minimumDistance(), run.preset().maximumRatio());
         DungeonRequest request = new DungeonRequest(run.preset().roomCount(), run.seed(), Set.copyOf(run.teams.keySet()), spread);
         new DungeonGenerationRequest(request.roomCount(), request.seed(), spread);
+        if (temporary) runs.put(run.id(), run);
         run.kitContents.putAll(kits);
         for (UUID player : run.teams.keySet()) { membership.put(player, run.id()); run.participants.put(player, new MinigameRun.Participant(player)); }
         run.state = RunState.GENERATING;
         CompletableFuture<MinigameRun> result = new CompletableFuture<>();
-        dungeons.prepareDungeonAsync(request).whenComplete((dungeon, error) -> {
+        if (temporary) result.whenComplete((ready, error) -> { if (error != null) runs.remove(run.id(), run); });
+        try { dungeons.prepareDungeonAsync(request).whenComplete((dungeon, error) -> {
             if (error != null) { end(run.id(), "Preparation failed: " + error.getMessage()); result.completeExceptionally(error); return; }
             if (run.state == RunState.ENDED || closed) { dungeons.destroyDungeon(dungeon.id()); result.completeExceptionally(new IllegalStateException("Run cancelled")); return; }
             run.dungeon = dungeon;
@@ -111,12 +136,10 @@ public final class MinigameService implements AutoCloseable {
                 World world = Objects.requireNonNull(Bukkit.getWorld(dungeon.worldName()));
                 for (int team : teams) {
                     RoomInstance room = dungeon.rooms().get(run.spawnRooms.get(team));
-                    List<IntVector3> points = spawnMarkers(room.template());
                     List<UUID> players = run.teams.entrySet().stream().filter(e -> e.getValue() == team).map(Map.Entry::getKey).sorted().toList();
+                    List<Location> positions = com.dungeonarchitect.runtime.SpawnAreaResolver.resolve(world, room.template(), room.node().transform(), players.size(), run.seed() ^ team, spawnSafety);
                     for (int i = 0; i < players.size(); i++) {
-                        IntVector3 point = room.node().transform().transformLocal(points.get(i));
-                        Location location = new Location(world, point.x() + .5, point.y(), point.z() + .5);
-                        if (!spawnSafety.test(location)) throw new IllegalStateException("Unsafe player_spawn marker in room " + room.template().id() + " at " + point);
+                        Location location = positions.get(i);
                         var participant = run.participants.get(players.get(i)); participant.spawn = location; participant.frozenAt = location.clone();
                     }
                 }
@@ -125,7 +148,7 @@ public final class MinigameService implements AutoCloseable {
                 if (run.autoStart) start(run.id());
                 result.complete(run);
             } catch (Exception ex) { end(run.id(), "Preparation failed: " + ex.getMessage()); result.completeExceptionally(ex); }
-        });
+        }); } catch (RuntimeException ex) { end(run.id(), "Preparation failed: " + ex.getMessage()); result.completeExceptionally(ex); }
         return result;
     }
     private RoomTemplate template(String id, RoomCategory category) {
@@ -133,13 +156,10 @@ public final class MinigameService implements AutoCloseable {
         if (room.category() != category) throw new IllegalArgumentException(id + " must be a " + category + " template"); return room;
     }
     public static List<IntVector3> spawnMarkers(RoomTemplate template) {
-        return template.markers().stream().filter(m -> m.type().equalsIgnoreCase("player_spawn")).sorted(Comparator.comparing(RoomMarker::name)).map(RoomMarker::position).distinct().toList();
+        return com.dungeonarchitect.runtime.SpawnAreaResolver.candidates(template);
     }
-    private static boolean safe(Location location) {
-        return location.getBlock().isPassable() && location.clone().add(0, 1, 0).getBlock().isPassable()
-            && location.clone().add(0, -1, 0).getBlock().getType().isSolid()
-            && !Set.of(Material.LAVA, Material.FIRE, Material.SOUL_FIRE, Material.WATER).contains(location.getBlock().getType());
-    }
+    private static boolean safe(Location location) { return com.dungeonarchitect.runtime.SpawnAreaResolver.safe(location); }
+
     public void start(UUID id) {
         mainThread(); MinigameRun run = runs.get(id);
         if (run.state == RunState.DRAFT) {

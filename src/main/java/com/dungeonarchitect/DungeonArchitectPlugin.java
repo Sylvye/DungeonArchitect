@@ -50,6 +50,7 @@ public class DungeonArchitectPlugin extends JavaPlugin {
     private FeatureNestingPolicy featureNestingPolicy;
     private AuthoringManager authoringManager;
     private com.dungeonarchitect.minigame.MinigameService minigames;
+    private com.dungeonarchitect.minigame.MinigameMenus minigameMenus;
 
     @Override
     public void onEnable() {
@@ -136,7 +137,8 @@ public class DungeonArchitectPlugin extends JavaPlugin {
         getServer().getPluginManager().registerEvents(menuManager, this);
 
         minigames = new com.dungeonarchitect.minigame.MinigameService(this, dungeonManager, roomTemplateRegistry);
-        var minigameMenus = new com.dungeonarchitect.minigame.MinigameMenus(this, minigames, roomTemplateRegistry, chatPromptManager, menuManager::openMain);
+        minigameMenus = new com.dungeonarchitect.minigame.MinigameMenus(this, minigames, roomTemplateRegistry, chatPromptManager, menuManager::openMain);
+        minigameMenus.markerMenus(menuManager);
         var minigameCommands = new com.dungeonarchitect.minigame.MinigameCommand(minigames, minigameMenus);
         menuManager.minigames(minigameMenus::open);
         getServer().getPluginManager().registerEvents(minigameMenus, this);
@@ -145,7 +147,7 @@ public class DungeonArchitectPlugin extends JavaPlugin {
         getCommand("dplay").setTabCompleter(minigameCommands);
         getCommand("dminigame").setExecutor(minigameCommands);
         getCommand("dminigame").setTabCompleter(minigameCommands);
-        for (var player : getServer().getOnlinePlayers()) minigames.join(player);
+        for (var player : getServer().getOnlinePlayers()) { authoringManager.removeObsoleteSpawnTools(player); minigames.join(player); }
 
         DungeonArchitectCommand command = new DungeonArchitectCommand(getPluginMeta().getVersion(), authoringManager, roomTemplateRegistry, featureTemplateRegistry, doorTemplateRegistry, dungeonManager, menuManager, structureService, assetRenameCoordinator);
         command.minigames(minigameCommands);
@@ -165,6 +167,7 @@ public class DungeonArchitectPlugin extends JavaPlugin {
 
     @Override
     public void onDisable() {
+        if (minigameMenus != null) minigameMenus.close();
         if (minigames != null) minigames.close();
         if (dungeonManager != null) {
             dungeonManager.cancelPreparations();

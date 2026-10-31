@@ -18,6 +18,9 @@ public final class AuthoringListener implements Listener {
     }
 
     @EventHandler
+    public void onJoin(org.bukkit.event.player.PlayerJoinEvent event) { authoringManager.removeObsoleteSpawnTools(event.getPlayer()); }
+
+    @EventHandler
     public void onInteract(PlayerInteractEvent event) {
         if (authoringManager.isSelector(event.getItem())) {
             onSelectorInteract(event);

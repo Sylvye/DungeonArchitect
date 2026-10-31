@@ -35,6 +35,10 @@ public record RoomTemplate(
         markers = List.copyOf(markers);
         featureSlots = List.copyOf(featureSlots);
         lootBindings = lootBindings == null ? Map.of() : Map.copyOf(lootBindings);
+        Map<String, LootBinding> bound = lootBindings;
+        java.util.Set<String> componentNames = new java.util.HashSet<>(); doors.forEach(d -> componentNames.add(d.id())); featureSlots.forEach(f -> componentNames.add(f.id()));
+        markers = RoomMarker.withLegacyEntry(markers, spawn, componentNames); spawn = null;
+        markers = markers.stream().map(m -> m.purpose() == RoomMarker.Purpose.GENERIC && bound.keySet().stream().anyMatch(k -> k.equalsIgnoreCase(m.name())) ? m.withPurpose(RoomMarker.Purpose.LOOT) : m).toList();
     }
 
     public RoomTemplate(

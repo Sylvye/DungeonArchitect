@@ -63,11 +63,7 @@ public final class DoorTemplateValidator {
                     }
                 }
             }
-            for (RoomMarker marker : template.markers()) {
-                if (!bounds.contains(marker.position())) {
-                    result.add(template.id() + ": marker " + marker.name() + " is outside door bounds at " + DiagnosticText.position(marker.position()), marker.position());
-                }
-            }
+            com.dungeonarchitect.template.MarkerIO.validate(template.id(), template.markers(), template.lootBindings(), bounds, false, result);
             Set<String> slotIds = new HashSet<>();
             for (RoomFeatureSlot slot : template.featureSlots()) {
                 if (!slotIds.add(slot.id())) {

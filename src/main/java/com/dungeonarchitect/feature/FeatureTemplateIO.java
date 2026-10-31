@@ -60,13 +60,7 @@ public final class FeatureTemplateIO {
         yaml.set("id", template.id());
         yaml.set("size", list(template.size()));
         yaml.set("tags", new ArrayList<>(template.tags()));
-        List<Map<String, Object>> markers = new ArrayList<>();
-        for (RoomMarker marker : template.markers()) {
-            Map<String, Object> value = new LinkedHashMap<>();
-            value.put("name", marker.name()); value.put("type", marker.type()); value.put("position", list(marker.position()));
-            markers.add(value);
-        }
-        yaml.set("markers", markers);
+        yaml.set("markers", com.dungeonarchitect.template.MarkerIO.save(template.markers()));
         List<Map<String, Object>> slots = new ArrayList<>();
         for (RoomFeatureSlot slot : template.featureSlots()) {
             Map<String, Object> value = new LinkedHashMap<>();
@@ -121,17 +115,7 @@ public final class FeatureTemplateIO {
     }
 
     private static List<RoomMarker> markers(YamlConfiguration yaml) {
-        List<RoomMarker> result = new ArrayList<>();
-        for (Object raw : yaml.getList("markers", List.of())) {
-            if (!(raw instanceof Map<?, ?> map)) continue;
-            Object position = map.get("position");
-            if (position instanceof List<?> values) {
-                List<Integer> numbers = values.stream().map(value -> ((Number) value).intValue()).toList();
-                Object type = map.containsKey("type") ? map.get("type") : "generic";
-                result.add(new RoomMarker(String.valueOf(map.get("name")), String.valueOf(type), vector(numbers)));
-            }
-        }
-        return result;
+        return com.dungeonarchitect.template.MarkerIO.load(yaml, lootBindings(yaml));
     }
 
     private static List<RoomFeatureSlot> featureSlots(YamlConfiguration yaml) {

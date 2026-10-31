@@ -10,6 +10,7 @@ import com.dungeonarchitect.domain.DoorSocket;
 import com.dungeonarchitect.domain.FeatureTemplate;
 import com.dungeonarchitect.domain.RoomFeatureSlot;
 import com.dungeonarchitect.domain.RoomTemplate;
+import com.dungeonarchitect.domain.RoomMarker;
 import com.dungeonarchitect.domain.SocketType;
 import com.dungeonarchitect.domain.TagDomain;
 import com.dungeonarchitect.door.BoundaryFacing;
@@ -107,6 +108,7 @@ public final class AuthoringManager {
         ItemStack item = new ItemStack(wandMaterial);
         var meta = item.getItemMeta();
         meta.displayName(GuiItems.text("Architect's Wand", net.kyori.adventure.text.format.NamedTextColor.GOLD));
+        meta.lore(List.of(net.kyori.adventure.text.Component.text("Left click: first corner. Right click: second corner."), net.kyori.adventure.text.Component.text("Use selections for bounds, doors, features, or marker areas."), net.kyori.adventure.text.Component.text("Player Spawn areas select floor blocks.")));
         meta.getPersistentDataContainer().set(wandKey, PersistentDataType.BYTE, (byte) 1);
         item.setItemMeta(meta);
         return item;
@@ -304,6 +306,16 @@ public final class AuthoringManager {
         AuthoringSession session = sessions.get(player.getUniqueId());
         return session == null || !session.roomSession() ? Optional.empty() : Optional.of(session.roomId());
     }
+
+    public void removeObsoleteSpawnTools(Player player) {
+        org.bukkit.NamespacedKey key = new org.bukkit.NamespacedKey(plugin, "spawn_point_tool");
+        for (int i = 0; i < player.getInventory().getSize(); i++) {
+            var item = player.getInventory().getItem(i);
+            if (item != null && item.hasItemMeta() && item.getItemMeta().getPersistentDataContainer().has(key)) player.getInventory().setItem(i, null);
+        }
+    }
+    public boolean hasActiveSession(Player player) { return sessions.containsKey(player.getUniqueId()); }
+
 
     public Optional<String> activeFeatureId(Player player) {
         AuthoringSession session = sessions.get(player.getUniqueId());
@@ -589,6 +601,22 @@ public final class AuthoringManager {
         return slot;
     }
 
+    public String addMarkerArea(Player player, String name, String type) {
+        AuthoringSession session = session(player);
+        SelectionBounds parent = session.roomBounds().orElseThrow(() -> new IllegalArgumentException("Set template bounds first"));
+        SelectionBounds bounds = session.currentSelection().orElseThrow(() -> new IllegalArgumentException("Select marker bounds with the wand first")).toLocal(parent);
+        if (name == null || name.isBlank()) {
+            String prefix = type.equalsIgnoreCase("player_spawn_area") || type.equalsIgnoreCase("player_spawn") ? "spawn_area" : type.toLowerCase(java.util.Locale.ROOT);
+            int next = 1; java.util.Set<String> used = new java.util.HashSet<>();
+            session.markers().forEach(m -> used.add(m.name().toLowerCase(java.util.Locale.ROOT)));
+            session.doors().forEach(d -> used.add(d.id().toLowerCase(java.util.Locale.ROOT)));
+            session.featureSlots().forEach(f -> used.add(f.id().toLowerCase(java.util.Locale.ROOT)));
+            do { name = prefix + "_" + next++; } while (used.contains(name.toLowerCase(java.util.Locale.ROOT)));
+        }
+        session.addMarkerArea(name, type, bounds); selectComponent(player, "marker", name); return name;
+    }
+    public void markerPurpose(Player player, String id, RoomMarker.Purpose purpose) { session(player).markerPurpose(id, purpose); }
+
     public void addMarker(Player player, String name, String type, IntVector3 localPosition) {
         AuthoringSession session = session(player);
         requireRoomSession(session);
@@ -604,7 +632,7 @@ public final class AuthoringManager {
         IntVector3 position = new IntVector3(location.getBlockX(), location.getBlockY(), location.getBlockZ());
         if (!bounds.contains(position) || !bounds.contains(position.add(new IntVector3(0, 1, 0))) || !bounds.contains(position.add(new IntVector3(0, -1, 0)))) throw new IllegalArgumentException("Stand inside the room with space for a floor and head");
         IntVector3 local = bounds.toLocal(position);
-        if (session.markers().stream().anyMatch(marker -> marker.type().equalsIgnoreCase("player_spawn") && marker.position().equals(local))) throw new IllegalArgumentException("A player spawn already exists here");
+        if (session.markers().stream().anyMatch(marker -> marker.purpose() == RoomMarker.Purpose.PLAYER_SPAWN && marker.bounds().contains(local.add(new IntVector3(0, -1, 0))))) throw new IllegalArgumentException("A player spawn already exists here");
         addMarker(player, name, "player_spawn", local);
     }
 
@@ -849,7 +877,7 @@ public final class AuthoringManager {
                 }
                 yield session.updateGatewayBounds(id, local, resolveFacing(facing, local, SelectionBounds.between(IntVector3.ZERO, roomBounds.size().subtract(new IntVector3(1, 1, 1))), "Gateway"));
             }
-            case "marker" -> session.updateMarkerPosition(id, local.min());
+            case "marker" -> session.updateMarkerBounds(id, local);
             case "feature" -> session.updateFeatureSlotBounds(id, local);
             default -> throw new IllegalArgumentException("Unknown component type " + type);
         };
@@ -911,7 +939,7 @@ public final class AuthoringManager {
             SelectionBounds gatewayBounds = SelectionBounds.between(gateway.position(), gateway.position().add(gateway.size()).subtract(new IntVector3(1, 1, 1)));
             selections.add(componentSelection("gateway", "gateway", gatewayBounds, roomBounds, gateway.facing()));
         }
-        session.markers().forEach(marker -> selections.add(componentSelection("marker", marker.name(), SelectionBounds.between(marker.position(), marker.position()), roomBounds, null)));
+        session.markers().forEach(marker -> selections.add(componentSelection("marker", marker.name(), SelectionBounds.between(marker.position(), marker.bounds().max()), roomBounds, null)));
         session.featureSlots().forEach(slot -> {
             SelectionBounds localBounds = SelectionBounds.between(slot.position(), slot.position().add(slot.size()).subtract(new IntVector3(1, 1, 1)));
             selections.add(componentSelection("feature", slot.id(), localBounds, roomBounds, slot.facing()));

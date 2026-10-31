@@ -18,9 +18,18 @@ public final class MinigameCommand implements CommandExecutor, TabCompleter {
         return true;
     }
     public void executeAdmin(CommandSender sender, String[] args) {
+        try { admin(sender, args); }
+        catch (com.dungeonarchitect.runtime.SpawnAreaException ex) { sender.sendMessage(ex.guidance()); }
+    }
+    private void admin(CommandSender sender, String[] args) {
         if (!sender.hasPermission("dungeonarchitect.admin")) throw new IllegalArgumentException("Admin permission required");
         if (args.length == 0) { if (sender instanceof Player player) menus.open(player); else help(sender); return; }
         switch (args[0].toLowerCase(Locale.ROOT)) {
+            case "spawns" -> {
+                need(args, 2, "spawns <roomId>");
+                if (!(sender instanceof Player player)) throw new IllegalArgumentException("Open Spawn Areas in game");
+                menus.spawnPoints(player, args[1]);
+            }
             case "preset" -> preset(sender, args);
             case "create" -> { need(args, 2, "create <preset> [seed]"); MinigameRun run = games.createRun(args[1], args.length > 2 ? Long.parseLong(args[2]) : new Random().nextLong()); MinigameMenus.inspect(sender, run); }
             case "list" -> games.runs().forEach(run -> sender.sendMessage(Component.text(run.id() + " " + run.state() + " " + run.preset().id())));
@@ -71,13 +80,13 @@ public final class MinigameCommand implements CommandExecutor, TabCompleter {
     }
     private static Player online(String name) { Player player = Bukkit.getPlayerExact(name); if (player == null) throw new IllegalArgumentException("Player is not online: " + name); return player; }
     private static void need(String[] args, int count, String usage) { if (args.length < count) throw new IllegalArgumentException("Usage: /da minigame " + usage); }
-    private static void help(CommandSender sender) { sender.sendMessage(Component.text("/da minigame preset|create|list|assign|balance|kits|prepare|start|inspect|cancel|end")); }
+    private static void help(CommandSender sender) { sender.sendMessage(Component.text("/da minigame preset|spawns|create|list|assign|balance|kits|prepare|start|inspect|cancel|end")); }
     @Override public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
         List<String> choices;
         if (command.getName().equalsIgnoreCase("dplay")) {
             choices = args.length == 1 ? List.of("kit", "exit") : args.length == 2 && sender instanceof Player p ? games.getRun(p).map(r -> { var list = new ArrayList<>(r.kits()); list.add("random"); return (List<String>) list; }).orElse(List.of()) : List.of();
         } else if (!sender.hasPermission("dungeonarchitect.admin")) return List.of();
-        else if (args.length == 1) choices = List.of("preset", "create", "list", "assign", "balance", "kits", "prepare", "start", "inspect", "cancel", "end");
+        else if (args.length == 1) choices = List.of("preset", "spawns", "create", "list", "assign", "balance", "kits", "prepare", "start", "inspect", "cancel", "end");
         else if (args.length == 2 && args[0].equals("preset")) choices = List.of("list", "create", "duplicate", "set");
         else if (args.length == 2 && args[0].equals("create") || args.length == 3 && args[0].equals("preset")) choices = games.presets().all().stream().map(MinigamePreset::id).toList();
         else if (args.length == 2) choices = games.runs().stream().filter(r -> r.state() != RunState.ENDED).map(r -> r.id().toString()).toList();

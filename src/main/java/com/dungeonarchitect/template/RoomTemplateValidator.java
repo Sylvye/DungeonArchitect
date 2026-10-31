@@ -124,16 +124,7 @@ public final class RoomTemplateValidator {
     }
 
     private void validateMarkers(RoomTemplate template, BoundingBox3i bounds, TemplateValidationResult result) {
-        Set<IntVector3> playerSpawns = new HashSet<>();
-        for (RoomMarker marker : template.markers()) {
-            if (!bounds.contains(marker.position())) {
-                result.add(template.id() + ": marker " + marker.name() + " is outside room bounds at " + DiagnosticText.position(marker.position()), marker.position());
-            }
-            if (marker.type().equalsIgnoreCase("player_spawn")) {
-                if (!playerSpawns.add(marker.position())) result.add(template.id() + ": duplicate player_spawn position " + marker.position());
-                if (!bounds.contains(marker.position().add(new IntVector3(0, 1, 0))) || !bounds.contains(marker.position().add(new IntVector3(0, -1, 0)))) result.add(template.id() + ": player_spawn " + marker.name() + " needs space for feet, head, and floor inside the room");
-            }
-        }
+        MarkerIO.validate(template.id(), template.markers(), template.lootBindings(), bounds, true, result);
     }
 
     private void validateFeatureSlots(RoomTemplate template, BoundingBox3i bounds, TemplateValidationResult result) {

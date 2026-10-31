@@ -305,7 +305,33 @@ public final class AuthoringSession {
         if (doorSession()) IdentityRules.requireDoorComponentAvailable(name, markers, featureSlots, null);
         else if (featureSession()) IdentityRules.requireFeatureComponentAvailable(name, markers, featureSlots, null);
         else IdentityRules.requireRoomComponentAvailable(name, doors, markers, featureSlots, null);
-        markers.add(new RoomMarker(name, type, localPosition));
+        RoomMarker marker = new RoomMarker(name, type, localPosition);
+        if (!roomSession() && marker.purpose() == RoomMarker.Purpose.PLAYER_SPAWN) throw new IllegalArgumentException("Player Spawn markers belong to rooms");
+        markers.add(marker);
+    }
+
+    public void addMarkerArea(String name, String type, SelectionBounds bounds) {
+        RoomMarker marker = new RoomMarker(name, type, bounds.min(), bounds.size());
+        if (!roomSession() && marker.purpose() == RoomMarker.Purpose.PLAYER_SPAWN) throw new IllegalArgumentException("Player Spawn markers belong to rooms");
+        if (doorSession()) IdentityRules.requireDoorComponentAvailable(name, markers, featureSlots, null);
+        else if (featureSession()) IdentityRules.requireFeatureComponentAvailable(name, markers, featureSlots, null);
+        else IdentityRules.requireRoomComponentAvailable(name, doors, markers, featureSlots, null);
+        markers.add(marker);
+    }
+    public boolean updateMarkerBounds(String id, SelectionBounds bounds) {
+        for (int i = 0; i < markers.size(); i++) if (markers.get(i).name().equalsIgnoreCase(id)) {
+            markers.set(i, markers.get(i).withBounds(bounds.min(), bounds.size())); return true;
+        }
+        return false;
+    }
+    public void markerPurpose(String id, RoomMarker.Purpose purpose) {
+        if (!roomSession() && purpose == RoomMarker.Purpose.PLAYER_SPAWN) throw new IllegalArgumentException("Player Spawn markers belong to rooms");
+        for (int i = 0; i < markers.size(); i++) if (markers.get(i).name().equalsIgnoreCase(id)) {
+            markers.set(i, markers.get(i).withPurpose(purpose));
+            if (purpose != RoomMarker.Purpose.LOOT) lootBindings.keySet().removeIf(k -> k.equalsIgnoreCase(id));
+            return;
+        }
+        throw new IllegalArgumentException("Unknown marker " + id);
     }
 
     public boolean removeDoor(String id) {
@@ -364,7 +390,7 @@ public final class AuthoringSession {
         for (int i = 0; i < markers.size(); i++) {
             RoomMarker marker = markers.get(i);
             if (marker.name().equalsIgnoreCase(oldId)) {
-                markers.set(i, new RoomMarker(newId, marker.type(), marker.position()));
+                markers.set(i, marker.renamed(newId));
                 LootBinding binding = lootBindings.keySet().stream().filter(key -> key.equalsIgnoreCase(oldId)).findFirst().map(lootBindings::remove).orElse(null);
                 if (binding != null) lootBindings.put(newId, binding);
                 selectedComponent = null;
@@ -378,7 +404,7 @@ public final class AuthoringSession {
         for (int i = 0; i < markers.size(); i++) {
             RoomMarker marker = markers.get(i);
             if (marker.name().equalsIgnoreCase(id)) {
-                markers.set(i, new RoomMarker(marker.name(), marker.type(), localPosition));
+                markers.set(i, marker.withBounds(localPosition, marker.size()));
                 return true;
             }
         }
@@ -489,6 +515,13 @@ public final class AuthoringSession {
         }
     }
 
+    public void replaceMarkers(List<RoomMarker> values, Map<String, LootBinding> bindings) {
+        if (doorSession()) IdentityRules.assertDoorComponents(values, featureSlots);
+        else if (featureSession()) IdentityRules.assertFeatureComponents(values, featureSlots);
+        else IdentityRules.assertRoomComponents(doors, values, featureSlots);
+        markers.clear(); markers.addAll(values); lootBindings.clear(); lootBindings.putAll(bindings);
+        if (selectedComponent != null && selectedComponent.type().equals("marker") && values.stream().noneMatch(m -> m.name().equalsIgnoreCase(selectedComponent.id()))) selectedComponent = null;
+    }
     public List<RoomMarker> markers() {
         return List.copyOf(markers);
     }

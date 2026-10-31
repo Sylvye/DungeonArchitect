@@ -25,20 +25,68 @@ public final class LootService {
 
     public LootService(LootTableRegistry registry, Logger logger) { this.registry = registry; this.logger = logger; }
 
-    public void placeLoot(World world, String ownerId, List<RoomMarker> markers, Map<String, LootBinding> bindings, RoomTransform transform, long dungeonSeed, String placementId) {
-        for (RoomMarker marker : markers) {
-            LootBinding binding = bindings.get(marker.name());
-            if (binding == null) continue;
-            LootTable table = registry.get(binding.tableId()).orElse(null);
-            if (table == null) { logger.warning("Skipped loot marker " + ownerId + "/" + marker.name() + ": unknown table " + binding.tableId()); continue; }
-            IntVector3 worldPosition = transform.transformLocal(marker.position());
-            BlockState state = world.getBlockAt(worldPosition.x(), worldPosition.y(), worldPosition.z()).getState();
-            if (!(state instanceof InventoryHolder holder)) {
-                logger.warning("Skipped loot marker " + ownerId + "/" + marker.name() + ": target is not an inventory");
-                continue;
+    private final ThreadLocal<Batch> collecting = new ThreadLocal<>();
+    public final class Batch {
+        private final List<Request> requests = new ArrayList<>();
+        private boolean finished;
+        /** Validate every target before filling any inventory. Batches belong to one dungeon. */
+        public void finish() {
+            if (finished) throw new IllegalStateException("Loot batch already finished");
+            finished = true;
+            Map<String, Target> targets = new java.util.TreeMap<>();
+            for (Request request : requests) {
+                for (RoomMarker marker : request.markers) {
+                    LootBinding binding = request.bindings.get(marker.name());
+                    if (binding == null) continue;
+                    if (marker.purpose() != RoomMarker.Purpose.LOOT) throw new IllegalArgumentException("Loot binding '" + request.owner + "/" + marker.name() + "' requires a Loot marker");
+                    LootTable table = registry.get(binding.tableId()).orElseThrow(() -> new IllegalArgumentException("Unknown loot table '" + binding.tableId() + "' for " + request.owner + "/" + marker.name()));
+                    Set<String> found = new HashSet<>();
+                    IntVector3 min = marker.position(), max = marker.bounds().max();
+                    for (int x = min.x(); x <= max.x(); x++) for (int y = min.y(); y <= max.y(); y++) for (int z = min.z(); z <= max.z(); z++) {
+                        IntVector3 position = request.transform.transformLocal(new IntVector3(x, y, z));
+                        BlockState state = request.world.getBlockAt(position.x(), position.y(), position.z()).getState();
+                        if (!(state instanceof InventoryHolder holder)) continue;
+                        Inventory inventory = holder.getInventory();
+                        String key = inventoryKey(inventory, request.world, position);
+                        if (!found.add(key)) continue;
+                        String label = request.placement + "/" + request.owner + "/" + marker.name();
+                        Target previous = targets.get(key);
+                        if (previous != null) throw new IllegalArgumentException("Loot markers '" + previous.label + "' and '" + label + "' target the same inventory at " + position);
+                        long randomSeed = seed(request.seed, request.owner, marker.name(), request.placement, Integer.toString(x), Integer.toString(y), Integer.toString(z));
+                        targets.put(key, new Target(label, inventory, table, binding, randomSeed));
+                    }
+                    if (found.isEmpty()) throw new IllegalArgumentException("Loot marker '" + request.owner + "/" + marker.name() + "' contains no containers");
+                }
             }
-            fill(holder.getInventory(), table, binding, registry, new Random(seed(dungeonSeed, ownerId, marker.name(), placementId)));
+            for (Target target : targets.values()) fill(target.inventory, target.table, target.binding, registry, new Random(target.seed));
+            requests.clear();
         }
+    }
+    private record Request(World world, String owner, List<RoomMarker> markers, Map<String, LootBinding> bindings, RoomTransform transform, long seed, String placement) { }
+    private record Target(String label, Inventory inventory, LootTable table, LootBinding binding, long seed) { }
+    public interface Scope extends AutoCloseable { @Override void close(); }
+    public Batch batch() { return new Batch(); }
+    public Scope collect(Batch batch) {
+        Batch previous = collecting.get(); collecting.set(batch);
+        return () -> { if (previous == null) collecting.remove(); else collecting.set(previous); };
+    }
+    public void placeLoot(World world, String ownerId, List<RoomMarker> markers, Map<String, LootBinding> bindings, RoomTransform transform, long dungeonSeed, String placementId) {
+        Batch batch = collecting.get(); boolean immediate = batch == null;
+        if (immediate) batch = batch();
+        batch.requests.add(new Request(world, ownerId, List.copyOf(markers), Map.copyOf(bindings), transform, dungeonSeed, placementId));
+        if (immediate) batch.finish();
+    }
+    private static String inventoryKey(Inventory inventory, World world, IntVector3 fallback) {
+        if (inventory.getHolder() instanceof org.bukkit.block.DoubleChest chest) {
+            String left = locationKey(chest.getLeftSide().getInventory().getLocation());
+            String right = locationKey(chest.getRightSide().getInventory().getLocation());
+            return left.compareTo(right) <= 0 ? left + ":" + right : right + ":" + left;
+        }
+        org.bukkit.Location location = inventory.getLocation();
+        return location == null ? world.getUID() + ":" + fallback.x() + "," + fallback.y() + "," + fallback.z() : locationKey(location);
+    }
+    private static String locationKey(org.bukkit.Location location) {
+        return location.getWorld().getUID() + ":" + location.getBlockX() + "," + location.getBlockY() + "," + location.getBlockZ();
     }
 
     static void fill(Inventory inventory, LootTable table, LootBinding binding, LootTableRegistry registry, Random random) {

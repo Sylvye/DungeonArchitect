@@ -45,9 +45,7 @@ public final class FeatureTemplateValidator {
         }
         try {
             BoundingBox3i bounds = BoundingBox3i.fromMinAndSize(IntVector3.ZERO, template.size());
-            template.markers().stream()
-                .filter(marker -> !bounds.contains(marker.position()))
-                .forEach(marker -> result.add(template.id() + ": marker " + marker.name() + " is outside feature bounds at " + DiagnosticText.position(marker.position()), marker.position()));
+            com.dungeonarchitect.template.MarkerIO.validate(template.id(), template.markers(), template.lootBindings(), bounds, false, result);
             for (RoomFeatureSlot slot : template.featureSlots()) {
                 IntVector3 max = slot.position().add(slot.size()).subtract(new IntVector3(1, 1, 1));
                 if (!bounds.contains(slot.position()) || !bounds.contains(max)) {

@@ -15,7 +15,7 @@ import java.util.function.Consumer;
 
 public final class ChatPromptManager implements Listener {
     private final Plugin plugin;
-    private final Map<UUID, Prompt> prompts = new HashMap<>();
+    private final Map<UUID, Prompt> prompts = new java.util.concurrent.ConcurrentHashMap<>();
 
     public ChatPromptManager(Plugin plugin) {
         this.plugin = plugin;
@@ -31,19 +31,22 @@ public final class ChatPromptManager implements Listener {
         player.sendMessage(Component.text(message + " Type cancel to abort."));
     }
 
+    public boolean hasPrompt(UUID playerId) { return prompts.containsKey(playerId); }
+
     public void discard(UUID playerId) {
         prompts.remove(playerId);
     }
 
     @EventHandler
     public void onChat(AsyncPlayerChatEvent event) {
-        Prompt prompt = prompts.remove(event.getPlayer().getUniqueId());
+        Prompt prompt = prompts.get(event.getPlayer().getUniqueId());
         if (prompt == null) {
             return;
         }
         event.setCancelled(true);
         String message = event.getMessage();
         Bukkit.getScheduler().runTask(plugin, () -> {
+            if (!prompts.remove(event.getPlayer().getUniqueId(), prompt)) return;
             if (message.equalsIgnoreCase("cancel")) {
                 event.getPlayer().sendMessage(Component.text("Edit cancelled."));
                 prompt.cancelHandler.run();

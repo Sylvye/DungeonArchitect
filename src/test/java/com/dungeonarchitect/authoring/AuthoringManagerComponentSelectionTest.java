@@ -147,6 +147,26 @@ final class AuthoringManagerComponentSelectionTest {
         assertThrows(IllegalStateException.class, () -> manager.saveCurrentSelectionAsFeatureBounds(player));
     }
 
+    @Test void markerAreasUseFullWandBoundsAndSelectorOutlines() {
+        Player player = fakePlayer(); World world = fakeWorld(); AuthoringManager manager = manager();
+        AuthoringSession session = manager.session(player); session.loadTemplateForEdit(template(), world, new IntVector3(10,80,10));
+        session.selectCurrentBounds(SelectionBounds.between(new IntVector3(11,80,12), new IntVector3(14,80,15)));
+        String name = manager.addMarkerArea(player, null, "player_spawn_area");
+        assertEquals("spawn_area_1", name); assertEquals(new IntVector3(4,1,4), session.markers().getFirst().size());
+        assertEquals(session.currentSelection().orElseThrow(),manager.selectedComponentSelection(player).orElseThrow().worldBounds());
+        session.selectCurrentBounds(SelectionBounds.between(new IntVector3(12,80,11),new IntVector3(16,81,14)));
+        manager.updateComponentBounds(player,"marker",name); assertEquals(new IntVector3(5,2,4),session.markers().getFirst().size());
+        assertEquals("spawn_area_2",manager.addMarkerArea(player,null,"player_spawn_area"));
+    }
+    @Test void spawnPurposeIsRejectedForDoorAndFeatureMarkers() {
+        AuthoringSession session = new AuthoringSession("feature"); session.featureSession(true);
+        SelectionBounds bounds = SelectionBounds.between(IntVector3.ZERO, new IntVector3(2,0,2));
+        assertThrows(IllegalArgumentException.class,()->session.addMarkerArea("spawn","player_spawn_area",bounds));
+        session.addMarkerArea("loot","loot",bounds);
+        assertThrows(IllegalArgumentException.class,()->session.markerPurpose("loot",RoomMarker.Purpose.PLAYER_SPAWN));
+        assertEquals(RoomMarker.Purpose.LOOT,session.markers().getFirst().purpose());
+    }
+
     private AuthoringManager manager() {
         return new AuthoringManager(null, null, Path.of("build/test-rooms"), Path.of("build/test-features"), null, null, Material.BLAZE_ROD, RoomCategory.GENERIC, 10);
     }

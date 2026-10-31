@@ -69,6 +69,13 @@ public final class RoomStructurePlacer {
         }
     }
 
+    public LootService.Batch lootBatch() { return lootService == null ? null : lootService.batch(); }
+    public void finishLoot(LootService.Batch batch) { if (batch != null) batch.finish(); }
+    public void placeCollected(World world, RoomTemplate template, RoomTransform transform, long seed, int index, List<DungeonEdge> edges, LootService.Batch batch) throws IOException {
+        if (lootService == null) { place(world, template, transform, seed, index, edges); return; }
+        try (LootService.Scope scope = lootService.collect(batch)) { place(world, template, transform, seed, index, edges); }
+    }
+
     public static IntVector3 pasteOrigin(RoomTransform transform) {
         IntVector3 origin = transform.origin();
         IntVector3 size = transform.templateSize();

@@ -172,7 +172,8 @@ final class AuthoringSessionTest {
         assertEquals(RoomCategory.START, session.category());
         assertEquals(7, session.weight());
         assertEquals(Set.of("stone", "starter"), session.tags());
-        assertEquals(new IntVector3(2, 1, 2), session.spawn());
+        assertEquals(null, session.spawn());
+        assertTrue(session.markers().stream().anyMatch(m -> m.purpose() == RoomMarker.Purpose.PLAYER_SPAWN && m.position().equals(new IntVector3(2, 0, 2))));
         assertEquals(template.doors(), session.doors());
         assertEquals(template.markers(), session.markers());
         assertEquals(template.featureSlots(), session.featureSlots());

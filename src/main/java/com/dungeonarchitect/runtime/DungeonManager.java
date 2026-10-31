@@ -83,6 +83,7 @@ public final class DungeonManager {
         if (!result.successful()) {
             throw new IllegalStateException(String.join("; ", result.errors()));
         }
+        validateEntry(templateRegistry.get(result.graph().startNode().templateId()).orElseThrow(), request.playerIds().size());
         DungeonGraph graph = reserveGraph(result.graph());
         World world = worldManager.createWorld(id);
         entityTracker.begin(id, world, graph);
@@ -90,6 +91,7 @@ public final class DungeonManager {
 
         List<RoomInstance> rooms = new ArrayList<>();
         Map<Integer, List<DungeonEdge>> edgesByNode = indexEdges(graph);
+        var lootBatch = structurePlacer.lootBatch();
         try {
             Bukkit.getPluginManager().callEvent(new DungeonCreatedEvent(preparing));
             for (DungeonNode node : graph.nodes()) {
@@ -102,10 +104,11 @@ public final class DungeonManager {
                     + " rotation=" + node.transform().rotation()
                     + " metadataSize=" + template.size()
                     + " bounds=" + node.transform().transformedBounds());
-                structurePlacer.place(world, template, node.transform(), request.seed(), node.index(), edgesByNode.getOrDefault(node.index(), List.of()));
+                structurePlacer.placeCollected(world, template, node.transform(), request.seed(), node.index(), edgesByNode.getOrDefault(node.index(), List.of()), lootBatch);
                 entityTracker.claimRoomEntities(id, world, node.transform().transformedBounds());
                 rooms.add(new RoomInstance(node, template));
             }
+            structurePlacer.finishLoot(lootBatch);
         } catch (IOException ex) {
             abandonPlacement(id, world, graph);
             throw new IllegalStateException("Failed to place dungeon structures: " + ex.getMessage(), ex);
@@ -174,7 +177,10 @@ public final class DungeonManager {
                         future.completeExceptionally(new IllegalStateException(String.join("; ", result.errors())));
                         return;
                     }
-                    beginAsyncPlacement(id, request, reserveGraph(result.graph()), templatesById, startedAt, graphGeneratedAt, future, autoEnter);
+                    try {
+                        if (autoEnter) validateEntry(templatesById.get(result.graph().startNode().templateId()), request.playerIds().size());
+                        beginAsyncPlacement(id, request, reserveGraph(result.graph()), templatesById, startedAt, graphGeneratedAt, future, autoEnter);
+                    } catch (RuntimeException ex) { future.completeExceptionally(ex); }
                 });
             } catch (Exception ex) {
                 Bukkit.getScheduler().runTask(plugin, () -> future.completeExceptionally(ex));
@@ -216,7 +222,7 @@ public final class DungeonManager {
                         world.addPluginChunkTicket(chunk.x, chunk.z, plugin);
                     }
                     long chunksLoadedAt = System.nanoTime();
-                    placeAsyncBatch(new PlacementRun(id, request, graph, world, templatesById, indexEdges(graph), new ArrayList<>(), chunks, startedAt, graphGeneratedAt, chunksLoadedAt, chunksLoadedAt, 0, future, autoEnter));
+                    placeAsyncBatch(new PlacementRun(id, request, graph, world, templatesById, indexEdges(graph), new ArrayList<>(), chunks, startedAt, graphGeneratedAt, chunksLoadedAt, chunksLoadedAt, 0, future, autoEnter, structurePlacer.lootBatch()));
                 } catch (Exception ex) {
                     releaseChunkTickets(world, chunks);
                     abandonPlacement(id, world, graph);
@@ -244,7 +250,7 @@ public final class DungeonManager {
                         + " rotation=" + node.transform().rotation()
                         + " metadataSize=" + template.size()
                         + " bounds=" + node.transform().transformedBounds());
-                structurePlacer.place(run.world, template, node.transform(), run.request.seed(), node.index(), run.edgesByNode.getOrDefault(node.index(), List.of()));
+                structurePlacer.placeCollected(run.world, template, node.transform(), run.request.seed(), node.index(), run.edgesByNode.getOrDefault(node.index(), List.of()), run.lootBatch);
                 entityTracker.claimRoomEntities(run.id, run.world, node.transform().transformedBounds());
                 run.rooms.add(new RoomInstance(node, template));
                 index++;
@@ -268,6 +274,7 @@ public final class DungeonManager {
         aliases.put(nextAlias++, run.id);
         Exception activationFailure = null;
         try {
+            structurePlacer.finishLoot(run.lootBatch);
             Bukkit.getPluginManager().callEvent(new DungeonReadyEvent(instance));
             if (run.autoEnter) {
                 for (UUID playerId : run.request.playerIds()) playerInstances.put(playerId, run.id);
@@ -451,20 +458,21 @@ public final class DungeonManager {
 
     private void teleportPlayersToStart(DungeonInstance instance) {
         RoomInstance start = instance.rooms().get(instance.graph().startNode().index());
-        IntVector3 localSpawn = start.template().spawn() == null ? new IntVector3(1, 1, 1) : start.template().spawn();
-        IntVector3 worldSpawn = start.node().transform().transformLocal(localSpawn);
         World world = Bukkit.getWorld(instance.worldName());
-        if (world == null) {
-            return;
-        }
-        Location spawn = new Location(world, worldSpawn.x() + 0.5, worldSpawn.y(), worldSpawn.z() + 0.5);
-        for (UUID playerId : instance.playerIds()) {
-            Player player = Bukkit.getPlayer(playerId);
+        if (world == null) throw new IllegalStateException("Dungeon world is unavailable");
+        List<UUID> playerIds = instance.playerIds().stream().sorted().toList();
+        List<Location> positions = SpawnAreaResolver.resolve(world, start.template(), start.node().transform(), playerIds.size(), instance.seed(), SpawnAreaResolver::safe);
+        for (int i = 0; i < playerIds.size(); i++) {
+            Player player = Bukkit.getPlayer(playerIds.get(i));
             if (player != null) {
-                player.teleport(spawn);
+                if (!player.teleport(positions.get(i))) throw new IllegalStateException("Dungeon entry teleport was blocked for " + player.getName());
                 updatePlayerRoom(player);
             }
         }
+    }
+    private static void validateEntry(RoomTemplate start, int count) {
+        int capacity = SpawnAreaResolver.candidates(start).size();
+        if (SpawnAreaResolver.areaCount(start) == 0 || capacity < count) throw new com.dungeonarchitect.runtime.SpawnAreaException(start.id(), capacity, count, false);
     }
 
     private synchronized IntVector3 reserveDungeonOffset() {
@@ -600,10 +608,11 @@ public final class DungeonManager {
         long placementStartedAt,
         int nextIndex,
         CompletableFuture<DungeonInstance> future,
-        boolean autoEnter
+        boolean autoEnter,
+        com.dungeonarchitect.loot.LootService.Batch lootBatch
     ) {
         private PlacementRun withNextIndex(int index) {
-            return new PlacementRun(id, request, graph, world, templatesById, edgesByNode, rooms, chunks, startedAt, graphGeneratedAt, chunksLoadedAt, placementStartedAt, index, future, autoEnter);
+            return new PlacementRun(id, request, graph, world, templatesById, edgesByNode, rooms, chunks, startedAt, graphGeneratedAt, chunksLoadedAt, placementStartedAt, index, future, autoEnter, lootBatch);
         }
     }
 }

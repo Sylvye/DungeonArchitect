@@ -75,14 +75,7 @@ public final class RoomTemplateIO {
             ));
         }
 
-        List<RoomMarker> markers = new ArrayList<>();
-        for (ConfigurationSection section : sections(yaml, "markers")) {
-            markers.add(new RoomMarker(
-                section.getString("name"),
-                section.getString("type", "generic"),
-                vector(section.getIntegerList("position"))
-            ));
-        }
+        List<RoomMarker> markers = MarkerIO.load(yaml, lootBindings(yaml));
 
         List<RoomFeatureSlot> featureSlots = new ArrayList<>();
         for (ConfigurationSection section : sections(yaml, "featureSlots")) {
@@ -99,7 +92,10 @@ public final class RoomTemplateIO {
             ));
         }
 
-        RoomTemplate template = new RoomTemplate(id, category, weight, minimumConnections, tags, size, spawn, doors, markers, featureSlots, lootBindings(yaml), structureFile);
+        Set<String> componentNames = new LinkedHashSet<>();
+        doors.forEach(d -> componentNames.add(d.id())); featureSlots.forEach(f -> componentNames.add(f.id()));
+        markers = MarkerIO.withLegacyEntry(markers, spawn, componentNames);
+        RoomTemplate template = new RoomTemplate(id, category, weight, minimumConnections, tags, size, null, doors, markers, featureSlots, lootBindings(yaml), structureFile);
         return new TemplateLoadStatus<>(template, template.id(), roomDirectory, true, errors, repairLog);
         } catch (RuntimeException ex) {
             if (repairs == null) {
@@ -162,15 +158,7 @@ public final class RoomTemplateIO {
         }
         yaml.set("doors", doors);
 
-        List<Map<String, Object>> markers = new ArrayList<>();
-        for (RoomMarker marker : template.markers()) {
-            Map<String, Object> item = new LinkedHashMap<>();
-            item.put("name", marker.name());
-            item.put("type", marker.type());
-            item.put("position", list(marker.position()));
-            markers.add(item);
-        }
-        yaml.set("markers", markers);
+        yaml.set("markers", MarkerIO.save(template.markers()));
         yaml.set("lootBindings", com.dungeonarchitect.loot.LootBindingIO.serialize(template.lootBindings()));
 
         List<Map<String, Object>> slots = new ArrayList<>();

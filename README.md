@@ -21,7 +21,11 @@ The checked-in Gradle wrapper uses Gradle 8.14.3.
 - `/da room bounds` saves the current selection as the room bounds.
 - `/da room door` saves the current selection as a door region using defaults.
 - `/da room door [id] [socketType] [facing]` adds a socket with explicit overrides.
-- `/da room marker add <name> [type]` adds a generic marker at the targeted block.
+- Markers describe rectangular block areas with one purpose: **Generic**, **Loot**, or **Player Spawn**. Open a template's **Edit In World**, select two corners with the normal wand, then open **Markers → Add Marker → Choose Purpose**. Names are automatic and can be changed. A single block remains a valid selection. The Selector outlines the entire area.
+- Click a marker for its purpose, position, dimensions, loot settings, rename/delete, or **Use Current Wand Selection**. During world editing, all marker changes wait for **Save Edit**; **Cancel Edit** discards them. Without an active edit, completed menu settings save metadata immediately.
+- **Loot** markers fill each distinct inventory inside their selection independently. A double chest counts once, even if both halves are selected. Overlapping loot markers targeting the same inventory block dungeon preparation and identify both owners. A Loot marker without a table is inactive.
+- **Player Spawn** markers belong to rooms and select floor blocks. Players stand above safe selected floors and are spread across all of the room's areas, with distinct positions chosen deterministically. Classic start rooms and minigame spawn rooms require authored areas with sufficient safe capacity; no hardcoded entry fallback is used.
+- `/da room marker area <name> [generic|loot|player_spawn_area]` creates an area from the current selection; `/da room marker purpose <name> <purpose>` changes its purpose. Door and feature commands support Generic and Loot areas. Existing `marker add` commands still create one-block markers; legacy `player_spawn` uses the player's feet as before.
 - `/da room component rotate [N|E|S|W|up|down]` rotates the selected room door or feature slot; full direction names are also accepted.
 - `/da room component face [N|E|S|W|up|down]` sets the selected room component's facing without moving it, when that facing is valid.
 - `/da door component` manages the active door template's gateway, markers, and feature slots; unsupported type/action combinations are rejected.
@@ -48,15 +52,19 @@ The checked-in Gradle wrapper uses Gradle 8.14.3.
 - Feature templates may contain weighted feature slots. The dependency graph must be acyclic and is limited by `features.max-nesting-depth` (default 4) and `features.max-expanded-placements` (default 256).
 - If an old template was saved before size-based capture, re-save it from the original build area. `/da room inspect <id>` shows the metadata size and actual `room.nbt` size.
 
+Existing metadata without marker dimensions loads as one-block areas. Legacy spawn feet and Dungeon Entry positions become one-block floor areas; duplicate equivalent entries are avoided. Migration is persisted on the next normal template save and never changes structure files. Enlarge migrated areas when entering more players than their safe capacity.
+
 ## Minigame launches
 
 Open `/da` → **Minigames**, or use `/da minigame` (`/dminigame`, alias `/dmg`).
 
-1. Author a `TEAM_SPAWN` room using the room category editor. While editing its world copy, stand at each desired player position and run `/da room marker add <name> player_spawn`, or use **Add Player Spawn Here** in the room GUI. Add one distinct marker for each supported teammate, then save the room. Markers represent players' feet and need a solid floor and clear headroom inside the room bounds.
+1. Author a `TEAM_SPAWN` room using the room category editor. Open **Spawn Areas: N**, or **Edit Spawn Areas** from minigame setup, to use the same marker screen as every room. Choose **Edit In World**, use `/da wand` to select floor blocks, then **Markers → Add Marker → Player Spawn**. Use `/da` to return to the marker screen during minigame authoring. **Save Edit** saves the template; **Cancel Edit** discards workspace changes. Each team needs enough distinct safe standing positions above the selected floors. Capacity is measured in the workspace and checked again after generation. Complete another active template edit before opening a different workspace. `/da minigame spawns <roomId>` opens this shared editor.
 2. Create a minigame preset. Select one `START` root, an ordinary room pool, and a team-spawn template pool. One weighted spawn template is selected per run and copied for every team. Ordinary rooms cannot be `START` or `TEAM_SPAWN` templates.
 3. Set the total room count and spread settings. Defaults are 32 total rooms, at least 4 door transitions between spawns, and a longest/shortest route ratio no greater than 1.25. Counts include the root and all spawn rooms. Larger team counts may need more rooms and a root with more compatible doors; impossible layouts are refused after 20 bounded attempts. Distances estimate connected-room travel, not obstacles, difficulty, or loot quality.
-4. Select allowed DungeonItems kits, or leave the list empty for no starting gear. Create a run, select its players, then assign teams manually or randomly balance the selected roster. Supports 2–8 teams with 1–4 players each; free-for-all uses teams of one. The run can override the preset's kit list.
+4. Select allowed DungeonItems kits, or leave the list empty for no starting gear. Click **Save Preset** to keep reusable settings; creating, duplicating, and editing presets does not save automatically. **Set Up Match** uses the displayed settings even without saving a preset. Select players by their heads, choose **Teams**, and use **Use All Online & Balance** to replace manual assignments with balanced teams of eligible online players across every page. **Balance Selected** uses only selected players. Supports 2–8 teams with 1–4 players each; free-for-all uses teams of one. Match kit choices can override the preset's list.
 5. **Prepare** validates and builds without moving players. **Start** sends players into their team rooms; it also prepares automatically if necessary. Settings and roster lock when preparation begins. Players stay frozen, choose among multiple kits for up to 10 seconds, and release together after a 5-second countdown. One kit is automatic; unselected choices become random. Missing kits prevent preparation.
+
+Unprepared GUI setup is temporary and never appears in the run list. Closing it, returning to Runs, disconnecting, or starting another setup discards it without confirmation. Internal navigation, chat prompts, and shared marker authoring retain edits. Failed validation keeps the editor open without creating a run. Explicit command/API run creation remains available for integrations.
 
 Players use `/dplay kit [id|random]` and `/dplay exit` without admin permission. During play, enemy-team PvP and looting are enabled; friendly fire and block editing are blocked. Death leads to spectating. Disconnects do not delay launch, and participation is held for 120 seconds. Reconnects preserve progress; players who missed initial selection get a random allowed kit. Combat logging remains the existing combat-log system's responsibility.
 
@@ -69,6 +77,7 @@ Admin command equivalents (run UUID prefixes are accepted):
 /da minigame preset create <id>
 /da minigame preset duplicate <source> <newId>
 /da minigame preset set <id> <root|rooms|spawns|count|distance|ratio|kits> <value>
+/da minigame spawns <roomId>
 /da minigame create <preset> [seed]
 /da minigame assign <run> <player> <team|0>
 /da minigame balance <run> <teamCount> [player1,player2,...]

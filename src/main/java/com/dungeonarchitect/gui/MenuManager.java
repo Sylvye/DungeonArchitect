@@ -131,6 +131,8 @@ public final class MenuManager implements Listener {
     }
 
     public void openMain(Player player) {
+        MarkerReturn context = markerReturns.get(player.getUniqueId());
+        if (context != null) { openMarkerList(player, new MarkerOwner("room", context.room), true, 0); return; }
         Menu menu = menu("da:main", 27, "DungeonArchitect");
         button(menu, 10, Material.BOOKSHELF, "Rooms", List.of("Edit room metadata and validate templates."), this::openRooms);
         button(menu, 12, Material.OAK_DOOR, "Doors", List.of("Edit reusable door templates."), this::openDoors);
@@ -806,12 +808,7 @@ public final class MenuManager implements Listener {
             p.sendMessage(Component.text("Room weight updated."));
             openRoom(p, roomId);
         }));
-        button(menu, 14, Material.COMPASS, "Spawn: " + (template.spawn() == null ? "unset" : template.spawn()), List.of("Format: x,y,z or empty to clear."), p -> prompts.prompt(p, "Enter spawn as x,y,z or empty", value -> {
-            IntVector3 spawn = value.isBlank() ? null : parseVector(value);
-            saveRoom(new RoomTemplate(template.id(), template.category(), template.weight(), template.minimumConnections(), template.tags(), template.size(), spawn, template.doors(), template.markers(), template.featureSlots(), template.lootBindings(), template.structureFile()));
-            p.sendMessage(Component.text("Room spawn updated."));
-            openRoom(p, roomId);
-        }));
+        button(menu, 14, Material.RESPAWN_ANCHOR, "Spawn Areas: " + markers.stream().filter(m -> m.purpose() == RoomMarker.Purpose.PLAYER_SPAWN).count(), List.of("Player Spawn markers select floor blocks.", "Click to manage areas using the normal wand and editor."), p -> openMarkerList(p, new MarkerOwner("room", roomId), true, 0));
         Set<String> currentRoomTags = activeEdit == null ? template.tags() : activeEdit.tags();
         button(menu, 16, Material.OAK_SIGN, "Tags: " + String.join(",", currentRoomTags), List.of("Click to select room tags."), p -> openRoomTags(p, template));
         button(menu, 18, Material.IRON_BARS, "Minimum Connections: " + template.minimumConnections(), List.of("Connections required for every generated copy.", "0 allows this room to end a branch."), p -> prompts.prompt(p, "Enter a non-negative minimum connection count", value -> {
@@ -867,10 +864,6 @@ public final class MenuManager implements Listener {
         button(menu, 28, Material.IRON_DOOR, "Door Slots: " + doors.size(), doors.stream().map(door -> door.id() + " " + door.size() + " " + door.facing()).toList(), p -> openComponents(p, roomId, "door"));
         button(menu, 30, Material.REDSTONE_TORCH, "Markers: " + markers.size(), markers.stream().map(marker -> marker.name() + " " + marker.type()).toList(), p -> openComponents(p, roomId, "marker"));
         button(menu, 32, Material.CHEST, "Feature Slots: " + features.size(), features.stream().map(slot -> slot.id() + " size=" + slot.size()).toList(), p -> openComponents(p, roomId, "feature"));
-        if (template.category() == RoomCategory.TEAM_SPAWN) button(menu, 34, Material.RESPAWN_ANCHOR, "Add Player Spawn Here", List.of("Stand at the desired spawn in this room's edit copy.", "Add one marker per supported teammate.", "Save Edit when finished."), p -> {
-            if (!authoringManager.isEditingRoom(p, roomId)) throw new IllegalStateException("Edit this room in world first");
-            prompts.prompt(p, "Player spawn marker name", name -> { authoringManager.addPlayerSpawn(p, name); openRoom(p, roomId); });
-        });
         button(menu, 36, Material.NAME_TAG, "Rename Room", List.of("Move this room template to a new id."), p -> promptRenameRoom(p, template.id()));
         button(menu, 38, Material.MAP, "Duplicate Room", List.of("Copy this room template to a new id."), p -> promptDuplicateRoom(p, template.id()));
         button(menu, 40, Material.RED_CONCRETE, "Delete Room", List.of("Permanently delete this room template."), p -> openDeleteRoomConfirm(p, template.id()));
@@ -879,6 +872,7 @@ public final class MenuManager implements Listener {
     }
 
     private void openComponents(Player player, String roomId, String type) {
+        if (type.equals("marker")) { openMarkerList(player, new MarkerOwner("room", roomId), false, 0); return; }
         RoomTemplate template = templateRegistry.getVisible(roomId)
             .orElseThrow(() -> new IllegalArgumentException("Unknown room " + roomId));
         AuthoringSession activeEdit = authoringManager.editingSession(player, roomId).orElse(null);
@@ -888,15 +882,6 @@ public final class MenuManager implements Listener {
             var doors = activeEdit == null ? template.doors() : activeEdit.doors();
             for (var door : doors) {
                 button(menu, slot++, Material.IRON_DOOR, door.id(), List.of("Position: " + door.position(), "Size: " + door.size(), "Facing: " + door.facing(), "Entries: " + door.entries().size(), "Left click to edit entries.", "Right click to select in edit world.", "Shift-left to rename.", "Shift-right to delete."), p -> openDoorSlot(p, roomId, door.id()), p -> selectComponent(p, roomId, type, door.id()), p -> promptRenameComponent(p, roomId, type, door.id()), p -> openDeleteComponentConfirm(p, roomId, type, door.id()));
-                if (slot >= 45) {
-                    break;
-                }
-            }
-        } else if (type.equals("marker")) {
-            var markers = activeEdit == null ? template.markers() : activeEdit.markers();
-            var lootBindings = activeEdit == null ? template.lootBindings() : activeEdit.lootBindings();
-            for (var marker : markers) {
-                button(menu, slot++, Material.REDSTONE_TORCH, marker.name(), lootMarkerLore(List.of("Type: " + marker.type(), "Position: " + marker.position()), lootBindings.get(marker.name()), "Click to configure loot.", "Right click to select in edit world."), p -> openRoomMarkerLoot(p, roomId, marker.name()), p -> selectComponent(p, roomId, type, marker.name()), p -> promptRenameComponent(p, roomId, type, marker.name()), p -> openDeleteComponentConfirm(p, roomId, type, marker.name()));
                 if (slot >= 45) {
                     break;
                 }
@@ -923,14 +908,151 @@ public final class MenuManager implements Listener {
         open(player, menu);
     }
 
-    private void openRoomMarkerLoot(Player player, String roomId, String marker) {
-        RoomTemplate room = templateRegistry.getVisible(roomId).orElseThrow();
-        openLootBinding(player, "da:room-loot:" + roomId + ":" + marker, marker, room.lootBindings(), bindings -> {
-            saveRoom(new RoomTemplate(room.id(), room.category(), room.weight(), room.minimumConnections(), room.tags(), room.size(), room.spawn(), room.doors(), room.markers(), room.featureSlots(), bindings, room.structureFile()));
-            authoringManager.synchronizeRoomLootBindings(room.id(), bindings);
-        },
-            () -> openComponents(player, roomId, "marker"));
+    private record MarkerOwner(String kind, String id) { }
+    private record MarkerReturn(String room, java.util.function.Consumer<Player> done) { }
+    private final Map<UUID, MarkerReturn> markerReturns = new HashMap<>();
+    private final Set<UUID> markerPreparing = new LinkedHashSet<>();
+    private final Set<UUID> markerWorld = new LinkedHashSet<>();
+    public boolean retainsMarkerNavigation(Player player) { return markerPreparing.contains(player.getUniqueId()) || markerWorld.contains(player.getUniqueId()) || prompts.hasPrompt(player.getUniqueId()); }
+    public void openRoomSpawnMarkers(Player player, String room, java.util.function.Consumer<Player> done) {
+        markerReturns.put(player.getUniqueId(), new MarkerReturn(room, done));
+        openMarkerList(player, new MarkerOwner("room", room), true, 0);
     }
+    public void closeMarkerNavigation(Player player) { markerReturns.remove(player.getUniqueId()); markerWorld.remove(player.getUniqueId()); }
+    public boolean ownsMarkerNavigation(Player player, Inventory inventory) {
+        MarkerReturn context = markerReturns.get(player.getUniqueId());
+        if (context == null || !(inventory.getHolder() instanceof MenuHolder holder)) return false;
+        return holder.id().startsWith("da:markers:room:" + context.room + ":") || holder.id().startsWith("da:marker:room:" + context.room + ":") || holder.id().equals("da:room:" + context.room) || holder.id().equals("da:multi-select:" + context.room + ":MARKER") || holder.id().equals("da:multi-config:" + context.room + ":marker");
+    }
+    private AuthoringSession markerEdit(Player player, MarkerOwner owner) {
+        return switch (owner.kind) {
+            case "room" -> authoringManager.editingSession(player, owner.id).orElse(null);
+            case "door" -> authoringManager.editingDoorSession(player, owner.id).orElse(null);
+            default -> authoringManager.editingFeatureSession(player, owner.id).orElse(null);
+        };
+    }
+    private List<RoomMarker> ownerMarkers(Player player, MarkerOwner owner) {
+        AuthoringSession edit = markerEdit(player, owner); if (edit != null) return edit.markers();
+        return switch (owner.kind) { case "room" -> templateRegistry.getVisible(owner.id).orElseThrow().markers(); case "door" -> doorRegistry.getVisible(owner.id).orElseThrow().markers(); default -> featureRegistry.getVisible(owner.id).orElseThrow().markers(); };
+    }
+    private Map<String, LootBinding> ownerBindings(Player player, MarkerOwner owner) {
+        AuthoringSession edit = markerEdit(player, owner); if (edit != null) return edit.lootBindings();
+        return switch (owner.kind) { case "room" -> templateRegistry.getVisible(owner.id).orElseThrow().lootBindings(); case "door" -> doorRegistry.getVisible(owner.id).orElseThrow().lootBindings(); default -> featureRegistry.getVisible(owner.id).orElseThrow().lootBindings(); };
+    }
+    private void storeMarkers(Player player, MarkerOwner owner, List<RoomMarker> markers, Map<String, LootBinding> bindings) {
+        AuthoringSession edit = markerEdit(player, owner);
+        if (edit != null) { edit.replaceMarkers(markers, bindings); return; }
+        switch (owner.kind) {
+            case "room" -> { RoomTemplate t = templateRegistry.getVisible(owner.id).orElseThrow(); saveRoom(new RoomTemplate(t.id(), t.category(), t.weight(), t.minimumConnections(), t.tags(), t.size(), null, t.doors(), markers, t.featureSlots(), bindings, t.structureFile())); }
+            case "door" -> { DoorTemplate t = doorRegistry.getVisible(owner.id).orElseThrow(); saveDoorTemplate(new DoorTemplate(t.id(), t.size(), t.tags(), markers, t.featureSlots(), bindings, t.gateway(), t.structureFile())); }
+            default -> { FeatureTemplate t = featureRegistry.getVisible(owner.id).orElseThrow(); saveFeatureTemplate(new FeatureTemplate(t.id(), t.size(), t.tags(), markers, t.featureSlots(), bindings, t.structureFile())); }
+        }
+    }
+    private void markerOwnerMenu(Player player, MarkerOwner owner) {
+        switch (owner.kind) { case "room" -> openRoom(player, owner.id); case "door" -> openDoor(player, owner.id); default -> openFeature(player, owner.id); }
+    }
+    private String markerCapacity(Player player, MarkerOwner owner) {
+        AuthoringSession edit = markerEdit(player, owner);
+        if (!owner.kind.equals("room") || edit == null || !authoringManager.isInEditWorld(player)) return "Room safe capacity: unchecked until preparation";
+        RoomTemplate t = templateRegistry.getVisible(owner.id).orElseThrow();
+        RoomTemplate current = new RoomTemplate(t.id(), edit.category(), t.weight(), t.minimumConnections(), edit.tags(), edit.roomBounds().orElseThrow().size(), null, edit.doors(), edit.markers(), edit.featureSlots(), edit.lootBindings(), t.structureFile());
+        var transform = new com.dungeonarchitect.domain.RoomTransform(edit.roomBounds().orElseThrow().min(), Rotation.NONE, current.size());
+        try { return "Safe capacity: " + com.dungeonarchitect.runtime.SpawnAreaResolver.safePositions(player.getWorld(), current, transform, com.dungeonarchitect.runtime.SpawnAreaResolver::safe).size(); }
+        catch (IllegalArgumentException ex) { return "Invalid spawn bounds: " + ex.getMessage(); }
+    }
+    private void openMarkerList(Player player, MarkerOwner owner, boolean spawns, int number) {
+        markerWorld.remove(player.getUniqueId());
+        List<RoomMarker> entries = ownerMarkers(player, owner).stream().filter(m -> !spawns || m.purpose() == RoomMarker.Purpose.PLAYER_SPAWN).toList();
+        int page = Math.max(0, Math.min(number, Math.max(0, (entries.size() - 1) / 44)));
+        Menu menu = menu("da:markers:" + owner.kind + ":" + owner.id + ":" + page, 54, (spawns ? "Spawn Areas: " : "Markers: ") + owner.id);
+        for (int n = page * 44; n < Math.min(entries.size(), (page + 1) * 44); n++) {
+            RoomMarker marker = entries.get(n);
+            LootBinding loot = ownerBindings(player, owner).get(marker.name());
+            List<String> lore = new ArrayList<>(List.of("Purpose: " + marker.purpose().label(), "Position: " + marker.position(), "Size: " + marker.size(), "Click to edit marker."));
+            if (marker.purpose() == RoomMarker.Purpose.LOOT) lore.add(loot == null ? "Loot: unconfigured (inactive)" : "Loot: " + loot.tableId());
+            if (marker.purpose() == RoomMarker.Purpose.PLAYER_SPAWN) lore.add("Select floor blocks; players stand above them.");
+            button(menu, n % 44, marker.purpose() == RoomMarker.Purpose.LOOT ? Material.CHEST : marker.purpose() == RoomMarker.Purpose.PLAYER_SPAWN ? Material.RESPAWN_ANCHOR : Material.REDSTONE_TORCH, marker.name(), lore, p -> openMarkerSettings(p, owner, marker.name(), spawns));
+        }
+        if (page > 0) button(menu, 45, Material.ARROW, "Previous", List.of(), p -> openMarkerList(p, owner, spawns, page - 1));
+        if ((page + 1) * 44 < entries.size()) button(menu, 53, Material.ARROW, "Next", List.of(), p -> openMarkerList(p, owner, spawns, page + 1));
+        button(menu, 46, Material.REDSTONE_TORCH, "Add Marker", List.of("Select two corners with the Architect's Wand.", "Choose a purpose; a unique name is supplied."), p -> chooseMarkerPurpose(p, owner, null, spawns));
+        if (owner.kind.equals("room")) button(menu, 47, Material.RESPAWN_ANCHOR, "Spawn Areas: " + ownerMarkers(player, owner).stream().filter(m -> m.purpose() == RoomMarker.Purpose.PLAYER_SPAWN).count(), List.of(markerCapacity(player, owner), "Click to toggle the Player Spawn filter."), p -> openMarkerList(p, owner, !spawns, 0));
+        button(menu, 48, Material.STRUCTURE_BLOCK, "Edit In World", List.of("Use /da wand for the standard selection wand.", "Use /da to return after selecting two corners.", "Finish another active edit before switching templates."), p -> beginMarkerWorldEdit(p, owner, spawns));
+        button(menu, 49, Material.ARROW, "Back", List.of(), p -> markerOwnerMenu(p, owner));
+        if (markerEdit(player, owner) != null) {
+            button(menu, 50, Material.EMERALD_BLOCK, "Save Edit", List.of("Save this template's blocks and metadata."), p -> { try { var result = switch (owner.kind) { case "room" -> authoringManager.save(p, owner.id); case "door" -> authoringManager.saveDoor(p, owner.id); default -> authoringManager.saveFeature(p, owner.id); }; switch (owner.kind) { case "room" -> templateRegistry.reload(); case "door" -> doorRegistry.reload(); default -> featureRegistry.reload(); } sendValidation(p, result); openMarkerList(p, owner, spawns, page); } catch (IOException ex) { throw new IllegalStateException("Save failed: " + ex.getMessage(), ex); } });
+            button(menu, 51, Material.BARRIER, "Cancel Edit", List.of("Discard this template's unsaved changes."), p -> { authoringManager.cancelEdit(p); openMarkerList(p, owner, spawns, page); });
+        }
+        button(menu, markerEdit(player, owner) == null ? 50 : 44, Material.HOPPER, "Multi-edit Loot Markers", List.of("Configure loot for multiple Loot markers."), p -> beginMultiEdit(p, owner.kind.equals("room") ? MultiEditOwner.ROOM : owner.kind.equals("door") ? MultiEditOwner.DOOR_TEMPLATE : MultiEditOwner.FEATURE_TEMPLATE, owner.id, MultiEditSlotType.MARKER));
+        MarkerReturn context = markerReturns.get(player.getUniqueId());
+        if (context != null && owner.kind.equals("room") && context.room.equals(owner.id)) button(menu, 52, Material.ENDER_PEARL, "Return to Match Setup", List.of("Use Save Edit first to apply workspace changes."), p -> { markerReturns.remove(p.getUniqueId()); context.done.accept(p); });
+        open(player, menu);
+    }
+    private void beginMarkerWorldEdit(Player player, MarkerOwner owner, boolean spawns) {
+        if (markerEdit(player, owner) != null) { AuthoringSession active = markerEdit(player, owner); if (!authoringManager.isInEditWorld(player)) { var min = active.roomBounds().orElseThrow().min(); player.teleport(new org.bukkit.Location(active.world().orElseThrow(), min.x() + .5, min.y() + 2, min.z() + .5)); } markerWorld.add(player.getUniqueId()); player.closeInventory(); player.sendMessage(Component.text("Use the wand to select two corners, then /da to return to the template's Markers menu. Use Save Edit when finished.")); return; }
+        if (authoringManager.hasActiveSession(player)) throw new IllegalArgumentException("Finish the other active template edit before opening this workspace.");
+        if (dungeonManager != null && dungeonManager.getDungeon(player).isPresent()) throw new IllegalArgumentException("Exit your dungeon before editing a template.");
+        if (!markerPreparing.add(player.getUniqueId())) throw new IllegalArgumentException("Your edit workspace is already preparing");
+        java.util.concurrent.CompletableFuture<AuthoringSession> future;
+        try { future = switch (owner.kind) { case "room" -> authoringManager.editSession(player, templateRegistry.getVisible(owner.id).orElseThrow()); case "door" -> authoringManager.editDoorSession(player, doorRegistry.getVisible(owner.id).orElseThrow()); default -> authoringManager.editFeatureSession(player, featureRegistry.getVisible(owner.id).orElseThrow()); }; } catch (RuntimeException ex) { markerPreparing.remove(player.getUniqueId()); throw ex; }
+        markerWorld.add(player.getUniqueId()); player.closeInventory();
+        future.whenComplete((edit, error) -> { markerPreparing.remove(player.getUniqueId()); if (error != null) player.sendMessage(Component.text("Edit paste failed: " + error.getMessage())); else if (player.isOnline()) { player.sendMessage(Component.text("Select marker bounds with the Architect's Wand. Player Spawn areas select floor blocks. Use Save Edit to save all template changes.")); openMarkerList(player, owner, spawns, 0); } });
+    }
+    private void chooseMarkerPurpose(Player player, MarkerOwner owner, String markerId, boolean spawns) {
+        Menu menu = menu("da:marker:" + owner.kind + ":" + owner.id + ":purpose", 27, "Choose Marker Purpose"); int slot = 10;
+        for (RoomMarker.Purpose purpose : RoomMarker.Purpose.values()) {
+            if (!owner.kind.equals("room") && purpose == RoomMarker.Purpose.PLAYER_SPAWN) continue;
+            button(menu, slot++, purpose == RoomMarker.Purpose.LOOT ? Material.CHEST : purpose == RoomMarker.Purpose.PLAYER_SPAWN ? Material.RESPAWN_ANCHOR : Material.REDSTONE_TORCH, purpose.label(), List.of(purpose == RoomMarker.Purpose.PLAYER_SPAWN ? "Select floor blocks for safe player entry." : purpose == RoomMarker.Purpose.LOOT ? "Fill each distinct container in this area." : "A named area without automatic behavior.", "Changing purpose clears incompatible settings."), p -> {
+                String name = markerId;
+                if (name == null) {
+                    if (markerEdit(p, owner) == null || !authoringManager.isInEditWorld(p)) throw new IllegalArgumentException("Use Edit In World, then select two corners with the wand first.");
+                    name = authoringManager.addMarkerArea(p, null, purpose.id());
+                } else {
+                    String id = name; List<RoomMarker> markers = ownerMarkers(p, owner).stream().map(m -> m.name().equalsIgnoreCase(id) ? m.withPurpose(purpose) : m).toList();
+                    Map<String, LootBinding> bindings = new LinkedHashMap<>(ownerBindings(p, owner)); if (purpose != RoomMarker.Purpose.LOOT) bindings.keySet().removeIf(k -> k.equalsIgnoreCase(id));
+                    storeMarkers(p, owner, markers, bindings);
+                }
+                openMarkerSettings(p, owner, name, spawns);
+            });
+        }
+        button(menu, 22, Material.ARROW, "Back", List.of(), p -> { if (markerId == null) openMarkerList(p, owner, spawns, 0); else openMarkerSettings(p, owner, markerId, spawns); }); open(player, menu);
+    }
+    private void openMarkerSettings(Player player, MarkerOwner owner, String id, boolean spawns) {
+        markerWorld.remove(player.getUniqueId());
+        RoomMarker marker = ownerMarkers(player, owner).stream().filter(m -> m.name().equalsIgnoreCase(id)).findFirst().orElseThrow(() -> new IllegalArgumentException("Unknown marker " + id));
+        Menu menu = menu("da:marker:" + owner.kind + ":" + owner.id + ":" + id, 54, "Marker: " + id);
+        button(menu, 4, Material.REDSTONE_TORCH, marker.purpose().label(), List.of("Position: " + marker.position(), "Size: " + marker.size(), markerEdit(player, owner) == null ? "Completed metadata changes save immediately." : "Workspace changes require Save Edit."), p -> openMarkerSettings(p, owner, id, spawns));
+        button(menu, 10, Material.NAME_TAG, "Rename", List.of(), p -> prompts.prompt(p, "New marker name", text -> {
+            if (text.isBlank()) throw new IllegalArgumentException("Marker name is required");
+            List<RoomMarker> markers = new ArrayList<>(ownerMarkers(p, owner));
+            switch (owner.kind) {
+                case "room" -> { RoomTemplate t = templateRegistry.getVisible(owner.id).orElseThrow(); AuthoringSession edit = markerEdit(p, owner); IdentityRules.requireRoomComponentAvailable(text, edit == null ? t.doors() : edit.doors(), markers, edit == null ? t.featureSlots() : edit.featureSlots(), id); }
+                case "door" -> { DoorTemplate t = doorRegistry.getVisible(owner.id).orElseThrow(); AuthoringSession edit = markerEdit(p, owner); IdentityRules.requireDoorComponentAvailable(text, markers, edit == null ? t.featureSlots() : edit.featureSlots(), id); }
+                default -> { FeatureTemplate t = featureRegistry.getVisible(owner.id).orElseThrow(); AuthoringSession edit = markerEdit(p, owner); IdentityRules.requireFeatureComponentAvailable(text, markers, edit == null ? t.featureSlots() : edit.featureSlots(), id); }
+            }
+            markers.replaceAll(m -> m.name().equalsIgnoreCase(id) ? m.renamed(text) : m);
+            Map<String, LootBinding> bindings = new LinkedHashMap<>(ownerBindings(p, owner)); LootBinding binding = bindings.remove(id); if (binding != null) bindings.put(text, binding);
+            storeMarkers(p, owner, markers, bindings); openMarkerSettings(p, owner, text, spawns);
+        }, () -> openMarkerSettings(p, owner, id, spawns)));
+        button(menu, 12, Material.COMPARATOR, "Purpose: " + marker.purpose().label(), List.of(), p -> chooseMarkerPurpose(p, owner, id, spawns));
+        button(menu, 14, Material.SPYGLASS, "Select In World", List.of("Highlight the marker's full bounds."), p -> { if (markerEdit(p, owner) == null || !authoringManager.isInEditWorld(p)) throw new IllegalArgumentException("Use Edit In World first"); authoringManager.selectComponent(p, "marker", id); markerWorld.add(p.getUniqueId()); p.closeInventory(); });
+        button(menu, 16, Material.WOODEN_AXE, "Use Current Wand Selection", List.of("Replace this marker's entire bounds.", "Player Spawn selections describe floor blocks."), p -> { if (markerEdit(p, owner) == null || !authoringManager.isInEditWorld(p)) throw new IllegalArgumentException("Use Edit In World first"); authoringManager.updateComponentBounds(p, "marker", id); openMarkerSettings(p, owner, id, spawns); });
+        if (marker.purpose() == RoomMarker.Purpose.LOOT) button(menu, 22, Material.CHEST, "Loot Settings", List.of("Apply independently to each distinct inventory."), p -> openLootBinding(p, "da:marker:" + owner.kind + ":" + owner.id + ":" + id + ":loot", id, ownerBindings(p, owner), bindings -> {
+            List<RoomMarker> current = ownerMarkers(p, owner);
+            if (current.stream().noneMatch(m -> m.name().equalsIgnoreCase(id) && m.purpose() == RoomMarker.Purpose.LOOT)) throw new IllegalArgumentException("Marker changed in another editor. Reopen its settings.");
+            Map<String, LootBinding> merged = new LinkedHashMap<>(ownerBindings(p, owner));
+            merged.keySet().removeIf(k -> k.equalsIgnoreCase(id)); if (bindings.containsKey(id)) merged.put(id, bindings.get(id));
+            storeMarkers(p, owner, current, merged);
+        }, () -> openMarkerSettings(p, owner, id, spawns)));
+        if (marker.purpose() == RoomMarker.Purpose.PLAYER_SPAWN) button(menu, 22, Material.RESPAWN_ANCHOR, "Spawn Area", List.of("Players stand above safe floor blocks in this area.", markerCapacity(player, owner)), p -> openMarkerSettings(p, owner, id, spawns));
+        button(menu, 30, Material.RED_CONCRETE, "Delete Marker", List.of("Remove this marker and its loot binding."), p -> {
+            Menu confirm = menu("da:marker:" + owner.kind + ":" + owner.id + ":delete", 27, "Delete Marker?");
+            button(confirm, 11, Material.RED_CONCRETE, "Confirm Delete", List.of(id), q -> { Map<String, LootBinding> bindings = new LinkedHashMap<>(ownerBindings(q, owner)); bindings.keySet().removeIf(k -> k.equalsIgnoreCase(id)); storeMarkers(q, owner, ownerMarkers(q, owner).stream().filter(m -> !m.name().equalsIgnoreCase(id)).toList(), bindings); openMarkerList(q, owner, spawns, 0); });
+            button(confirm, 15, Material.ARROW, "Cancel", List.of(), q -> openMarkerSettings(q, owner, id, spawns)); open(p, confirm);
+        });
+        button(menu, 49, Material.ARROW, "Back", List.of(), p -> openMarkerList(p, owner, spawns, 0)); open(player, menu);
+    }
+
 
     private void openFeatureSlot(Player player, String roomId, String slotId) {
         RoomTemplate template = templateRegistry.getVisible(roomId)
@@ -1464,7 +1586,7 @@ public final class MenuManager implements Listener {
                 for (int i = 0; i < markers.size(); i++) {
                     RoomMarker marker = markers.get(i);
                     if (marker.name().equalsIgnoreCase(oldId)) {
-                        markers.set(i, new RoomMarker(newId, marker.type(), marker.position()));
+                        markers.set(i, marker.renamed(newId));
                         found = true;
                         break;
                     }
@@ -1563,22 +1685,13 @@ public final class MenuManager implements Listener {
     }
 
     private void openDoorComponents(Player player, String doorId, String type) {
+        if (type.equals("marker")) { openMarkerList(player, new MarkerOwner("door", doorId), false, 0); return; }
         DoorTemplate template = doorRegistry.getVisible(doorId)
             .orElseThrow(() -> new IllegalArgumentException("Unknown door " + doorId));
         AuthoringSession activeEdit = authoringManager.editingDoorSession(player, doorId).orElse(null);
         Menu menu = menu("da:door-components:" + doorId + ":" + type, 54, "Door " + titleCase(type) + "s: " + doorId);
         int slot = 0;
-        if (type.equals("marker")) {
-            var markers = activeEdit == null ? template.markers() : activeEdit.markers();
-            var lootBindings = activeEdit == null ? template.lootBindings() : activeEdit.lootBindings();
-            for (var marker : markers) {
-                button(menu, slot++, Material.REDSTONE_TORCH, marker.name(), lootMarkerLore(List.of("Type: " + marker.type(), "Position: " + marker.position()), lootBindings.get(marker.name()), "Click to configure loot.", "Right click to select in edit world."), p -> openDoorMarkerLoot(p, doorId, marker.name()), p -> selectDoorComponent(p, doorId, type, marker.name()), p -> promptRenameDoorComponent(p, doorId, type, marker.name()), p -> openDeleteDoorComponentConfirm(p, doorId, type, marker.name()));
-                if (slot >= 45) {
-                    break;
-                }
-            }
-            button(menu, 45, Material.HOPPER, "Multi-edit", List.of("Configure loot for multiple markers at once."), p -> beginMultiEdit(p, MultiEditOwner.DOOR_TEMPLATE, doorId, MultiEditSlotType.MARKER));
-        } else if (type.equals("feature")) {
+        if (type.equals("feature")) {
             var features = activeEdit == null ? template.featureSlots() : activeEdit.featureSlots();
             for (var feature : features) {
                 button(menu, slot++, Material.CHEST, feature.id(), List.of("Position: " + feature.position(), "Size: " + feature.size(), "Left click to edit entries.", "Right click to select in edit world.", "Shift-left to rename.", "Shift-right to delete."), p -> openDoorFeatureSlot(p, doorId, feature.id()), p -> selectDoorComponent(p, doorId, type, feature.id()), p -> promptRenameDoorComponent(p, doorId, type, feature.id()), p -> openDeleteDoorComponentConfirm(p, doorId, type, feature.id()));
@@ -1698,7 +1811,8 @@ public final class MenuManager implements Listener {
                 }
             }
         } else {
-            for (RoomMarker marker : currentMarkers(session)) {
+            for (RoomMarker marker : currentMarkers(player, session)) {
+                if (marker.purpose() != RoomMarker.Purpose.LOOT) continue;
                 boolean selected = session.selectedSlotIds.contains(marker.name().toLowerCase(Locale.ROOT));
                 button(menu, slotIndex++, selected ? Material.EMERALD_BLOCK : Material.REDSTONE_TORCH, marker.name(), List.of(selected ? "Selected" : "Not selected", "Type: " + marker.type(), "Position: " + marker.position()), p -> {
                     toggleMultiEditSlot(p, marker.name());
@@ -2017,35 +2131,17 @@ public final class MenuManager implements Listener {
             openMultiEditMarkerConfig(player, session);
             return;
         }
-        switch (session.owner) {
-            case ROOM -> {
-                RoomTemplate template = templateRegistry.getVisible(session.ownerId).orElseThrow(() -> new IllegalArgumentException("Unknown room " + session.ownerId));
-                Map<String, LootBinding> bindings = updatedMarkerBindings(template.lootBindings(), session);
-                saveRoom(new RoomTemplate(template.id(), template.category(), template.weight(), template.minimumConnections(), template.tags(), template.size(), template.spawn(), template.doors(), template.markers(), template.featureSlots(), bindings, template.structureFile()));
-                authoringManager.synchronizeRoomLootBindings(template.id(), bindings);
-                openComponents(player, template.id(), "marker");
-            }
-            case DOOR_TEMPLATE -> {
-                DoorTemplate template = doorRegistry.getVisible(session.ownerId).orElseThrow(() -> new IllegalArgumentException("Unknown door " + session.ownerId));
-                Map<String, LootBinding> bindings = updatedMarkerBindings(template.lootBindings(), session);
-                saveDoorTemplate(new DoorTemplate(template.id(), template.size(), template.tags(), template.markers(), template.featureSlots(), bindings, template.gateway(), template.structureFile()));
-                authoringManager.synchronizeDoorLootBindings(template.id(), bindings);
-                openDoorComponents(player, template.id(), "marker");
-            }
-            case FEATURE_TEMPLATE -> {
-                FeatureTemplate template = featureRegistry.getVisible(session.ownerId).orElseThrow(() -> new IllegalArgumentException("Unknown feature " + session.ownerId));
-                Map<String, LootBinding> bindings = updatedMarkerBindings(template.lootBindings(), session);
-                saveFeatureTemplate(new FeatureTemplate(template.id(), template.size(), template.tags(), template.markers(), template.featureSlots(), bindings, template.structureFile()));
-                authoringManager.synchronizeFeatureLootBindings(template.id(), bindings);
-                openFeatureMarkers(player, template.id());
-            }
-        }
+        MarkerOwner owner = new MarkerOwner(session.owner == MultiEditOwner.ROOM ? "room" : session.owner == MultiEditOwner.DOOR_TEMPLATE ? "door" : "feature", session.ownerId);
+        List<RoomMarker> markers = ownerMarkers(player, owner);
+        if (markers.stream().filter(m -> selected(session, m.name())).anyMatch(m -> m.purpose() != RoomMarker.Purpose.LOOT)) throw new IllegalArgumentException("Select only Loot markers for bulk loot editing.");
+        storeMarkers(player, owner, markers, updatedMarkerBindings(player, ownerBindings(player, owner), session));
+        openMarkerList(player, owner, false, 0);
         player.sendMessage(Component.text("Updated loot for " + session.selectedSlotIds.size() + " markers."));
     }
 
-    private Map<String, LootBinding> updatedMarkerBindings(Map<String, LootBinding> existing, MultiEditSession session) {
+    private Map<String, LootBinding> updatedMarkerBindings(Player player, Map<String, LootBinding> existing, MultiEditSession session) {
         Map<String, LootBinding> bindings = new LinkedHashMap<>(existing);
-        for (RoomMarker marker : currentMarkers(session)) {
+        for (RoomMarker marker : currentMarkers(player, session)) {
             if (!selected(session, marker.name())) {
                 continue;
             }
@@ -2331,12 +2427,8 @@ public final class MenuManager implements Listener {
         return doorRegistry.getVisible(session.ownerId).map(DoorTemplate::featureSlots).orElse(List.of());
     }
 
-    private List<RoomMarker> currentMarkers(MultiEditSession session) {
-        return switch (session.owner) {
-            case ROOM -> templateRegistry.getVisible(session.ownerId).map(RoomTemplate::markers).orElse(List.of());
-            case DOOR_TEMPLATE -> doorRegistry.getVisible(session.ownerId).map(DoorTemplate::markers).orElse(List.of());
-            case FEATURE_TEMPLATE -> featureRegistry.getVisible(session.ownerId).map(FeatureTemplate::markers).orElse(List.of());
-        };
+    private List<RoomMarker> currentMarkers(Player player, MultiEditSession session) {
+        return ownerMarkers(player, new MarkerOwner(session.owner == MultiEditOwner.ROOM ? "room" : session.owner == MultiEditOwner.DOOR_TEMPLATE ? "door" : "feature", session.ownerId));
     }
 
     private List<DoorSocket> selectedDoorSlots(Player player, MultiEditSession session) {
@@ -2450,7 +2542,7 @@ public final class MenuManager implements Listener {
                 for (int i = 0; i < markers.size(); i++) {
                     RoomMarker marker = markers.get(i);
                     if (marker.name().equalsIgnoreCase(oldId)) {
-                        markers.set(i, new RoomMarker(newId, marker.type(), marker.position()));
+                        markers.set(i, marker.renamed(newId));
                         found = true;
                         break;
                     }
@@ -2746,65 +2838,9 @@ public final class MenuManager implements Listener {
         openNestedFeatureSlot(player, owner.id(), updatedSlot.id());
     }
 
-    private void openDoorMarkerLoot(Player player, String doorId, String marker) {
-        DoorTemplate door = doorRegistry.getVisible(doorId).orElseThrow();
-        openLootBinding(player, "da:door-loot:" + doorId + ":" + marker, marker, door.lootBindings(), bindings -> {
-            saveDoorTemplate(new DoorTemplate(door.id(), door.size(), door.tags(), door.markers(), door.featureSlots(), bindings, door.gateway(), door.structureFile()));
-            authoringManager.synchronizeDoorLootBindings(door.id(), bindings);
-        },
-            () -> openDoorComponents(player, doorId, "marker"));
-    }
 
-    private void openFeatureMarkers(Player player, String featureId) {
-        FeatureTemplate feature = featureRegistry.getVisible(featureId).orElseThrow();
-        Menu menu = menu("da:feature-markers:" + featureId, 54, "Feature Markers: " + featureId);
-        int slot = 0;
-        for (RoomMarker marker : feature.markers()) {
-            button(menu, slot++, Material.REDSTONE_TORCH, marker.name(), lootMarkerLore(List.of("Position: " + marker.position()), feature.lootBindings().get(marker.name()), "Click to configure loot.", "Shift-right to delete."), p -> openFeatureMarkerLoot(p, featureId, marker.name()), null, null, p -> openDeleteFeatureMarkerConfirm(p, featureId, marker.name()));
-            if (slot >= 45) break;
-        }
-        button(menu, 45, Material.HOPPER, "Multi-edit", List.of("Configure loot for multiple markers at once."), p -> beginMultiEdit(p, MultiEditOwner.FEATURE_TEMPLATE, featureId, MultiEditSlotType.MARKER));
-        button(menu, 49, Material.ARROW, "Back", List.of(), p -> openFeature(p, featureId)); open(player, menu);
-    }
+    private void openFeatureMarkers(Player player, String featureId) { openMarkerList(player, new MarkerOwner("feature", featureId), false, 0); }
 
-    private List<String> lootMarkerLore(List<String> base, LootBinding binding, String... controls) {
-        List<String> lore = new ArrayList<>(base);
-        lore.add(binding == null ? "Loot: none" : "Loot: " + binding.tableId() + " | Rolls: " + binding.minimumRolls() + "-" + binding.maximumRolls());
-        lore.addAll(List.of(controls));
-        return lore;
-    }
-
-    private void openDeleteFeatureMarkerConfirm(Player player, String featureId, String markerId) {
-        Menu menu = menu("da:delete-feature-marker:" + featureId + ":" + markerId, 27, "Delete Marker?");
-        button(menu, 11, Material.RED_CONCRETE, "Confirm Delete", List.of("Deletes marker " + markerId + " and its loot binding."), p -> {
-            boolean removed;
-            if (authoringManager.activeFeatureId(p).filter(id -> id.equalsIgnoreCase(featureId)).isPresent()) {
-                removed = authoringManager.removeComponent(p, "marker", markerId);
-            } else {
-                FeatureTemplate template = featureRegistry.getVisible(featureId).orElseThrow(() -> new IllegalArgumentException("Unknown feature " + featureId));
-                List<RoomMarker> markers = new ArrayList<>(template.markers());
-                removed = markers.removeIf(marker -> marker.name().equalsIgnoreCase(markerId));
-                if (removed) {
-                    Map<String, LootBinding> bindings = new LinkedHashMap<>(template.lootBindings());
-                    bindings.keySet().removeIf(name -> name.equalsIgnoreCase(markerId));
-                    saveFeatureTemplate(new FeatureTemplate(template.id(), template.size(), template.tags(), markers, template.featureSlots(), bindings, template.structureFile()));
-                }
-            }
-            p.sendMessage(Component.text(removed ? "Deleted marker " + markerId + "." : "No matching marker named " + markerId + "."));
-            openFeatureMarkers(p, featureId);
-        });
-        button(menu, 15, Material.GRAY_CONCRETE, "Cancel", List.of(), p -> openFeatureMarkers(p, featureId));
-        open(player, menu);
-    }
-
-    private void openFeatureMarkerLoot(Player player, String featureId, String marker) {
-        FeatureTemplate feature = featureRegistry.getVisible(featureId).orElseThrow();
-        openLootBinding(player, "da:feature-loot:" + featureId + ":" + marker, marker, feature.lootBindings(), bindings -> {
-            saveFeatureTemplate(new FeatureTemplate(feature.id(), feature.size(), feature.tags(), feature.markers(), feature.featureSlots(), bindings, feature.structureFile()));
-            authoringManager.synchronizeFeatureLootBindings(feature.id(), bindings);
-        },
-            () -> openFeatureMarkers(player, featureId));
-    }
 
     private void openLootBinding(Player player, String id, String marker, Map<String, LootBinding> existing, Consumer<Map<String, LootBinding>> save, Runnable back) {
         if (existing.containsKey(marker)) openLootBindingSettings(player, id, marker, existing, save, back);
@@ -3251,6 +3287,7 @@ public final class MenuManager implements Listener {
             return;
         }
         event.setCancelled(true);
+        if (!player.hasPermission("dungeonarchitect.admin") || player.getOpenInventory().getTopInventory() != event.getInventory()) return;
         PlayerMenuActions playerActions = actions.getOrDefault(player.getUniqueId(), new PlayerMenuActions(Map.of(), Map.of(), Map.of(), Map.of()));
         MenuAction action = null;
         if (event.getClick() == ClickType.SHIFT_RIGHT) {
@@ -3268,7 +3305,7 @@ public final class MenuManager implements Listener {
             action = playerActions.actions().get(event.getRawSlot());
         }
         if (action != null) {
-            action.click(player);
+            try { action.click(player); } catch (RuntimeException ex) { player.sendMessage(Component.text("Edit failed: " + ex.getMessage())); }
         }
     }
 
@@ -3383,6 +3420,7 @@ public final class MenuManager implements Listener {
 
     @EventHandler
     public void onDrag(InventoryDragEvent event) {
+        if (event.getInventory().getHolder() instanceof MenuHolder generic && !generic.id().startsWith("da:loot:")) { event.setCancelled(true); return; }
         if (!(event.getWhoClicked() instanceof Player player) || !(event.getInventory().getHolder() instanceof MenuHolder holder) || !holder.id().startsWith("da:loot:")) return;
         if (event.getRawSlots().stream().noneMatch(slot -> slot >= 0 && slot < 45)) return;
         event.setCancelled(true);
@@ -3403,7 +3441,7 @@ public final class MenuManager implements Listener {
                 }
             }
             Bukkit.getScheduler().runTask(plugin, () -> {
-                if (!(event.getPlayer().getOpenInventory().getTopInventory().getHolder() instanceof MenuHolder)) {
+                if (event.getPlayer().getOpenInventory() == null || event.getPlayer().getOpenInventory().getTopInventory() == null || !(event.getPlayer().getOpenInventory().getTopInventory().getHolder() instanceof MenuHolder)) {
                     actions.remove(playerId);
                 }
             });
@@ -3423,6 +3461,7 @@ public final class MenuManager implements Listener {
     @EventHandler
     public void onQuit(PlayerQuitEvent event) {
         UUID playerId = event.getPlayer().getUniqueId();
+        markerReturns.remove(playerId); markerPreparing.remove(playerId); markerWorld.remove(playerId);
         suppressLootClose.remove(playerId);
         LootEditSession session = lootEdits.get(playerId);
         if (session != null) closeLootEditorSession(event.getPlayer(), session);
