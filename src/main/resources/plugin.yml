@@ -6,11 +6,23 @@ author: Sylvye
 description: Developer-authored procedural dungeon foundation for Paper.
 softdepend: [DungeonItems]
 commands:
+  dplay:
+    description: Select a minigame kit or leave your run.
+    permission: dungeonarchitect.play
+    usage: /dplay kit [id|random] | /dplay exit
+  dminigame:
+    aliases: [dmg]
+    description: Manage minigame presets and runs.
+    permission: dungeonarchitect.admin
+    usage: /dminigame
   da:
     description: DungeonArchitect commands
     usage: /da
     permission: dungeonarchitect.admin
 permissions:
+  dungeonarchitect.play:
+    description: Allows participants to select kits and leave their run.
+    default: true
   dungeonarchitect.admin:
     description: Allows authoring, generation, debugging, and instance management.
     default: op

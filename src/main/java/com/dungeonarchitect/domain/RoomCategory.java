@@ -2,6 +2,7 @@ package com.dungeonarchitect.domain;
 
 public enum RoomCategory {
     START,
+    TEAM_SPAWN,
     COMBAT,
     ELITE,
     TREASURE,

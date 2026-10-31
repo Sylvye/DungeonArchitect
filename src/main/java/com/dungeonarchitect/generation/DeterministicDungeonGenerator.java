@@ -45,7 +45,30 @@ public final class DeterministicDungeonGenerator {
     }
 
     public DungeonGenerationResult generate(Collection<RoomTemplate> templates, DungeonGenerationRequest request) {
+        List<SpreadReport> reports = new ArrayList<>();
+        if (request.spread() == null) return generateAttempt(templates, request, reports, false);
+        Map<String, RoomTemplate> byId = templates.stream().collect(Collectors.toMap(RoomTemplate::id, t -> t, (a, b) -> a));
+        TeamSpread spread = request.spread();
+        if (!byId.containsKey(spread.rootId()) || byId.get(spread.rootId()).category() != RoomCategory.START
+            || !byId.containsKey(spread.spawnId()) || byId.get(spread.spawnId()).category() != RoomCategory.TEAM_SPAWN
+            || spread.ordinaryIds().stream().anyMatch(id -> !byId.containsKey(id) || byId.get(id).category() == RoomCategory.START || byId.get(id).category() == RoomCategory.TEAM_SPAWN)) return DungeonGenerationResult.failure("Spread pools must reference a valid START root, TEAM_SPAWN template, and ordinary rooms");
+        String failure = "No valid layout";
+        for (int attempt = 0; attempt < 20; attempt++) {
+            long seed = request.seed() + attempt * 0x9E3779B97F4A7C15L;
+            DungeonGenerationResult result = generateAttempt(templates, new DungeonGenerationRequest(request.roomCount(), seed, request.spread()), reports, attempt < 10);
+            if (result.successful()) return result;
+            failure = String.join("; ", result.errors());
+        }
+        String best = reports.stream().max(Comparator.comparingInt((SpreadReport r) -> r.spawns().size()).thenComparingInt(SpreadReport::shortest)).map(r -> " Best measured spread: " + r.summary()).orElse(" No pair of spawn rooms could meet the minimum distance.");
+        return DungeonGenerationResult.failure("No fair layout after 20 attempts. " + failure + best
+            + ". Increase room count, check template connectivity, or edit spread settings.");
+    }
+
+    private DungeonGenerationResult generateAttempt(Collection<RoomTemplate> templates, DungeonGenerationRequest request, List<SpreadReport> reports, boolean guided) {
         List<RoomTemplate> orderedTemplates = templates.stream()
+            .filter(template -> request.spread() == null ? template.category() != RoomCategory.TEAM_SPAWN
+                : template.id().equals(request.spread().rootId()) || template.id().equals(request.spread().spawnId())
+                    || request.spread().ordinaryIds().contains(template.id()))
             .sorted(Comparator.comparing(RoomTemplate::id))
             .toList();
         List<RoomTemplate> starts = orderedTemplates.stream()
@@ -68,12 +91,13 @@ public final class DeterministicDungeonGenerator {
                 .sorted(Comparator.comparing(RoomTemplate::id))
                 .toList(),
             doorsById,
-            !doorsById.isEmpty()
+            !doorsById.isEmpty(), request.spread(), guided
         );
         SearchState state = new SearchState();
         RoomTemplate start = starts.getFirst();
         RoomTransform startTransform = new RoomTransform(new IntVector3(0, spawnY, 0), Rotation.NONE, start.size());
         state.nodes.add(new DungeonNode(0, start.id(), start.category(), 0, startTransform));
+        state.parents.add(-1);
         state.connectionCounts.add(0);
         state.minimumConnections.add(start.minimumConnections());
         state.occupancy.add(0, startTransform.transformedBounds());
@@ -90,6 +114,7 @@ public final class DeterministicDungeonGenerator {
         Random random = new Random(request.seed());
         boolean completed = search(context, state, random, stats);
         if (!completed) {
+            if (stats.bestSpread != null) reports.add(stats.bestSpread);
             return DungeonGenerationResult.failure(failureMessage(stats));
         }
         return validatedResult(state, context);
@@ -111,7 +136,16 @@ public final class DeterministicDungeonGenerator {
     }
 
     private boolean search(GenerationContext context, SearchState state, Random random, SearchStats stats) {
+        if (++stats.searchSteps > maxSearchSteps) {
+            stats.budgetExhausted = true;
+            return false;
+        }
+        if (context.spread != null && (stats.bestSpread == null || state.spawnCount > stats.bestSpread.spawns().size())) stats.bestSpread = SpreadReport.measure(new DungeonGraph(state.nodes, state.edges));
         if (state.nodes.size() == context.targetRoomCount) {
+            if (context.spread != null) {
+                if (state.spawnCount != context.spread.teams() || state.shortestSpawnDistance < context.spread.minimumDistance()
+                    || state.longestSpawnDistance > state.shortestSpawnDistance * context.spread.maximumRatio()) return false;
+            }
             return !hasRequiredOpenDoors(state) && minimumConnectionDeficit(state) == 0;
         }
         if (requiredOpenDoorCount(state) > context.targetRoomCount - state.nodes.size()) {
@@ -123,11 +157,6 @@ public final class DeterministicDungeonGenerator {
             return false;
         }
         stats.observe(state);
-        if (stats.searchSteps >= maxSearchSteps) {
-            stats.budgetExhausted = true;
-            return false;
-        }
-        stats.searchSteps++;
 
         Selection selection = selectFrontierDoor(context, state, stats);
         if (selection == null) {
@@ -151,7 +180,12 @@ public final class DeterministicDungeonGenerator {
             return false;
         }
 
-        for (Placement placement : orderCandidates(selectedCandidates, random)) {
+        List<Placement> ordered = orderCandidates(selectedCandidates, random);
+        if (context.spread != null) {
+            boolean preferSpawn = state.nodes.get(existing.nodeIndex).depth() + 1 >= context.preferredSpawnDepth;
+            ordered = ordered.stream().sorted(Comparator.comparingInt(p -> (p.template.category() == RoomCategory.TEAM_SPAWN) == preferSpawn ? 0 : 1)).toList();
+        }
+        for (Placement placement : ordered) {
             UndoRecord undo = applyPlacement(context, state, existing, placement);
             if (search(context, state, random, stats)) {
                 return true;
@@ -191,7 +225,9 @@ public final class DeterministicDungeonGenerator {
                 if (bestMinimum == null || candidates.size() < bestMinimum.candidates.size()) {
                     bestMinimum = candidate;
                 }
-            } else if (bestOptional == null || candidates.size() < bestOptional.candidates.size()) {
+            } else if (bestOptional == null || (context.spread != null && state.spawnCount < context.spread.teams()
+                ? spreadFrontierScore(context, state, candidate) > spreadFrontierScore(context, state, bestOptional)
+                : candidates.size() < bestOptional.candidates.size())) {
                 bestOptional = candidate;
             }
         }
@@ -199,6 +235,17 @@ public final class DeterministicDungeonGenerator {
             return bestRequired;
         }
         return bestMinimum != null ? bestMinimum : bestOptional;
+    }
+
+    private int spreadFrontierScore(GenerationContext context, SearchState state, Selection selection) {
+        if (selection.candidates.isEmpty()) return Integer.MIN_VALUE;
+        OpenDoor door = state.openDoors.get(selection.openIndex);
+        DungeonNode node = state.nodes.get(door.nodeIndex);
+        boolean canSpawn = node.depth() + 1 >= context.preferredSpawnDepth
+            && selection.candidates.stream().anyMatch(p -> p.template.category() == RoomCategory.TEAM_SPAWN);
+        // Grow a branch to a useful depth, place its spawn, then grow other branches.
+        int depthScore = node.depth() < context.preferredSpawnDepth ? node.depth() : -node.depth();
+        return (node.category() == RoomCategory.TEAM_SPAWN ? -100000 : 0) + (canSpawn ? 10000 : 0) + depthScore;
     }
 
     private List<Placement> candidatePlacements(GenerationContext context, SearchState state, OpenDoor existing, SearchStats stats) {
@@ -219,7 +266,23 @@ public final class DeterministicDungeonGenerator {
         if (prototypes.isEmpty() && stats != null) {
             stats.compatibilityRejects++;
         }
+        boolean allowSpawn = true;
+        if (context.spread != null) {
+            allowSpawn = state.spawnCount < context.spread.teams();
+            int min = state.shortestSpawnDistance, max = state.longestSpawnDistance;
+            for (DungeonNode node : state.nodes) if (node.category() == RoomCategory.TEAM_SPAWN) {
+                int distance = treeDistance(state, existing.nodeIndex, node.index()) + 1;
+                if (distance < context.searchMinimumDistance) allowSpawn = false;
+                min = Math.min(min, distance); max = Math.max(max, distance);
+            }
+            if (state.spawnCount > 0 && max > min * context.spread.maximumRatio()) allowSpawn = false;
+        }
         for (CandidatePrototype prototype : prototypes) {
+            if (context.spread != null) {
+                boolean spawn = prototype.template.category() == RoomCategory.TEAM_SPAWN;
+                if (spawn && !allowSpawn) continue;
+                if (!spawn && context.targetRoomCount - state.nodes.size() <= context.spread.teams() - state.spawnCount) continue;
+            }
             Placement placement = placementFromPrototype(existing, prototype, context);
             if (placement == null) {
                 if (stats != null) {
@@ -236,6 +299,16 @@ public final class DeterministicDungeonGenerator {
             placements.add(placement);
         }
         return placements;
+    }
+
+    private int treeDistance(SearchState state, int first, int second) {
+        int distance = 0;
+        while (first != second) {
+            if (state.nodes.get(first).depth() >= state.nodes.get(second).depth()) first = state.parents.get(first);
+            else second = state.parents.get(second);
+            distance++;
+        }
+        return distance;
     }
 
     private List<CandidatePrototype> buildCandidatePrototypes(GenerationContext context, DoorSocket existingDoor, Set<String> existingRoomTags, WorldSlotSignature existing) {
@@ -326,14 +399,22 @@ public final class DeterministicDungeonGenerator {
         int nodeIndex = state.nodes.size();
         int firstNewOpenDoor = state.openDoors.size();
         int previousConnectionCount = state.connectionCounts.get(existing.nodeIndex);
+        int previousShortest = state.shortestSpawnDistance, previousLongest = state.longestSpawnDistance;
+        if (placement.template.category() == RoomCategory.TEAM_SPAWN) for (DungeonNode node : state.nodes) if (node.category() == RoomCategory.TEAM_SPAWN) {
+            int distance = treeDistance(state, existing.nodeIndex, node.index()) + 1;
+            state.shortestSpawnDistance = Math.min(state.shortestSpawnDistance, distance);
+            state.longestSpawnDistance = Math.max(state.longestSpawnDistance, distance);
+        }
         state.nodes.add(new DungeonNode(nodeIndex, placement.template.id(), placement.template.category(), state.nodes.get(existing.nodeIndex).depth() + 1, placement.transform));
+        state.parents.add(existing.nodeIndex);
+        if (placement.template.category() == RoomCategory.TEAM_SPAWN) state.spawnCount++;
         state.connectionCounts.set(existing.nodeIndex, previousConnectionCount + 1);
         state.connectionCounts.add(1);
         state.minimumConnections.add(placement.template.minimumConnections());
         state.edges.add(new DungeonEdge(existing.nodeIndex, existing.door.id(), placement.existingDoorTemplateId, nodeIndex, placement.door.id(), placement.candidateDoorTemplateId));
         state.occupancy.add(nodeIndex, placement.bounds);
         addFrontierDoors(context, state, nodeIndex, placement.template, placement.transform, placement.door.id());
-        return new UndoRecord(nodeIndex, firstNewOpenDoor, existing.nodeIndex, previousConnectionCount);
+        return new UndoRecord(nodeIndex, firstNewOpenDoor, existing.nodeIndex, previousConnectionCount, previousShortest, previousLongest);
     }
 
     private void undo(SearchState state, UndoRecord undo) {
@@ -345,7 +426,10 @@ public final class DeterministicDungeonGenerator {
         state.connectionCounts.removeLast();
         state.minimumConnections.removeLast();
         state.connectionCounts.set(undo.sourceNodeIndex, undo.previousSourceConnectionCount);
-        state.nodes.removeLast();
+        if (state.nodes.removeLast().category() == RoomCategory.TEAM_SPAWN) state.spawnCount--;
+        state.parents.removeLast();
+        state.shortestSpawnDistance = undo.previousShortest;
+        state.longestSpawnDistance = undo.previousLongest;
     }
 
     private void addFrontierDoors(GenerationContext context, SearchState state, int nodeIndex, RoomTemplate template, RoomTransform transform, String connectedDoorId) {
@@ -451,6 +535,7 @@ public final class DeterministicDungeonGenerator {
             + ", collision rejects=" + stats.collisionRejects
             + ", compatibility rejects=" + stats.compatibilityRejects
             + ", search steps=" + stats.searchSteps
+            + (stats.bestSpread == null ? "" : ", best spread: " + stats.bestSpread.summary())
             + ". Run /da diagnose for template compatibility hints.";
     }
 
@@ -460,19 +545,37 @@ public final class DeterministicDungeonGenerator {
         private final List<RoomTemplate> candidateTemplates;
         private final Map<String, DoorTemplate> doorsById;
         private final boolean templateDoorMode;
+        private final TeamSpread spread;
+        private final int searchMinimumDistance;
+        private final int preferredSpawnDepth;
         private final Map<DoorSocket, List<DoorChoice>> doorChoicesCache = new HashMap<>();
         private final Map<WorldSlotSignature, List<CandidatePrototype>> candidateCache = new HashMap<>();
 
-        private GenerationContext(int targetRoomCount, List<RoomTemplate> allTemplates, List<RoomTemplate> candidateTemplates, Map<String, DoorTemplate> doorsById, boolean templateDoorMode) {
+        private GenerationContext(int targetRoomCount, List<RoomTemplate> allTemplates, List<RoomTemplate> candidateTemplates, Map<String, DoorTemplate> doorsById, boolean templateDoorMode, TeamSpread spread, boolean guided) {
             this.targetRoomCount = targetRoomCount;
             this.allTemplates = allTemplates;
             this.candidateTemplates = candidateTemplates;
             this.doorsById = doorsById;
             this.templateDoorMode = templateDoorMode;
+            this.spread = spread;
+            int branchLevels = 0;
+            if (spread != null && guided && spread.maximumRatio() > 1) {
+                int rootDoors = allTemplates.stream().filter(t -> t.id().equals(spread.rootId())).findFirst().orElseThrow().doors().size();
+                int branches = Math.max(2, candidateTemplates.stream().filter(t -> t.category() != RoomCategory.TEAM_SPAWN).mapToInt(t -> t.doors().size() - 1).max().orElse(2));
+                double groups = spread.teams() / (double) Math.max(1, rootDoors);
+                if (groups > 1) branchLevels = (int) Math.ceil(Math.log(groups) / Math.log(branches));
+            }
+            // Shared branch stems need longer arms to keep pairwise routes comparable.
+            searchMinimumDistance = spread == null ? 0 : Math.max(spread.minimumDistance(), branchLevels == 0 ? 0 : (int) Math.ceil(2.0 * branchLevels / (spread.maximumRatio() - 1)));
+            preferredSpawnDepth = (searchMinimumDistance + 1) / 2 + branchLevels;
         }
     }
 
     private static final class SearchState {
+        private int spawnCount;
+        private int shortestSpawnDistance = Integer.MAX_VALUE;
+        private int longestSpawnDistance;
+        private final List<Integer> parents = new ArrayList<>();
         private final List<DungeonNode> nodes = new ArrayList<>();
         private final List<DungeonEdge> edges = new ArrayList<>();
         private final List<OpenDoor> openDoors = new ArrayList<>();
@@ -483,6 +586,7 @@ public final class DeterministicDungeonGenerator {
     }
 
     private static final class SearchStats {
+        private SpreadReport bestSpread;
         private int searchSteps;
         private int collisionRejects;
         private int compatibilityRejects;
@@ -524,7 +628,7 @@ public final class DeterministicDungeonGenerator {
     private record OrderedPlacement(Placement placement, double orderKey) {
     }
 
-    private record UndoRecord(int nodeIndex, int firstNewOpenDoor, int sourceNodeIndex, int previousSourceConnectionCount) {
+    private record UndoRecord(int nodeIndex, int firstNewOpenDoor, int sourceNodeIndex, int previousSourceConnectionCount, int previousShortest, int previousLongest) {
     }
 
     private record WorldSlotSignature(boolean templateDoorMode, Direction3 facing, IntVector3 size, SocketType socketType, Set<String> tags, List<DoorSlotEntry> entries, DoorConnectionRules connectionRules, Set<String> roomTags) {

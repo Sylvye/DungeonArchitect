@@ -13,6 +13,12 @@ import java.util.UUID;
 public interface DungeonArchitectAPI {
     DungeonInstance createDungeon(DungeonRequest request);
 
+    default java.util.concurrent.CompletableFuture<DungeonInstance> prepareDungeonAsync(DungeonRequest request) {
+        return java.util.concurrent.CompletableFuture.failedFuture(new UnsupportedOperationException("Dungeon preparation is unavailable"));
+    }
+
+    default com.dungeonarchitect.minigame.MinigameService minigames() { throw new UnsupportedOperationException("Minigames are unavailable"); }
+
     void destroyDungeon(UUID dungeonId);
 
     Optional<DungeonInstance> getDungeon(UUID dungeonId);

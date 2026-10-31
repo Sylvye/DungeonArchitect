@@ -37,7 +37,7 @@ import org.bukkit.plugin.java.JavaPlugin;
 import java.nio.file.Path;
 import java.util.Locale;
 
-public final class DungeonArchitectPlugin extends JavaPlugin {
+public class DungeonArchitectPlugin extends JavaPlugin {
     private DungeonManager dungeonManager;
     private RoomStructureService structureService;
     private RoomTemplateRegistry roomTemplateRegistry;
@@ -49,6 +49,7 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
     private DungeonArchitectAPI api;
     private FeatureNestingPolicy featureNestingPolicy;
     private AuthoringManager authoringManager;
+    private com.dungeonarchitect.minigame.MinigameService minigames;
 
     @Override
     public void onEnable() {
@@ -134,7 +135,20 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
         getServer().getPluginManager().registerEvents(chatPromptManager, this);
         getServer().getPluginManager().registerEvents(menuManager, this);
 
+        minigames = new com.dungeonarchitect.minigame.MinigameService(this, dungeonManager, roomTemplateRegistry);
+        var minigameMenus = new com.dungeonarchitect.minigame.MinigameMenus(this, minigames, roomTemplateRegistry, chatPromptManager, menuManager::openMain);
+        var minigameCommands = new com.dungeonarchitect.minigame.MinigameCommand(minigames, minigameMenus);
+        menuManager.minigames(minigameMenus::open);
+        getServer().getPluginManager().registerEvents(minigameMenus, this);
+        getServer().getPluginManager().registerEvents(new com.dungeonarchitect.minigame.MinigameListener(this, minigames), this);
+        getCommand("dplay").setExecutor(minigameCommands);
+        getCommand("dplay").setTabCompleter(minigameCommands);
+        getCommand("dminigame").setExecutor(minigameCommands);
+        getCommand("dminigame").setTabCompleter(minigameCommands);
+        for (var player : getServer().getOnlinePlayers()) minigames.join(player);
+
         DungeonArchitectCommand command = new DungeonArchitectCommand(getPluginMeta().getVersion(), authoringManager, roomTemplateRegistry, featureTemplateRegistry, doorTemplateRegistry, dungeonManager, menuManager, structureService, assetRenameCoordinator);
+        command.minigames(minigameCommands);
         PluginCommand da = getCommand("da");
         if (da == null) {
             throw new IllegalStateException("Missing /da command registration");
@@ -142,14 +156,18 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
         da.setExecutor(command);
         da.setTabCompleter(command);
 
-        api = new DungeonArchitectService(dungeonManager, roomTemplateRegistry);
+        var service = new DungeonArchitectService(dungeonManager, roomTemplateRegistry);
+        service.minigames(minigames);
+        api = service;
         getServer().getServicesManager().register(DungeonArchitectAPI.class, api, this, ServicePriority.Normal);
         getLogger().info("DungeonArchitect enabled with " + roomTemplateRegistry.all().size() + " room templates.");
     }
 
     @Override
     public void onDisable() {
+        if (minigames != null) minigames.close();
         if (dungeonManager != null) {
+            dungeonManager.cancelPreparations();
             for (var instance : dungeonManager.instances()) {
                 dungeonManager.destroyDungeon(instance.id());
             }
@@ -162,6 +180,7 @@ public final class DungeonArchitectPlugin extends JavaPlugin {
     }
 
     private void reloadContent() {
+        if (minigames != null) minigames.presets().reload();
         reloadConfig();
         updateFeatureNestingPolicy();
         structureService.clearCache();

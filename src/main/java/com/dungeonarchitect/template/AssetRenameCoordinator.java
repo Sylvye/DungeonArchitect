@@ -32,6 +32,15 @@ public final class AssetRenameCoordinator {
     }
 
     public void deleteFeature(String featureId) throws IOException {
+        List<String> owners = featureOwnersReferencing(featureId);
+        if (!owners.isEmpty()) {
+            throw new IllegalStateException("Feature " + featureId + " is referenced by " + String.join(", ", owners));
+        }
+        features.deleteFeature(featureId);
+        reloadAll();
+    }
+
+    public List<String> featureOwnersReferencing(String featureId) {
         List<String> owners = new ArrayList<>(features.featureOwnersReferencing(featureId));
         doors.visible().stream()
             .filter(owner -> owner.featureSlots().stream().flatMap(slot -> slot.entries().stream()).anyMatch(entry -> entry.featureId().equalsIgnoreCase(featureId)))
@@ -39,11 +48,7 @@ public final class AssetRenameCoordinator {
         rooms.visible().stream()
             .filter(owner -> owner.featureSlots().stream().flatMap(slot -> slot.entries().stream()).anyMatch(entry -> entry.featureId().equalsIgnoreCase(featureId)))
             .map(owner -> "room " + owner.id()).forEach(owners::add);
-        if (!owners.isEmpty()) {
-            throw new IllegalStateException("Feature " + featureId + " is referenced by " + String.join(", ", owners.stream().sorted().toList()));
-        }
-        features.deleteFeature(featureId);
-        reloadAll();
+        return owners.stream().sorted().toList();
     }
 
     public DoorTemplate renameDoor(String oldId, String newId) throws IOException {

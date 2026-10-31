@@ -139,8 +139,12 @@ public final class MenuManager implements Listener {
         button(menu, 16, Material.ENDER_PEARL, "Dungeons", List.of("Manage active dungeon instances."), this::openDungeons);
         button(menu, 18, Material.SPYGLASS, "Diagnostics", diagnosticSummaryLore(), this::openDiagnostics);
         button(menu, 22, Material.COMPARATOR, "Config", List.of("Edit config.yml."), this::openConfig);
+        if (minigames != null) button(menu, 24, Material.RESPAWN_ANCHOR, "Minigames", List.of("Presets, teams, kits, and fair dungeon launches."), minigames::accept);
         open(player, menu);
     }
+
+    private java.util.function.Consumer<Player> minigames;
+    public void minigames(java.util.function.Consumer<Player> open) { minigames = open; }
 
     public void openLootTables(Player player) {
         openLootTables(player, 0);
@@ -863,6 +867,10 @@ public final class MenuManager implements Listener {
         button(menu, 28, Material.IRON_DOOR, "Door Slots: " + doors.size(), doors.stream().map(door -> door.id() + " " + door.size() + " " + door.facing()).toList(), p -> openComponents(p, roomId, "door"));
         button(menu, 30, Material.REDSTONE_TORCH, "Markers: " + markers.size(), markers.stream().map(marker -> marker.name() + " " + marker.type()).toList(), p -> openComponents(p, roomId, "marker"));
         button(menu, 32, Material.CHEST, "Feature Slots: " + features.size(), features.stream().map(slot -> slot.id() + " size=" + slot.size()).toList(), p -> openComponents(p, roomId, "feature"));
+        if (template.category() == RoomCategory.TEAM_SPAWN) button(menu, 34, Material.RESPAWN_ANCHOR, "Add Player Spawn Here", List.of("Stand at the desired spawn in this room's edit copy.", "Add one marker per supported teammate.", "Save Edit when finished."), p -> {
+            if (!authoringManager.isEditingRoom(p, roomId)) throw new IllegalStateException("Edit this room in world first");
+            prompts.prompt(p, "Player spawn marker name", name -> { authoringManager.addPlayerSpawn(p, name); openRoom(p, roomId); });
+        });
         button(menu, 36, Material.NAME_TAG, "Rename Room", List.of("Move this room template to a new id."), p -> promptRenameRoom(p, template.id()));
         button(menu, 38, Material.MAP, "Duplicate Room", List.of("Copy this room template to a new id."), p -> promptDuplicateRoom(p, template.id()));
         button(menu, 40, Material.RED_CONCRETE, "Delete Room", List.of("Permanently delete this room template."), p -> openDeleteRoomConfirm(p, template.id()));
@@ -2883,14 +2891,23 @@ public final class MenuManager implements Listener {
 
     private void openDeleteFeatureConfirm(Player player, String featureId) {
         Menu menu = menu("da:delete-feature:" + featureId, 27, "Delete Feature?");
-        button(menu, 11, Material.RED_CONCRETE, "Confirm Delete", List.of("Permanently deletes " + featureId), p -> {
+        List<String> owners = assetRenameCoordinator.featureOwnersReferencing(featureId);
+        if (!owners.isEmpty()) {
+            List<String> lore = new ArrayList<>(List.of("Remove these references before deleting:", "Click to list all references in chat."));
+            lore.addAll(owners);
+            button(menu, 11, Material.BARRIER, "Feature Is In Use", lore, p -> {
+                p.sendMessage(Component.text("Cannot delete feature " + featureId + ": referenced by " + String.join(", ", owners) + ". Remove those selections or delete their owners first."));
+                openDeleteFeatureConfirm(p, featureId);
+            });
+        } else button(menu, 11, Material.RED_CONCRETE, "Confirm Delete", List.of("Permanently deletes " + featureId), p -> {
             try {
                 assetRenameCoordinator.deleteFeature(featureId);
                 p.sendMessage(Component.text("Deleted feature " + featureId));
                 openFeatures(p);
-            } catch (IOException ex) {
+            } catch (IOException | IllegalArgumentException | IllegalStateException ex) {
                 p.sendMessage(Component.text("Delete failed: " + ex.getMessage()));
-                openFeature(p, featureId);
+                if (featureRegistry.getVisible(featureId).isPresent()) openFeature(p, featureId);
+                else openFeatures(p);
             }
         });
         button(menu, 15, Material.GRAY_CONCRETE, "Cancel", List.of(), p -> openFeature(p, featureId));

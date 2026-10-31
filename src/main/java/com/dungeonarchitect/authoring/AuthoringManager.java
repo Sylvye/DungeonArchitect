@@ -596,6 +596,18 @@ public final class AuthoringManager {
         selectComponent(player, "marker", name);
     }
 
+    public void addPlayerSpawn(Player player, String name) {
+        AuthoringSession session = session(player);
+        requireRoomSession(session);
+        SelectionBounds bounds = session.roomBounds().orElseThrow(() -> new IllegalStateException("Save room bounds first"));
+        var location = player.getLocation();
+        IntVector3 position = new IntVector3(location.getBlockX(), location.getBlockY(), location.getBlockZ());
+        if (!bounds.contains(position) || !bounds.contains(position.add(new IntVector3(0, 1, 0))) || !bounds.contains(position.add(new IntVector3(0, -1, 0)))) throw new IllegalArgumentException("Stand inside the room with space for a floor and head");
+        IntVector3 local = bounds.toLocal(position);
+        if (session.markers().stream().anyMatch(marker -> marker.type().equalsIgnoreCase("player_spawn") && marker.position().equals(local))) throw new IllegalArgumentException("A player spawn already exists here");
+        addMarker(player, name, "player_spawn", local);
+    }
+
     public void addDoorMarker(Player player, String name, String type, IntVector3 localPosition) {
         AuthoringSession session = session(player);
         if (!session.doorSession()) {

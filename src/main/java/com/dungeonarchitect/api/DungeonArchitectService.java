@@ -15,6 +15,11 @@ import java.util.UUID;
 public final class DungeonArchitectService implements DungeonArchitectAPI {
     private final DungeonManager dungeonManager;
     private final RoomTemplateRegistry roomTemplateRegistry;
+    private com.dungeonarchitect.minigame.MinigameService minigames;
+
+    public void minigames(com.dungeonarchitect.minigame.MinigameService service) { minigames = service; }
+    @Override public com.dungeonarchitect.minigame.MinigameService minigames() { return minigames; }
+    @Override public java.util.concurrent.CompletableFuture<DungeonInstance> prepareDungeonAsync(DungeonRequest request) { return dungeonManager.prepareDungeonAsync(request); }
 
     public DungeonArchitectService(DungeonManager dungeonManager, RoomTemplateRegistry roomTemplateRegistry) {
         this.dungeonManager = dungeonManager;

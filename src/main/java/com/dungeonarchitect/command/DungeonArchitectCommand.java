@@ -45,6 +45,8 @@ import java.util.Set;
 import java.util.concurrent.CompletionException;
 
 public final class DungeonArchitectCommand implements CommandExecutor, TabCompleter {
+    private com.dungeonarchitect.minigame.MinigameCommand minigames;
+    public void minigames(com.dungeonarchitect.minigame.MinigameCommand command) { minigames = command; }
     private final String version;
     private final AuthoringManager authoringManager;
     private final RoomTemplateRegistry templateRegistry;
@@ -91,6 +93,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
             }
             switch (args[0].toLowerCase(Locale.ROOT)) {
                 case "help" -> help(sender);
+                case "minigame" -> minigames.executeAdmin(sender, java.util.Arrays.copyOfRange(args, 1, args.length));
                 case "version" -> sender.sendMessage(Component.text("DungeonArchitect " + version));
                 case "reload" -> reload(sender);
                 case "wand" -> wand(sender);
@@ -122,6 +125,7 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
 
     private void help(CommandSender sender) {
         sender.sendMessage(Component.text("/da | /da help"));
+        sender.sendMessage(Component.text("/da minigame — presets, teams, and launches | /dplay kit | /dplay exit"));
         sender.sendMessage(Component.text("/da wand | /da selector"));
         sender.sendMessage(Component.text("/da gui | rooms | rooms edit [room] | features | doors | loot | config | dungeons"));
         sender.sendMessage(Component.text("/da room create <id> | edit <id> | cancel | bounds | door [slotName] [socketType] [facing]"));
@@ -278,9 +282,14 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
         if (!args[2].equalsIgnoreCase("add")) {
             throw new IllegalArgumentException("Usage: /da room marker <add|remove> <name> [type]");
         }
+        String type = args.length >= 5 ? args[4] : "generic";
+        if (type.equalsIgnoreCase("player_spawn")) {
+            authoringManager.addPlayerSpawn(player, args[3]);
+            player.sendMessage(Component.text("Added player spawn " + args[3] + " at your feet. Save the room when finished."));
+            return;
+        }
         var local = authoringManager.targetedLocalPosition(player)
             .orElseThrow(() -> new IllegalArgumentException("Look at a block inside selected bounds"));
-        String type = args.length >= 5 ? args[4] : "generic";
         authoringManager.addMarker(player, args[3], type, local);
         player.sendMessage(Component.text("Added marker " + args[3] + " at " + local + "."));
     }
@@ -1076,8 +1085,9 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
 
     @Override
     public @Nullable List<String> onTabComplete(@NotNull CommandSender sender, @NotNull Command command, @NotNull String label, @NotNull String[] args) {
+        if (args.length > 1 && args[0].equalsIgnoreCase("minigame") && minigames != null) return minigames.onTabComplete(sender, command, label, java.util.Arrays.copyOfRange(args, 1, args.length));
         if (args.length == 1) {
-            return prefix(args[0], List.of("help", "version", "reload", "wand", "selector", "gui", "rooms", "features", "doors", "loot", "config", "dungeons", "exit", "room", "feature", "door", "generate", "list", "diagnose", "debug", "teleport", "destroy"));
+            return prefix(args[0], List.of("help", "version", "reload", "wand", "selector", "gui", "rooms", "features", "doors", "loot", "config", "dungeons", "minigame", "exit", "room", "feature", "door", "generate", "list", "diagnose", "debug", "teleport", "destroy"));
         }
         if (args[0].equalsIgnoreCase("diagnose")) {
             if (args.length == 2) {
