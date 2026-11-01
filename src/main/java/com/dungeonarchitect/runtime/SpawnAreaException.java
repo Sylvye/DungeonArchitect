@@ -13,9 +13,9 @@ public class SpawnAreaException extends IllegalArgumentException {
     }
     private static String message(String room, int actual, int required, boolean measured) {
         String prefix = "Spawn room '" + room + "' ";
-        if (measured) return prefix + "has " + actual + " safe spawn positions; the entering group needs " + required + ". Enlarge its Player Spawn areas.";
-        if (actual == 0) return prefix + "has no usable Player Spawn areas; the entering group needs " + required + " positions. Select floor blocks with the wand and add a Player Spawn marker.";
-        return prefix + "has room for at most " + actual + " positions in its authored areas; the entering group needs " + required + ". Enlarge its Player Spawn areas.";
+        if (measured) return prefix + "has " + actual + " safe spawn positions; the entering group needs " + required + ". Enlarge its Spawn areas.";
+        if (actual == 0) return prefix + "has no usable Spawn areas; the entering group needs " + required + " positions. Select floor blocks with the wand and add a Spawn marker.";
+        return prefix + "has room for at most " + actual + " positions in its authored areas; the entering group needs " + required + ". Enlarge its Spawn areas.";
     }
     public String roomId() { return roomId; }
     public Component guidance() {

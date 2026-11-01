@@ -167,6 +167,18 @@ final class AuthoringManagerComponentSelectionTest {
         assertEquals(RoomMarker.Purpose.LOOT,session.markers().getFirst().purpose());
     }
 
+    @Test void twoByTwoSpawnSelectionRetainsAllFourBlocksInOutlineAndCapacity() {
+        Player player = fakePlayer(); World world = fakeWorld(); AuthoringManager manager = manager();
+        var session = manager.session(player); session.loadTemplateForEdit(template(), world, new IntVector3(10,80,10));
+        session.selectCurrentBounds(SelectionBounds.between(new IntVector3(11,80,11),new IntVector3(12,80,12)));
+        String id = manager.addMarkerArea(player,"spawn_test","spawn");
+        assertEquals(new IntVector3(2,1,2),session.markers().getFirst().size());
+        assertEquals(new IntVector3(2,1,2),manager.selectedComponentSelection(player).orElseThrow().worldBounds().size());
+        var saved = new RoomTemplate("room",RoomCategory.GENERIC,1,Set.of(),template().size(),null,List.of(),session.markers(),List.of(),Path.of("room.nbt"));
+        assertEquals(4,com.dungeonarchitect.runtime.SpawnAreaResolver.candidates(saved).size());
+        assertEquals("spawn",session.markers().getFirst().type());
+    }
+
     private AuthoringManager manager() {
         return new AuthoringManager(null, null, Path.of("build/test-rooms"), Path.of("build/test-features"), null, null, Material.BLAZE_ROD, RoomCategory.GENERIC, 10);
     }

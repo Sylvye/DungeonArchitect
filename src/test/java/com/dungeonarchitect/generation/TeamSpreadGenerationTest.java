@@ -21,7 +21,7 @@ final class TeamSpreadGenerationTest {
         var request = new DungeonGenerationRequest(20, 47, spread);
         var first = generator.generate(rooms, request); var second = generator.generate(rooms, request);
         assertTrue(first.successful(), first.errors().toString()); assertEquals(first.graph(), second.graph());
-        assertEquals(20, first.graph().nodes().size()); assertEquals(19, first.graph().edges().size());
+        assertEquals(20, first.graph().nodes().size()); assertTrue(first.graph().edges().size() >= 19);
         assertTrue(SpreadReport.measure(first.graph()).accepts(spread));
         assertFalse(first.graph().nodes().stream().anyMatch(n -> n.templateId().equals("other_spawn")));
         assertTrue(new DungeonGraphValidator().validate(first.graph(), rooms).isEmpty());

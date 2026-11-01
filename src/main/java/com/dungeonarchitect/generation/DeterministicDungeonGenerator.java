@@ -103,13 +103,8 @@ public final class DeterministicDungeonGenerator {
         state.occupancy.add(0, startTransform.transformedBounds());
         addFrontierDoors(context, state, 0, start, startTransform, null);
 
-        if (state.nodes.size() == request.roomCount()) {
-            return validatedResult(state, context);
-        }
-        if (state.openDoors.isEmpty()) {
-            return DungeonGenerationResult.failure("No open doors remain before target room count was reached");
-        }
-
+        if (state.nodes.size() == request.roomCount()) return validatedResult(state, context);
+        if (state.openDoors.isEmpty()) return DungeonGenerationResult.failure("No open doors remain before target room count was reached");
         SearchStats stats = new SearchStats();
         Random random = new Random(request.seed());
         boolean completed = search(context, state, random, stats);
@@ -141,29 +136,40 @@ public final class DeterministicDungeonGenerator {
             return false;
         }
         if (context.spread != null && (stats.bestSpread == null || state.spawnCount > stats.bestSpread.spawns().size())) stats.bestSpread = SpreadReport.measure(new DungeonGraph(state.nodes, state.edges));
-        if (state.nodes.size() == context.targetRoomCount) {
-            if (context.spread != null) {
-                if (state.spawnCount != context.spread.teams() || state.shortestSpawnDistance < context.spread.minimumDistance()
-                    || state.longestSpawnDistance > state.shortestSpawnDistance * context.spread.maximumRatio()) return false;
-            }
-            return !hasRequiredOpenDoors(state) && minimumConnectionDeficit(state) == 0;
+        stats.observe(state);
+        // Closing aligned sockets consumes no rooms and must also run at the room-count limit.
+        boolean requiredPending = hasRequiredOpenDoors(state);
+        for (Closure closure : closures(context, state)) {
+            if (requiredPending && !closure.first.door.connectionRules().mustConnect() && !closure.second.door.connectionRules().mustConnect()) continue;
+            if (state.nodes.size() < context.targetRoomCount && minimumConnectionDeficit(state) == 0 && !closure.first.door.connectionRules().mustConnect() && !closure.second.door.connectionRules().mustConnect()) continue;
+            List<OpenDoor> openBefore = new ArrayList<>(state.openDoors), exhaustedBefore = new ArrayList<>(state.exhaustedDoors);
+            state.openDoors.remove(closure.first); state.openDoors.remove(closure.second);
+            state.exhaustedDoors.remove(closure.first); state.exhaustedDoors.remove(closure.second);
+            state.edges.add(closure.edge);
+            state.connectionCounts.set(closure.first.nodeIndex, state.connectionCounts.get(closure.first.nodeIndex) + 1);
+            state.connectionCounts.set(closure.second.nodeIndex, state.connectionCounts.get(closure.second.nodeIndex) + 1);
+            boolean fair = context.spread == null || state.spawnCount < 2 || SpreadReport.measure(new DungeonGraph(state.nodes, state.edges)).shortest() >= context.spread.minimumDistance();
+            if (fair && search(context, state, random, stats)) return true;
+            state.edges.removeLast();
+            state.connectionCounts.set(closure.first.nodeIndex, state.connectionCounts.get(closure.first.nodeIndex) - 1);
+            state.connectionCounts.set(closure.second.nodeIndex, state.connectionCounts.get(closure.second.nodeIndex) - 1);
+            state.openDoors.clear(); state.openDoors.addAll(openBefore);
+            state.exhaustedDoors.clear(); state.exhaustedDoors.addAll(exhaustedBefore);
+            if (stats.budgetExhausted) return false;
         }
-        if (requiredOpenDoorCount(state) > context.targetRoomCount - state.nodes.size()) {
-            return false;
+        if (state.nodes.size() == context.targetRoomCount) {
+            return !hasRequiredOpenDoors(state) && minimumConnectionDeficit(state) == 0
+                && (context.spread == null || SpreadReport.measure(new DungeonGraph(state.nodes, state.edges)).accepts(context.spread));
         }
         if (!canMeetMinimumConnections(state, context.targetRoomCount - state.nodes.size())) {
-            stats.minimumConnectionRejects++;
-            stats.bestMinimumConnectionDeficit = Math.max(stats.bestMinimumConnectionDeficit, minimumConnectionDeficit(state));
-            return false;
+            stats.minimumConnectionRejects++; return false;
         }
-        stats.observe(state);
 
-        Selection selection = selectFrontierDoor(context, state, stats);
+        Selection selection = selectFrontierDoor(context, state, stats, random);
         if (selection == null) {
             return false;
         }
 
-        OpenDoor selectedDoor = state.openDoors.get(selection.openIndex);
         List<Placement> selectedCandidates = selection.candidates;
         OpenDoor existing = state.openDoors.remove(selection.openIndex);
         if (selectedCandidates.isEmpty()) {
@@ -187,7 +193,7 @@ public final class DeterministicDungeonGenerator {
         }
         for (Placement placement : ordered) {
             UndoRecord undo = applyPlacement(context, state, existing, placement);
-            if (search(context, state, random, stats)) {
+            if ((state.nodes.size() < context.targetRoomCount ? requiredContinuationsPossible(context, state) : terminalRequirementsPossible(context, state)) && search(context, state, random, stats)) {
                 return true;
             }
             undo(state, undo);
@@ -197,6 +203,9 @@ public final class DeterministicDungeonGenerator {
             }
         }
 
+        if (existing.door.connectionRules().mustConnect()) {
+            state.openDoors.add(selection.openIndex, existing); return false;
+        }
         state.exhaustedDoors.add(existing);
         if (search(context, state, random, stats)) {
             return true;
@@ -206,35 +215,70 @@ public final class DeterministicDungeonGenerator {
         return false;
     }
 
-    private Selection selectFrontierDoor(GenerationContext context, SearchState state, SearchStats stats) {
-        Selection bestRequired = null;
-        Selection bestMinimum = null;
-        Selection bestOptional = null;
+    private boolean requiredContinuationsPossible(GenerationContext context, SearchState state) {
+        List<OpenDoor> blocked = state.openDoors.stream().filter(d -> d.door.connectionRules().mustConnect() && candidatePlacements(context, state, d, null).isEmpty()).toList();
+        if (blocked.isEmpty()) return true;
+        java.util.Set<OpenDoor> closable = new java.util.HashSet<>();
+        for (Closure closure : closures(context, state)) { closable.add(closure.first); closable.add(closure.second); }
+        return closable.containsAll(blocked);
+    }
+
+    private boolean terminalRequirementsPossible(GenerationContext context, SearchState state) {
+        if (!hasRequiredOpenDoors(state) && minimumConnectionDeficit(state) == 0) return true;
+        java.util.Set<OpenDoor> closable = new java.util.HashSet<>();
+        for (Closure closure : closures(context, state)) { closable.add(closure.first); closable.add(closure.second); }
+        if (state.openDoors.stream().anyMatch(d -> d.door.connectionRules().mustConnect() && !closable.contains(d))) return false;
+        for (int node = 0; node < state.nodes.size(); node++) {
+            int index = node; long available = closable.stream().filter(d -> d.nodeIndex == index).count();
+            if (state.connectionCounts.get(node) + available < state.minimumConnections.get(node)) return false;
+        }
+        return true;
+    }
+
+    private Selection selectFrontierDoor(GenerationContext context, SearchState state, SearchStats stats, Random random) {
+        Selection bestRequired = null, bestMinimum = null, bestOptional = null, emptyOptional = null;
+        double optionalScore = Double.POSITIVE_INFINITY;
         for (int i = 0; i < state.openDoors.size(); i++) {
-            List<Placement> candidates = candidatePlacements(context, state, state.openDoors.get(i), stats);
-            OpenDoor openDoor = state.openDoors.get(i);
-            if (candidates.isEmpty() && openDoor.door.connectionRules().mustConnect()) {
-                return new Selection(i, candidates);
-            }
+            OpenDoor door = state.openDoors.get(i);
+            List<Placement> candidates = candidatePlacements(context, state, door, stats);
             Selection candidate = new Selection(i, candidates);
-            if (openDoor.door.connectionRules().mustConnect()) {
-                if (bestRequired == null || candidates.size() < bestRequired.candidates.size()) {
-                    bestRequired = candidate;
-                }
-            } else if (state.connectionCounts.get(openDoor.nodeIndex) < state.minimumConnections.get(openDoor.nodeIndex)) {
-                if (bestMinimum == null || candidates.size() < bestMinimum.candidates.size()) {
-                    bestMinimum = candidate;
-                }
-            } else if (bestOptional == null || (context.spread != null && state.spawnCount < context.spread.teams()
-                ? spreadFrontierScore(context, state, candidate) > spreadFrontierScore(context, state, bestOptional)
-                : candidates.size() < bestOptional.candidates.size())) {
-                bestOptional = candidate;
+            if (candidates.isEmpty()) { if (door.door.connectionRules().mustConnect()) return candidate; emptyOptional = candidate; continue; }
+            if (door.door.connectionRules().mustConnect()) {
+                if (bestRequired == null || candidates.size() < bestRequired.candidates.size() || candidates.size() == bestRequired.candidates.size() && random.nextBoolean()) bestRequired = candidate;
+            } else if (state.connectionCounts.get(door.nodeIndex) < state.minimumConnections.get(door.nodeIndex)) {
+                if (bestMinimum == null || candidates.size() < bestMinimum.candidates.size()) bestMinimum = candidate;
+            } else {
+                // All viable optional sockets compete equally; room degree must not bias growth toward branch tips.
+                double score = context.spread != null && state.spawnCount < context.spread.teams()
+                    ? -spreadFrontierScore(context, state, candidate) + random.nextDouble() * .01
+                    : random.nextDouble();
+                if (score < optionalScore) { bestOptional = candidate; optionalScore = score; }
             }
         }
-        if (bestRequired != null) {
-            return bestRequired;
+        return bestRequired != null ? bestRequired : bestMinimum != null ? bestMinimum : bestOptional != null ? bestOptional : emptyOptional;
+    }
+
+    private List<Closure> closures(GenerationContext context, SearchState state) {
+        List<OpenDoor> sockets = new ArrayList<>(state.openDoors); sockets.addAll(state.exhaustedDoors);
+        Map<GatewayKey, List<SocketGateway>> byGateway = new HashMap<>();
+        List<SocketGateway> gateways = new ArrayList<>();
+        for (int i = 0; i < sockets.size(); i++) {
+            OpenDoor socket = sockets.get(i);
+            if (!context.templateDoorMode) gateways.add(new SocketGateway(i, socket, null, new GatewayPlacement(DoorGeometry.transformedBounds(socket.door, socket.transform), socket.transform.transformFacing(socket.door.facing()))));
+            else for (DoorChoice choice : doorChoices(socket.door, context)) gateways.add(new SocketGateway(i, socket, choice.template.id(), gatewayPlacement(socket.door, choice.template, socket.transform)));
         }
-        return bestMinimum != null ? bestMinimum : bestOptional;
+        for (SocketGateway gateway : gateways) byGateway.computeIfAbsent(new GatewayKey(gateway.gateway.bounds, gateway.gateway.facing), ignored -> new ArrayList<>()).add(gateway);
+        List<Closure> result = new ArrayList<>();
+        for (SocketGateway from : gateways) {
+            GatewayKey target = new GatewayKey(DoorGeometry.shifted(from.gateway.bounds, from.gateway.facing.vector()), from.gateway.facing.opposite());
+            for (SocketGateway to : byGateway.getOrDefault(target, List.of())) {
+                OpenDoor first = from.socket, second = to.socket;
+                if (from.index >= to.index || first.nodeIndex == second.nodeIndex || !first.door.compatibleWith(second.door, first.roomTags, second.roomTags)) continue;
+                result.add(new Closure(first, second, new DungeonEdge(first.nodeIndex, first.door.id(), from.templateId, second.nodeIndex, second.door.id(), to.templateId)));
+            }
+        }
+        result.sort(Comparator.comparingInt(c -> c.first.door.connectionRules().mustConnect() || c.second.door.connectionRules().mustConnect() ? 0 : 1));
+        return result;
     }
 
     private int spreadFrontierScore(GenerationContext context, SearchState state, Selection selection) {
@@ -275,7 +319,7 @@ public final class DeterministicDungeonGenerator {
                 if (distance < context.searchMinimumDistance) allowSpawn = false;
                 min = Math.min(min, distance); max = Math.max(max, distance);
             }
-            if (state.spawnCount > 0 && max > min * context.spread.maximumRatio()) allowSpawn = false;
+            // Loops can improve imbalance later; evaluate the ratio only on the completed graph.
         }
         for (CandidatePrototype prototype : prototypes) {
             if (context.spread != null) {
@@ -302,13 +346,20 @@ public final class DeterministicDungeonGenerator {
     }
 
     private int treeDistance(SearchState state, int first, int second) {
-        int distance = 0;
-        while (first != second) {
-            if (state.nodes.get(first).depth() >= state.nodes.get(second).depth()) first = state.parents.get(first);
-            else second = state.parents.get(second);
-            distance++;
+        if (state.edges.size() == state.nodes.size() - 1) {
+            int distance = 0;
+            while (first != second) { if (state.nodes.get(first).depth() >= state.nodes.get(second).depth()) first = state.parents.get(first); else second = state.parents.get(second); distance++; }
+            return distance;
         }
-        return distance;
+        java.util.ArrayDeque<Integer> queue = new java.util.ArrayDeque<>();
+        int[] distance = new int[state.nodes.size()]; java.util.Arrays.fill(distance, -1);
+        queue.add(first); distance[first] = 0;
+        while (!queue.isEmpty()) { int node = queue.remove(); if (node == second) return distance[node];
+            for (DungeonEdge edge : state.edges) { int next = edge.fromNode() == node ? edge.toNode() : edge.toNode() == node ? edge.fromNode() : -1;
+                if (next >= 0 && distance[next] < 0) { distance[next] = distance[node] + 1; queue.add(next); }
+            }
+        }
+        throw new IllegalStateException("Disconnected search graph");
     }
 
     private List<CandidatePrototype> buildCandidatePrototypes(GenerationContext context, DoorSocket existingDoor, Set<String> existingRoomTags, WorldSlotSignature existing) {
@@ -452,16 +503,13 @@ public final class DeterministicDungeonGenerator {
     }
 
     private boolean canMeetMinimumConnections(SearchState state, int remainingPlacements) {
-        if (minimumConnectionDeficit(state) > remainingPlacements) {
-            return false;
-        }
         for (int nodeIndex = 0; nodeIndex < state.nodes.size(); nodeIndex++) {
             int deficit = state.minimumConnections.get(nodeIndex) - state.connectionCounts.get(nodeIndex);
             if (deficit <= 0) {
                 continue;
             }
             int availableDoors = 0;
-            for (OpenDoor openDoor : state.openDoors) {
+            for (OpenDoor openDoor : java.util.stream.Stream.concat(state.openDoors.stream(), state.exhaustedDoors.stream()).toList()) {
                 if (openDoor.nodeIndex == nodeIndex) {
                     availableDoors++;
                 }
@@ -535,8 +583,9 @@ public final class DeterministicDungeonGenerator {
             + ", collision rejects=" + stats.collisionRejects
             + ", compatibility rejects=" + stats.compatibilityRejects
             + ", search steps=" + stats.searchSteps
+            + (stats.requiredSockets.isEmpty() ? "" : ", required sockets: " + stats.requiredSockets)
             + (stats.bestSpread == null ? "" : ", best spread: " + stats.bestSpread.summary())
-            + ". Run /da diagnose for template compatibility hints.";
+            + ". Required sockets cannot be skipped. Check door geometry and room budget, or run /da diagnose for compatibility hints.";
     }
 
     private static final class GenerationContext {
@@ -596,8 +645,11 @@ public final class DeterministicDungeonGenerator {
         private int bestExhaustedDoors;
         private int bestMinimumConnectionDeficit;
         private int minimumConnectionRejects;
+        private String requiredSockets = "";
 
         private void observe(SearchState state) {
+            String required = state.openDoors.stream().filter(d -> d.door.connectionRules().mustConnect()).limit(6).map(d -> state.nodes.get(d.nodeIndex).templateId() + "[" + d.nodeIndex + "]/" + d.door.id()).collect(Collectors.joining(", "));
+            if (!required.isEmpty()) requiredSockets = required;
             if (state.nodes.size() > bestRooms || (state.nodes.size() == bestRooms && state.exhaustedDoors.size() > bestExhaustedDoors)) {
                 bestRooms = state.nodes.size();
                 bestOpenDoors = state.openDoors.size();
@@ -606,6 +658,10 @@ public final class DeterministicDungeonGenerator {
             }
         }
     }
+
+    private record GatewayKey(BoundingBox3i bounds, Direction3 facing) { }
+    private record SocketGateway(int index, OpenDoor socket, String templateId, GatewayPlacement gateway) { }
+    private record Closure(OpenDoor first, OpenDoor second, DungeonEdge edge) { }
 
     private record OpenDoor(int nodeIndex, DoorSocket door, RoomTransform transform, Set<String> roomTags) {
     }

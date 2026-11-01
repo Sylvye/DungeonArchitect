@@ -42,6 +42,20 @@ public final class MinigameService implements AutoCloseable {
     private static void mainThread() { if (!Bukkit.isPrimaryThread()) throw new IllegalStateException("Use the server thread for minigame operations"); }
     public PresetRepository presets() { return presets; }
     public Collection<MinigameRun> runs() { return List.copyOf(runs.values()); }
+    java.util.Collection<RoomTemplate> templateOptions() { return templates.visible(); }
+    public List<String> poolErrors(MinigamePreset preset, String field) {
+        List<String> errors = new ArrayList<>();
+        List<String> ids = field.equals("root") ? List.of(preset.rootId()) : field.equals("spawns") ? preset.spawnRooms() : preset.ordinaryRooms();
+        if (ids.isEmpty() || ids.stream().anyMatch(String::isBlank)) errors.add("Select " + (field.equals("root") ? "one START root room" : field.equals("spawns") ? "TEAM_SPAWN rooms" : "ordinary rooms"));
+        for (String id : ids) {
+            if (id.isBlank()) continue;
+            RoomTemplate room = templates.getVisible(id).orElse(null);
+            if (room == null) { errors.add("Missing room '" + id + "'"); continue; }
+            boolean valid = field.equals("root") ? room.category() == RoomCategory.START : field.equals("spawns") ? room.category() == RoomCategory.TEAM_SPAWN : room.category() != RoomCategory.START && room.category() != RoomCategory.TEAM_SPAWN;
+            if (!valid) errors.add("Room '" + id + "' is " + room.category() + "; " + (field.equals("root") ? "the root requires START" : field.equals("spawns") ? "team spawn rooms require TEAM_SPAWN" : "the ordinary pool excludes START and TEAM_SPAWN"));
+        }
+        return List.copyOf(errors);
+    }
     public List<String> availableKits() { return KitProvider.available(); }
     public void kitMenu(Consumer<Player> menu) { kitMenu = menu; }
     public Optional<MinigameRun> getRun(UUID id) { return Optional.ofNullable(runs.get(id)); }
@@ -153,7 +167,7 @@ public final class MinigameService implements AutoCloseable {
     }
     private RoomTemplate template(String id, RoomCategory category) {
         RoomTemplate room = templates.get(id).orElseThrow(() -> new IllegalArgumentException("Missing template: " + id));
-        if (room.category() != category) throw new IllegalArgumentException(id + " must be a " + category + " template"); return room;
+        if (room.category() != category) throw new IllegalArgumentException("Room '" + id + "' is " + room.category() + "; " + (category == RoomCategory.START ? "the generation root requires START" : "team spawn rooms require TEAM_SPAWN") + ". Choose a room with the required category in preset settings."); return room;
     }
     public static List<IntVector3> spawnMarkers(RoomTemplate template) {
         return com.dungeonarchitect.runtime.SpawnAreaResolver.candidates(template);

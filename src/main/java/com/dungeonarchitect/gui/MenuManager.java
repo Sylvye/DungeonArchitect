@@ -808,7 +808,7 @@ public final class MenuManager implements Listener {
             p.sendMessage(Component.text("Room weight updated."));
             openRoom(p, roomId);
         }));
-        button(menu, 14, Material.RESPAWN_ANCHOR, "Spawn Areas: " + markers.stream().filter(m -> m.purpose() == RoomMarker.Purpose.PLAYER_SPAWN).count(), List.of("Player Spawn markers select floor blocks.", "Click to manage areas using the normal wand and editor."), p -> openMarkerList(p, new MarkerOwner("room", roomId), true, 0));
+        button(menu, 14, Material.RESPAWN_ANCHOR, "Spawn Areas: " + markers.stream().filter(m -> m.purpose() == RoomMarker.Purpose.PLAYER_SPAWN).count(), List.of("Spawn markers select floor blocks.", "Click to manage areas using the normal wand and editor."), p -> openMarkerList(p, new MarkerOwner("room", roomId), true, 0));
         Set<String> currentRoomTags = activeEdit == null ? template.tags() : activeEdit.tags();
         button(menu, 16, Material.OAK_SIGN, "Tags: " + String.join(",", currentRoomTags), List.of("Click to select room tags."), p -> openRoomTags(p, template));
         button(menu, 18, Material.IRON_BARS, "Minimum Connections: " + template.minimumConnections(), List.of("Connections required for every generated copy.", "0 allows this room to end a branch."), p -> prompts.prompt(p, "Enter a non-negative minimum connection count", value -> {
@@ -881,7 +881,7 @@ public final class MenuManager implements Listener {
         if (type.equals("door")) {
             var doors = activeEdit == null ? template.doors() : activeEdit.doors();
             for (var door : doors) {
-                button(menu, slot++, Material.IRON_DOOR, door.id(), List.of("Position: " + door.position(), "Size: " + door.size(), "Facing: " + door.facing(), "Entries: " + door.entries().size(), "Left click to edit entries.", "Right click to select in edit world.", "Shift-left to rename.", "Shift-right to delete."), p -> openDoorSlot(p, roomId, door.id()), p -> selectComponent(p, roomId, type, door.id()), p -> promptRenameComponent(p, roomId, type, door.id()), p -> openDeleteComponentConfirm(p, roomId, type, door.id()));
+                button(menu, slot++, slotAvailability(template, door).available() ? Material.IRON_DOOR : Material.RED_CONCRETE, door.id(), slotAvailabilityLore(template, door), p -> openDoorSlot(p, roomId, door.id()), p -> selectComponent(p, roomId, type, door.id()), p -> promptRenameComponent(p, roomId, type, door.id()), p -> openDeleteComponentConfirm(p, roomId, type, door.id()));
                 if (slot >= 45) {
                     break;
                 }
@@ -976,7 +976,7 @@ public final class MenuManager implements Listener {
         if (page > 0) button(menu, 45, Material.ARROW, "Previous", List.of(), p -> openMarkerList(p, owner, spawns, page - 1));
         if ((page + 1) * 44 < entries.size()) button(menu, 53, Material.ARROW, "Next", List.of(), p -> openMarkerList(p, owner, spawns, page + 1));
         button(menu, 46, Material.REDSTONE_TORCH, "Add Marker", List.of("Select two corners with the Architect's Wand.", "Choose a purpose; a unique name is supplied."), p -> chooseMarkerPurpose(p, owner, null, spawns));
-        if (owner.kind.equals("room")) button(menu, 47, Material.RESPAWN_ANCHOR, "Spawn Areas: " + ownerMarkers(player, owner).stream().filter(m -> m.purpose() == RoomMarker.Purpose.PLAYER_SPAWN).count(), List.of(markerCapacity(player, owner), "Click to toggle the Player Spawn filter."), p -> openMarkerList(p, owner, !spawns, 0));
+        if (owner.kind.equals("room")) button(menu, 47, Material.RESPAWN_ANCHOR, "Spawn Areas: " + ownerMarkers(player, owner).stream().filter(m -> m.purpose() == RoomMarker.Purpose.PLAYER_SPAWN).count(), List.of(markerCapacity(player, owner), "Click to toggle the Spawn filter."), p -> openMarkerList(p, owner, !spawns, 0));
         button(menu, 48, Material.STRUCTURE_BLOCK, "Edit In World", List.of("Use /da wand for the standard selection wand.", "Use /da to return after selecting two corners.", "Finish another active edit before switching templates."), p -> beginMarkerWorldEdit(p, owner, spawns));
         button(menu, 49, Material.ARROW, "Back", List.of(), p -> markerOwnerMenu(p, owner));
         if (markerEdit(player, owner) != null) {
@@ -989,14 +989,14 @@ public final class MenuManager implements Listener {
         open(player, menu);
     }
     private void beginMarkerWorldEdit(Player player, MarkerOwner owner, boolean spawns) {
-        if (markerEdit(player, owner) != null) { AuthoringSession active = markerEdit(player, owner); if (!authoringManager.isInEditWorld(player)) { var min = active.roomBounds().orElseThrow().min(); player.teleport(new org.bukkit.Location(active.world().orElseThrow(), min.x() + .5, min.y() + 2, min.z() + .5)); } markerWorld.add(player.getUniqueId()); player.closeInventory(); player.sendMessage(Component.text("Use the wand to select two corners, then /da to return to the template's Markers menu. Use Save Edit when finished.")); return; }
+        if (markerEdit(player, owner) != null) { AuthoringSession active = markerEdit(player, owner); if (owner.kind.equals("room")) authoringManager.teleportToRoomEdit(player); else if (!authoringManager.isInEditWorld(player)) { var min = active.roomBounds().orElseThrow().min(); player.teleport(new org.bukkit.Location(active.world().orElseThrow(), min.x() + .5, min.y() + 2, min.z() + .5)); } markerWorld.add(player.getUniqueId()); player.closeInventory(); player.sendMessage(Component.text("Use the wand to select two corners, then /da to return to the template's Markers menu. Use Save Edit when finished.")); return; }
         if (authoringManager.hasActiveSession(player)) throw new IllegalArgumentException("Finish the other active template edit before opening this workspace.");
         if (dungeonManager != null && dungeonManager.getDungeon(player).isPresent()) throw new IllegalArgumentException("Exit your dungeon before editing a template.");
         if (!markerPreparing.add(player.getUniqueId())) throw new IllegalArgumentException("Your edit workspace is already preparing");
         java.util.concurrent.CompletableFuture<AuthoringSession> future;
         try { future = switch (owner.kind) { case "room" -> authoringManager.editSession(player, templateRegistry.getVisible(owner.id).orElseThrow()); case "door" -> authoringManager.editDoorSession(player, doorRegistry.getVisible(owner.id).orElseThrow()); default -> authoringManager.editFeatureSession(player, featureRegistry.getVisible(owner.id).orElseThrow()); }; } catch (RuntimeException ex) { markerPreparing.remove(player.getUniqueId()); throw ex; }
         markerWorld.add(player.getUniqueId()); player.closeInventory();
-        future.whenComplete((edit, error) -> { markerPreparing.remove(player.getUniqueId()); if (error != null) player.sendMessage(Component.text("Edit paste failed: " + error.getMessage())); else if (player.isOnline()) { player.sendMessage(Component.text("Select marker bounds with the Architect's Wand. Player Spawn areas select floor blocks. Use Save Edit to save all template changes.")); openMarkerList(player, owner, spawns, 0); } });
+        future.whenComplete((edit, error) -> { markerPreparing.remove(player.getUniqueId()); if (error != null) player.sendMessage(Component.text("Edit paste failed: " + error.getMessage())); else if (player.isOnline()) { player.sendMessage(Component.text("Select marker bounds with the Architect's Wand. Spawn areas select floor blocks. Use Save Edit to save all template changes.")); openMarkerList(player, owner, spawns, 0); } });
     }
     private void chooseMarkerPurpose(Player player, MarkerOwner owner, String markerId, boolean spawns) {
         Menu menu = menu("da:marker:" + owner.kind + ":" + owner.id + ":purpose", 27, "Choose Marker Purpose"); int slot = 10;
@@ -1036,7 +1036,7 @@ public final class MenuManager implements Listener {
         }, () -> openMarkerSettings(p, owner, id, spawns)));
         button(menu, 12, Material.COMPARATOR, "Purpose: " + marker.purpose().label(), List.of(), p -> chooseMarkerPurpose(p, owner, id, spawns));
         button(menu, 14, Material.SPYGLASS, "Select In World", List.of("Highlight the marker's full bounds."), p -> { if (markerEdit(p, owner) == null || !authoringManager.isInEditWorld(p)) throw new IllegalArgumentException("Use Edit In World first"); authoringManager.selectComponent(p, "marker", id); markerWorld.add(p.getUniqueId()); p.closeInventory(); });
-        button(menu, 16, Material.WOODEN_AXE, "Use Current Wand Selection", List.of("Replace this marker's entire bounds.", "Player Spawn selections describe floor blocks."), p -> { if (markerEdit(p, owner) == null || !authoringManager.isInEditWorld(p)) throw new IllegalArgumentException("Use Edit In World first"); authoringManager.updateComponentBounds(p, "marker", id); openMarkerSettings(p, owner, id, spawns); });
+        button(menu, 16, Material.WOODEN_AXE, "Use Current Wand Selection", List.of("Replace this marker's entire bounds.", "Spawn selections describe floor blocks."), p -> { if (markerEdit(p, owner) == null || !authoringManager.isInEditWorld(p)) throw new IllegalArgumentException("Use Edit In World first"); authoringManager.updateComponentBounds(p, "marker", id); openMarkerSettings(p, owner, id, spawns); });
         if (marker.purpose() == RoomMarker.Purpose.LOOT) button(menu, 22, Material.CHEST, "Loot Settings", List.of("Apply independently to each distinct inventory."), p -> openLootBinding(p, "da:marker:" + owner.kind + ":" + owner.id + ":" + id + ":loot", id, ownerBindings(p, owner), bindings -> {
             List<RoomMarker> current = ownerMarkers(p, owner);
             if (current.stream().noneMatch(m -> m.name().equalsIgnoreCase(id) && m.purpose() == RoomMarker.Purpose.LOOT)) throw new IllegalArgumentException("Marker changed in another editor. Reopen its settings.");
@@ -1100,11 +1100,11 @@ public final class MenuManager implements Listener {
             .orElseThrow(() -> new IllegalArgumentException("Unknown door slot " + slotId));
         Menu menu = menu("da:door-slot:" + roomId + ":" + slotId, 54, "Door Slot: " + slotId);
         button(menu, 0, Material.NAME_TAG, "Tags: " + String.join(",", doorSlot.tags()), List.of("Click to select door tags."), p -> promptDoorTags(p, template, doorSlot));
-        button(menu, 1, doorSlot.connectionRules().mustConnect() ? Material.TRIPWIRE_HOOK : Material.GRAY_CONCRETE, "Must Connect: " + doorSlot.connectionRules().mustConnect(), List.of("A generated dungeon is invalid until this slot connects."), p -> toggleDoorMustConnect(p, template, doorSlot));
+        button(menu, 1, doorSlot.connectionRules().mustConnect() ? Material.TRIPWIRE_HOOK : Material.GRAY_CONCRETE, "Must Connect: " + doorSlot.connectionRules().mustConnect(), List.of("This specific doorway must connect to another room.", "It cannot be left unused, even if the room has other connections."), p -> toggleDoorMustConnect(p, template, doorSlot));
         button(menu, 2, Material.LIME_DYE, "Accept Tags: " + String.join(",", doorSlot.connectionRules().allowedTags()), List.of("Select opposite-door tags.", "Empty accepts any tag unless rejected."), p -> promptDoorAllowedTags(p, template, doorSlot));
         button(menu, 3, Material.RED_DYE, "Reject Tags: " + String.join(",", doorSlot.connectionRules().deniedTags()), List.of("Select opposite-door tags."), p -> promptDoorDeniedTags(p, template, doorSlot));
         button(menu, 4, Material.IRON_DOOR, "Slot " + slotId, List.of("Size: " + doorSlot.size(), "Position: " + doorSlot.position(), "Facing: " + doorSlot.facing(), "Tags: " + String.join(",", doorSlot.tags())), p -> openDoorSlot(p, roomId, slotId));
-        button(menu, 5, Material.COMPASS, "Connection Preview", connectionPreviewLore(template, doorSlot), p -> openDoorSlot(p, roomId, slotId));
+        button(menu, 5, slotAvailability(template, doorSlot).available() ? Material.COMPASS : Material.BARRIER, "Connection Preview", slotAvailabilityLore(template, doorSlot), p -> openDoorSlot(p, roomId, slotId));
         button(menu, 6, Material.LIME_BANNER, "Accept Room Tags: " + String.join(",", doorSlot.connectionRules().allowedRoomTags()), List.of("Select opposite-room tags.", "Empty accepts any room unless rejected."), p -> promptDoorAllowedRoomTags(p, template, doorSlot));
         button(menu, 7, Material.RED_BANNER, "Reject Room Tags: " + String.join(",", doorSlot.connectionRules().deniedRoomTags()), List.of("Select opposite-room tags."), p -> promptDoorDeniedRoomTags(p, template, doorSlot));
         int slot = 9;
@@ -1377,35 +1377,14 @@ public final class MenuManager implements Listener {
         }
     }
 
-    private List<String> connectionPreviewLore(RoomTemplate owner, DoorSocket slot) {
-        List<String> lore = new ArrayList<>();
-        int matches = 0;
-        for (RoomTemplate candidateRoom : templateRegistry.all()) {
-            for (DoorSocket candidate : candidateRoom.doors()) {
-                if (candidateRoom.id().equals(owner.id()) && candidate.id().equals(slot.id())) {
-                    continue;
-                }
-                if (candidate.facing() != slot.facing().opposite()) {
-                    continue;
-                }
-                DoorSocket.ConnectionMatch match = slot.connectionMatch(candidate, owner.tags(), candidateRoom.tags());
-                if (match.compatible()) {
-                    matches++;
-                    if (lore.size() < 5) {
-                        lore.add("Compatible: " + candidateRoom.id() + ":" + candidate.id());
-                    }
-                } else if (lore.size() < 5) {
-                    lore.add("Unavailable: " + candidateRoom.id() + ":" + candidate.id() + " - " + match.reason());
-                }
-            }
-        }
-        lore.add(0, "Opposite-facing rule matches: " + matches);
-        if (lore.size() == 1) {
-            lore.add("No opposite-facing room slots found.");
-        }
-        return lore;
+    private com.dungeonarchitect.generation.DoorSlotAvailability slotAvailability(RoomTemplate owner, DoorSocket slot) {
+        return com.dungeonarchitect.generation.DoorSlotAvailability.assess(owner, slot, templateRegistry.all(), doorRegistry.all());
     }
-
+    private List<String> slotAvailabilityLore(RoomTemplate owner, DoorSocket slot) {
+        List<String> lore = new ArrayList<>(List.of("Position: " + slot.position(), "Size: " + slot.size(), "Facing: " + slot.facing()));
+        lore.addAll(slotAvailability(owner,slot).reasons());
+        lore.addAll(List.of("Click to open this slot's existing settings.", "Right click to select in edit world.", "Shift-left to rename.", "Shift-right to delete.")); return lore;
+    }
     private void promptDoorWeight(Player player, RoomTemplate template, DoorSocket slot, String doorId) {
         prompts.prompt(player, "Enter weight for " + doorId, value -> {
             int weight = Integer.parseInt(value);
@@ -1899,7 +1878,7 @@ public final class MenuManager implements Listener {
         initializeMultiDoorRuleDraft(session, selectedSlots);
         Menu menu = menu("da:multi-config:" + session.ownerId + ":door", 54, "Multi-edit Doors");
         button(menu, 0, Material.NAME_TAG, "Tags: " + String.join(",", session.doorTagsDraft), List.of("Select door tags.", "Applies to every selected door."), p -> promptMultiDoorTags(p));
-        button(menu, 1, session.doorConnectionRulesDraft.mustConnect() ? Material.TRIPWIRE_HOOK : Material.GRAY_CONCRETE, "Must Connect: " + session.doorConnectionRulesDraft.mustConnect(), List.of("Applies to every selected door."), p -> toggleMultiDoorMustConnect(p));
+        button(menu, 1, session.doorConnectionRulesDraft.mustConnect() ? Material.TRIPWIRE_HOOK : Material.GRAY_CONCRETE, "Must Connect: " + session.doorConnectionRulesDraft.mustConnect(), List.of("Each selected doorway must connect to another room.", "This is separate from a room minimum connection count."), p -> toggleMultiDoorMustConnect(p));
         button(menu, 2, Material.LIME_DYE, "Accept Tags: " + String.join(",", session.doorConnectionRulesDraft.allowedTags()), List.of("Select opposite-door tags.", "Applies to every selected door."), p -> promptMultiDoorAllowedTags(p));
         button(menu, 3, Material.RED_DYE, "Reject Tags: " + String.join(",", session.doorConnectionRulesDraft.deniedTags()), List.of("Select opposite-door tags.", "Applies to every selected door."), p -> promptMultiDoorDeniedTags(p));
         button(menu, 4, Material.OAK_DOOR, "Draft Door Entries", List.of("Selected slots: " + selectedSlots.size(), "Draft entries: " + session.doorDraft.size(), session.doorEntriesTouched ? "Entry changes apply to every selected slot." : "Entries remain unchanged unless edited."), p -> openMultiEditConfig(p));

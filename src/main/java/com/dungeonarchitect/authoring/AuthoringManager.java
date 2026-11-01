@@ -11,6 +11,8 @@ import com.dungeonarchitect.domain.FeatureTemplate;
 import com.dungeonarchitect.domain.RoomFeatureSlot;
 import com.dungeonarchitect.domain.RoomTemplate;
 import com.dungeonarchitect.domain.RoomMarker;
+import com.dungeonarchitect.domain.RoomTransform;
+import com.dungeonarchitect.domain.Rotation;
 import com.dungeonarchitect.domain.SocketType;
 import com.dungeonarchitect.domain.TagDomain;
 import com.dungeonarchitect.door.BoundaryFacing;
@@ -26,6 +28,7 @@ import com.dungeonarchitect.template.RoomTemplateValidator;
 import com.dungeonarchitect.template.TemplateValidationResult;
 import com.dungeonarchitect.template.TopLevelIdentity;
 import com.dungeonarchitect.util.BukkitVectors;
+import net.kyori.adventure.text.Component;
 import org.bukkit.Color;
 import org.bukkit.Difficulty;
 import org.bukkit.GameRule;
@@ -108,7 +111,7 @@ public final class AuthoringManager {
         ItemStack item = new ItemStack(wandMaterial);
         var meta = item.getItemMeta();
         meta.displayName(GuiItems.text("Architect's Wand", net.kyori.adventure.text.format.NamedTextColor.GOLD));
-        meta.lore(List.of(net.kyori.adventure.text.Component.text("Left click: first corner. Right click: second corner."), net.kyori.adventure.text.Component.text("Use selections for bounds, doors, features, or marker areas."), net.kyori.adventure.text.Component.text("Player Spawn areas select floor blocks.")));
+        meta.lore(List.of(net.kyori.adventure.text.Component.text("Left click: first corner. Right click: second corner."), net.kyori.adventure.text.Component.text("Use selections for bounds, doors, features, or marker areas."), net.kyori.adventure.text.Component.text("Spawn areas select floor blocks.")));
         meta.getPersistentDataContainer().set(wandKey, PersistentDataType.BYTE, (byte) 1);
         item.setItemMeta(meta);
         return item;
@@ -207,7 +210,7 @@ public final class AuthoringManager {
                 AuthoringSession session = new AuthoringSession(template.id());
                 session.loadTemplateForEdit(template, world, workspace.buildOrigin());
                 sessions.put(player.getUniqueId(), session);
-                teleportToWorkspace(player, workspace);
+                teleportToRoomEdit(player);
                 return session;
             } catch (IOException ex) {
                 throw new CompletionException(ex);
@@ -301,6 +304,9 @@ public final class AuthoringManager {
     public Optional<SelectionBounds> roomBounds(Player player) {
         return session(player).roomBounds();
     }
+
+    /** Read-only access for contextual command completion; never opens a session. */
+    public Optional<AuthoringSession> activeSession(Player player) { return Optional.ofNullable(sessions.get(player.getUniqueId())); }
 
     public Optional<String> activeRoomId(Player player) {
         AuthoringSession session = sessions.get(player.getUniqueId());
@@ -1101,6 +1107,19 @@ public final class AuthoringManager {
         );
         clearTask.start();
         return future;
+    }
+
+    public void teleportToRoomEdit(Player player) {
+        AuthoringSession session = activeSession(player).filter(AuthoringSession::roomSession).orElseThrow(() -> new IllegalStateException("Open a room edit first"));
+        SelectionBounds bounds = session.roomBounds().orElseThrow(); World world = session.world().orElseThrow();
+        RoomTemplate template = new RoomTemplate(session.roomId(), session.category(), session.weight(), session.minimumConnections(), session.tags(), bounds.size(), null, session.doors(), session.markers(), session.featureSlots(), session.lootBindings(), roomsDirectory.resolve(session.roomId()).resolve("room.nbt"));
+        IntVector3 origin = workspace(player).buildOrigin(); Location looking = player.getLocation();
+        Location fallback = new Location(world, origin.x()+.5, origin.y()+2, origin.z()+.5, looking.getYaw(), looking.getPitch());
+        long seed = player.getUniqueId().getMostSignificantBits() ^ player.getUniqueId().getLeastSignificantBits() ^ session.roomId().hashCode();
+        var entry = EditorEntryResolver.resolve(world, template, new RoomTransform(bounds.min(), Rotation.NONE, bounds.size()), fallback, seed, com.dungeonarchitect.runtime.SpawnAreaResolver::safe);
+        if (!player.teleport(entry.location())) throw new IllegalStateException("Room editor teleport was blocked");
+        if (entry.source() == EditorEntryResolver.Source.INTERIOR) player.sendMessage(Component.text("No usable spawn area was found; placed you at a safe position inside the room. You can repair its spawn markers here."));
+        if (entry.source() == EditorEntryResolver.Source.WORKSPACE) player.sendMessage(Component.text("No safe standing position exists inside this room; using workspace entry. Clear headroom above a safe floor, then add a spawn marker."));
     }
 
     private void teleportToWorkspace(Player player, EditWorkspace workspace) {

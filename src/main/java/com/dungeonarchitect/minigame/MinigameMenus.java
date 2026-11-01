@@ -108,11 +108,16 @@ public final class MinigameMenus implements Listener, AutoCloseable {
             discard(p); Session session = new Session(entry.value(), true); sessions.put(p.getUniqueId(), session); edit(p, session);
         }));
     }
+    private List<String> poolLore(MinigamePreset preset, String field, List<String> description) {
+        List<String> lore = new ArrayList<>(description);
+        games.poolErrors(preset, field).forEach(error -> lore.add("ERROR: " + error));
+        return lore;
+    }
     private void edit(Player player, Session session) {
         MinigamePreset preset = session.preset; View view = view("Preset: " + preset.id());
-        button(view, 10, Material.STRUCTURE_BLOCK, "Root: " + preset.rootId(), List.of("One START room grows the layout; teams enter their own spawn rooms."), p -> roomPool(p, session, "root", 0));
-        button(view, 12, Material.BOOKSHELF, "Ordinary Rooms: " + preset.ordinaryRooms().size(), preset.ordinaryRooms(), p -> roomPool(p, session, "rooms", 0));
-        button(view, 14, Material.RESPAWN_ANCHOR, "Spawn Rooms: " + preset.spawnRooms().size(), List.of("Select rooms and configure Player Spawn markers.", "Areas need enough safe floor positions for the team."), p -> roomPool(p, session, "spawns", 0));
+        button(view, 10, Material.STRUCTURE_BLOCK, "Root: " + preset.rootId(), poolLore(preset, "root", List.of("One START room grows the layout; teams enter their own spawn rooms.")), p -> roomPool(p, session, "root", 0));
+        button(view, 12, Material.BOOKSHELF, "Ordinary Rooms: " + preset.ordinaryRooms().size(), poolLore(preset, "rooms", preset.ordinaryRooms()), p -> roomPool(p, session, "rooms", 0));
+        button(view, 14, Material.RESPAWN_ANCHOR, "Spawn Rooms: " + preset.spawnRooms().size(), poolLore(preset, "spawns", List.of("Select rooms and configure Spawn markers.", "Areas need enough safe floor positions for the team.")), p -> roomPool(p, session, "spawns", 0));
         button(view, 16, Material.IRON_SWORD, "Allowed Kits: " + preset.kits().size(), preset.kits(), p -> allowedKits(p, preset.kits(), kits -> session.preset = session.preset.with("kits", String.join(",", kits)), q -> edit(q, session), 0));
         number(view, 20, "Total Rooms", Integer.toString(preset.roomCount()), "count", session);
         number(view, 22, "Minimum Door Distance", Integer.toString(preset.minimumDistance()), "distance", session);

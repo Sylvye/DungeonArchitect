@@ -30,10 +30,33 @@ public final class DungeonGraphValidator {
             doorsById.put(template.id(), template);
         }
         List<String> errors = new ArrayList<>();
+        if (!validateStructure(graph, byId, errors)) return errors;
         validateEdges(graph, byId, doorsById, errors);
         validateMinimumConnections(graph, byId, errors);
         validateBounds(graph, errors);
         return errors;
+    }
+
+    private boolean validateStructure(DungeonGraph graph, Map<String, RoomTemplate> templates, List<String> errors) {
+        if (graph.nodes().isEmpty()) { errors.add("Dungeon graph has no rooms"); return false; }
+        for (int i = 0; i < graph.nodes().size(); i++) {
+            DungeonNode node = graph.nodes().get(i);
+            if (node.index() != i) errors.add("Room indices must be unique and contiguous; expected " + i + " but found " + node.index());
+            if (!templates.containsKey(node.templateId())) errors.add("Missing room template: " + node.templateId());
+        }
+        for (DungeonEdge edge : graph.edges()) if (edge.fromNode() < 0 || edge.toNode() < 0 || edge.fromNode() >= graph.nodes().size() || edge.toNode() >= graph.nodes().size() || edge.fromNode() == edge.toNode()) errors.add("Invalid edge endpoints: " + edge.fromNode() + " -> " + edge.toNode());
+        if (!errors.isEmpty()) return false;
+        java.util.Set<String> used = new java.util.HashSet<>();
+        for (DungeonEdge edge : graph.edges()) {
+            for (String slot : List.of(edge.fromNode() + ":" + edge.fromDoorId(), edge.toNode() + ":" + edge.toDoorId()))
+                if (!used.add(slot.toLowerCase(java.util.Locale.ROOT))) errors.add("Door socket used more than once: " + slot);
+        }
+        for (DungeonNode node : graph.nodes()) for (DoorSocket door : templates.get(node.templateId()).doors())
+            if (door.connectionRules().mustConnect() && !used.contains((node.index() + ":" + door.id()).toLowerCase(java.util.Locale.ROOT)))
+                errors.add("Required socket is unconnected: room " + node.index() + " (" + node.templateId() + ")/" + door.id());
+        int[] distances = SpreadReport.distancesFrom(graph, graph.startNode().index());
+        for (int i = 0; i < distances.length; i++) if (distances[i] < 0) errors.add("Room " + i + " is disconnected from the generation root");
+        return true;
     }
 
     private void validateMinimumConnections(DungeonGraph graph, Map<String, RoomTemplate> templates, List<String> errors) {

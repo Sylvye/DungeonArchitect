@@ -49,9 +49,13 @@ enum ComponentCommandContext {
         }
     }
 
+    boolean supportsAction(String action, String type) {
+        return actionsByType.getOrDefault(type.toLowerCase(Locale.ROOT), Set.of()).contains(action.toLowerCase(Locale.ROOT));
+    }
+
     void requireAction(String action, String type) {
         requireType(type);
-        if (!actionsByType.get(type.toLowerCase(Locale.ROOT)).contains(action.toLowerCase(Locale.ROOT))) {
+        if (!supportsAction(action, type)) {
             throw new IllegalArgumentException("Cannot " + action + " a " + type + " component in a " + displayName().toLowerCase(Locale.ROOT) + " template");
         }
     }

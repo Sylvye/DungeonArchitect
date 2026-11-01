@@ -172,8 +172,15 @@ final class MinigameSetupMenuTest {
         when(templates.get("spawn")).thenReturn(Optional.of(new RoomTemplate(spawn.id(), spawn.category(), 1, Set.of(), spawn.size(), null, List.of(), List.of(), List.of(), spawn.structureFile())));
         MatchSetup setup = new MatchSetup(preset, 1); setup.assign(admin.getUniqueId(), 1); setup.assign(other.getUniqueId(), 2);
         var error = assertThrows(SpawnAreaException.class, () -> games.prepare(setup));
-        assertTrue(error.getMessage().contains("has no usable Player Spawn areas")); assertTrue(error.getMessage().contains("entering group needs 1"));
+        assertTrue(error.getMessage().contains("has no usable Spawn areas")); assertTrue(error.getMessage().contains("entering group needs 1"));
         assertEquals("/da minigame spawns spawn", error.guidance().children().getFirst().clickEvent().value()); assertTrue(games.runs().isEmpty());
+    }
+    @Test void presetEditorShowsReversedCategoryErrorsWithoutChangingSavedSettings() {
+        for (var room : List.of(room("root",RoomCategory.START),room("spawn",RoomCategory.TEAM_SPAWN))) when(templates.getVisible(room.id())).thenReturn(Optional.of(room));
+        MinigamePreset invalid=preset.with("root","spawn").with("spawns","root");games.presets().save(invalid);
+        edit();assertTrue(lore(10).stream().anyMatch(line->line.contains("is TEAM_SPAWN")&&line.contains("requires START")));
+        assertTrue(lore(14).stream().anyMatch(line->line.contains("is START")&&line.contains("require TEAM_SPAWN")));
+        assertEquals(invalid,games.presets().require("test"));assertTrue(games.runs().isEmpty());
     }
     private RoomTemplate room(String id, RoomCategory category) {
         return new RoomTemplate(id, category, 1, Set.of(), new IntVector3(5, 5, 5), null, List.of(), List.of(new RoomMarker("one", "player_spawn", new IntVector3(2, 1, 2))), List.of(), Path.of(id + ".nbt"));

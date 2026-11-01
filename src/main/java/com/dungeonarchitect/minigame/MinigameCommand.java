@@ -1,6 +1,9 @@
 package com.dungeonarchitect.minigame;
 
 import java.util.*;
+import com.dungeonarchitect.command.CommandSuggestions;
+import com.dungeonarchitect.domain.RoomCategory;
+import com.dungeonarchitect.domain.RoomTemplate;
 import net.kyori.adventure.text.Component;
 import org.bukkit.Bukkit;
 import org.bukkit.command.*;
@@ -63,8 +66,9 @@ public final class MinigameCommand implements CommandExecutor, TabCompleter {
             case "duplicate" -> { need(args, 4, "preset duplicate <source> <newId>"); games.presets().create(games.presets().require(args[2]).copyAs(args[3])); }
             case "set" -> {
                 need(args, 5, "preset set <id> <root|rooms|spawns|count|distance|ratio|kits> <value|none>");
-                if (!Set.of("root", "rooms", "spawns", "count", "distance", "ratio", "kits").contains(args[3])) throw new IllegalArgumentException("Unknown preset field");
-                games.presets().save(games.presets().require(args[2]).with(args[3], String.join(" ", Arrays.copyOfRange(args, 4, args.length))));
+                String field = args[3].toLowerCase(Locale.ROOT);
+                if (!MinigamePreset.FIELDS.contains(field)) throw new IllegalArgumentException("Unknown preset field");
+                games.presets().save(games.presets().require(args[2]).with(field, String.join(" ", Arrays.copyOfRange(args, 4, args.length))));
             }
             default -> throw new IllegalArgumentException("Use preset list, create, duplicate, or set");
         }
@@ -81,17 +85,71 @@ public final class MinigameCommand implements CommandExecutor, TabCompleter {
     private static Player online(String name) { Player player = Bukkit.getPlayerExact(name); if (player == null) throw new IllegalArgumentException("Player is not online: " + name); return player; }
     private static void need(String[] args, int count, String usage) { if (args.length < count) throw new IllegalArgumentException("Usage: /da minigame " + usage); }
     private static void help(CommandSender sender) { sender.sendMessage(Component.text("/da minigame preset|spawns|create|list|assign|balance|kits|prepare|start|inspect|cancel|end")); }
+    private static final List<String> ACTIONS = List.of("preset", "spawns", "create", "list", "assign", "balance", "kits", "prepare", "start", "inspect", "cancel", "end");
+    private static final List<String> PRESET_ACTIONS = List.of("list", "create", "duplicate", "set");
+    private static final List<String> SEEDS = List.of("0", "1", "42");
     @Override public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
-        List<String> choices;
-        if (command.getName().equalsIgnoreCase("dplay")) {
-            choices = args.length == 1 ? List.of("kit", "exit") : args.length == 2 && sender instanceof Player p ? games.getRun(p).map(r -> { var list = new ArrayList<>(r.kits()); list.add("random"); return (List<String>) list; }).orElse(List.of()) : List.of();
-        } else if (!sender.hasPermission("dungeonarchitect.admin")) return List.of();
-        else if (args.length == 1) choices = List.of("preset", "spawns", "create", "list", "assign", "balance", "kits", "prepare", "start", "inspect", "cancel", "end");
-        else if (args.length == 2 && args[0].equals("preset")) choices = List.of("list", "create", "duplicate", "set");
-        else if (args.length == 2 && args[0].equals("create") || args.length == 3 && args[0].equals("preset")) choices = games.presets().all().stream().map(MinigamePreset::id).toList();
-        else if (args.length == 2) choices = games.runs().stream().filter(r -> r.state() != RunState.ENDED).map(r -> r.id().toString()).toList();
-        else choices = List.of();
-        String prefix = args.length == 0 ? "" : args[args.length - 1].toLowerCase(Locale.ROOT);
-        return choices.stream().filter(c -> c.toLowerCase(Locale.ROOT).startsWith(prefix)).toList();
+        String current = args.length == 0 ? "" : args[args.length - 1];
+        if (command != null && command.getName().equalsIgnoreCase("dplay")) {
+            if (!sender.hasPermission("dungeonarchitect.play")) return List.of();
+            if (args.length <= 1) return CommandSuggestions.matching(current, List.of("kit", "exit"));
+            if (args.length == 2 && args[0].equalsIgnoreCase("kit") && sender instanceof Player player) {
+                return games.getRun(player).map(run -> { List<String> kits = new ArrayList<>(run.kits()); if (!kits.isEmpty()) kits.add("random"); return CommandSuggestions.matching(current, kits); }).orElse(List.of());
+            }
+            return List.of();
+        }
+        if (!sender.hasPermission("dungeonarchitect.admin")) return List.of();
+        if (args.length <= 1) return CommandSuggestions.matching(current, ACTIONS);
+        String action = args[0].toLowerCase(Locale.ROOT);
+        List<String> choices = switch (action) {
+            case "preset" -> presetSuggestions(args);
+            case "spawns" -> args.length == 2 ? games.templateOptions().stream().map(RoomTemplate::id).toList() : List.of();
+            case "create" -> args.length == 2 ? presetIds() : args.length == 3 ? SEEDS : List.of();
+            case "assign" -> args.length == 2 ? runIds(false) : args.length == 3 ? onlineNames() : args.length == 4 ? List.of("0", "1", "2", "3", "4", "5", "6", "7", "8") : List.of();
+            case "balance" -> args.length == 2 ? runIds(false) : args.length == 3 ? List.of("2", "3", "4", "5", "6", "7", "8") : args.length == 4 ? CommandSuggestions.list(current, onlineNames(), List.of()) : List.of();
+            case "kits" -> args.length == 2 ? runIds(false) : listValues(args, 2, games.availableKits(), true);
+            case "prepare", "start", "cancel", "end", "inspect" -> args.length == 2 ? runIds(action.equals("inspect")) : List.of();
+            default -> List.of();
+        };
+        return CommandSuggestions.matching(current, choices);
+    }
+    private List<String> presetSuggestions(String[] args) {
+        if (args.length == 2) return PRESET_ACTIONS;
+        String action = args[1].toLowerCase(Locale.ROOT);
+        if (args.length == 3) return switch (action) {
+            case "create" -> CommandSuggestions.newId("preset_1", presetIds());
+            case "duplicate", "set" -> presetIds();
+            default -> List.of();
+        };
+        if (action.equals("duplicate")) return args.length == 4 ? CommandSuggestions.newId("new_id", presetIds()) : List.of();
+        if (!action.equals("set")) return List.of();
+        if (args.length == 4) return MinigamePreset.FIELDS;
+        if (args.length < 5) return List.of();
+        String field = args[3].toLowerCase(Locale.ROOT);
+        return switch (field) {
+            case "root" -> args.length == 5 ? templateIds(RoomCategory.START) : List.of();
+            case "spawns" -> listValues(args, 4, templateIds(RoomCategory.TEAM_SPAWN), true);
+            case "rooms" -> listValues(args, 4, games.templateOptions().stream().filter(t -> t.category() != RoomCategory.START && t.category() != RoomCategory.TEAM_SPAWN).map(RoomTemplate::id).toList(), true);
+            case "kits" -> listValues(args, 4, games.availableKits(), true);
+            case "count" -> args.length == 5 ? List.of("16", "32", "48", "64") : List.of();
+            case "distance" -> args.length == 5 ? List.of("1", "2", "4", "6", "8") : List.of();
+            case "ratio" -> args.length == 5 ? List.of("1.0", "1.25", "1.5", "2.0") : List.of();
+            default -> List.of();
+        };
+    }
+    private List<String> templateIds(RoomCategory category) { return games.templateOptions().stream().filter(t -> t.category() == category).map(RoomTemplate::id).toList(); }
+    private List<String> presetIds() { return games.presets().all().stream().map(MinigamePreset::id).toList(); }
+    private List<String> runIds(boolean includeEnded) { return games.runs().stream().filter(r -> includeEnded || r.state() != RunState.ENDED).map(r -> r.id().toString()).toList(); }
+    private static List<String> onlineNames() { return Bukkit.getOnlinePlayers().stream().map(Player::getName).toList(); }
+    private static List<String> listValues(String[] args, int start, Collection<String> available, boolean allowNone) {
+        if (args.length <= start) return List.of();
+        String current = args[args.length - 1];
+        if (allowNone && Arrays.stream(args, start, args.length - 1).flatMap(value -> Arrays.stream(value.split(","))).anyMatch(value -> value.equalsIgnoreCase("none"))) return List.of();
+        int comma = current.lastIndexOf(',');
+        if (allowNone && comma >= 0 && Arrays.stream(current.substring(0, comma).split(",")).anyMatch(value -> value.equalsIgnoreCase("none"))) return List.of();
+        List<String> earlier = Arrays.stream(args, start, args.length - 1).flatMap(value -> MinigamePreset.ids(value).stream()).toList();
+        List<String> choices = new ArrayList<>(available);
+        if (allowNone && args.length == start + 1 && !current.contains(",")) choices.add("none");
+        return CommandSuggestions.list(current, choices, earlier);
     }
 }

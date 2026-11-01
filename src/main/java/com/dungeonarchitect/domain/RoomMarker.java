@@ -3,7 +3,7 @@ import java.util.*;
 /** A named, inclusive block area in its owning template's local coordinates. */
 public record RoomMarker(String name, String type, IntVector3 position, IntVector3 size) {
     public enum Purpose {
-        GENERIC("Generic", "generic"), LOOT("Loot", "loot"), PLAYER_SPAWN("Player Spawn", "player_spawn_area");
+        GENERIC("Generic", "generic"), LOOT("Loot", "loot"), PLAYER_SPAWN("Spawn", "spawn");
         private final String label, id;
         Purpose(String label, String id) { this.label = label; this.id = id; }
         public String label() { return label; }
@@ -12,7 +12,7 @@ public record RoomMarker(String name, String type, IntVector3 position, IntVecto
     public RoomMarker {
         if (name == null || name.isBlank()) throw new IllegalArgumentException("Marker name is required");
         if (type == null || type.isBlank()) type = "generic";
-        if (type.equalsIgnoreCase("player_spawn")) type = "player_spawn_area";
+        if (type.equalsIgnoreCase("player_spawn") || type.equalsIgnoreCase("player_spawn_area")) type = "spawn";
         Objects.requireNonNull(position, "Marker position"); Objects.requireNonNull(size, "Marker size");
         if (size.x() <= 0 || size.y() <= 0 || size.z() <= 0) throw new IllegalArgumentException("Marker dimensions must be positive");
     }
@@ -22,7 +22,7 @@ public record RoomMarker(String name, String type, IntVector3 position, IntVecto
     }
     public Purpose purpose() {
         if (type.equalsIgnoreCase("loot")) return Purpose.LOOT;
-        if (type.equalsIgnoreCase("player_spawn_area")) return Purpose.PLAYER_SPAWN;
+        if (type.equalsIgnoreCase("spawn")) return Purpose.PLAYER_SPAWN;
         return Purpose.GENERIC;
     }
     public BoundingBox3i bounds() { return BoundingBox3i.fromMinAndSize(position, size); }

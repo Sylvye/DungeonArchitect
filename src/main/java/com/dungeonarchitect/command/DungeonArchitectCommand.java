@@ -129,11 +129,11 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
         sender.sendMessage(Component.text("/da wand | /da selector"));
         sender.sendMessage(Component.text("/da gui | rooms | rooms edit [room] | features | doors | loot | config | dungeons"));
         sender.sendMessage(Component.text("/da room create <id> | edit <id> | cancel | bounds | door [slotName] [socketType] [facing]"));
-        sender.sendMessage(Component.text("/da room marker <add|area|purpose|remove> <name> [type] | feature [slotName] | save [id] | inspect <id> | validate <id|all>"));
+        sender.sendMessage(Component.text("/da room marker <add|area|purpose|remove> <name> [generic|loot|spawn] | feature [slotName] | save [id] | inspect <id> | validate <id|all>"));
         sender.sendMessage(Component.text("/da room rename <oldId> <newId> | duplicate <oldId> <newId> | delete <id>"));
-        sender.sendMessage(Component.text("/da door create <id> | bounds | gateway | marker <add|area|purpose|remove> <name> [type] | feature [slotName] | save [id] | edit <id> | inspect <id> | validate <id|all>"));
+        sender.sendMessage(Component.text("/da door create <id> | bounds | gateway | marker <add|area|purpose|remove> <name> [generic|loot|spawn] | feature [slotName] | save [id] | edit <id> | inspect <id> | validate <id|all>"));
         sender.sendMessage(Component.text("/da door rename <oldId> <newId> | duplicate <oldId> <newId> | delete <id>"));
-        sender.sendMessage(Component.text("/da feature create <id> | bounds | feature [slotName] | marker <add|area|purpose|remove> <name> [type] | save [id] | edit <id> | inspect <id> | validate <id|all>"));
+        sender.sendMessage(Component.text("/da feature create <id> | bounds | feature [slotName] | marker <add|area|purpose|remove> <name> [generic|loot|spawn] | save [id] | edit <id> | inspect <id> | validate <id|all>"));
         sender.sendMessage(Component.text("/da feature rename <oldId> <newId> | duplicate <oldId> <newId> | delete <id>"));
         sender.sendMessage(Component.text("/da room component <select|remove|bounds|rename> [door|marker|feature] [id] [newId]"));
         sender.sendMessage(Component.text("/da <room|door> component <select|remove|bounds|rename|rotate|face> ..."));
@@ -279,14 +279,14 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
             if (args[0].equalsIgnoreCase("room") && !session.roomSession() || args[0].equalsIgnoreCase("door") && !session.doorSession() || args[0].equalsIgnoreCase("feature") && !session.featureSession()) throw new IllegalArgumentException("Open a matching " + args[0] + " authoring session first");
         }
         if (args[2].equalsIgnoreCase("area")) {
-            requireArgs(args, 4, "/da " + args[0] + " marker area <name> [generic|loot|player_spawn_area]");
+            requireArgs(args, 4, "/da " + args[0] + " marker area <name> [generic|loot|spawn]");
             String type = args.length >= 5 ? args[4] : "generic";
             var purpose = markerPurpose(type);
             String name = authoringManager.addMarkerArea(player, args[3], purpose.id());
             player.sendMessage(Component.text("Added " + purpose.label() + " area '" + name + "'. Save the template when finished.")); return true;
         }
         if (args[2].equalsIgnoreCase("purpose")) {
-            requireArgs(args, 5, "/da " + args[0] + " marker purpose <name> <generic|loot|player_spawn_area>");
+            requireArgs(args, 5, "/da " + args[0] + " marker purpose <name> <generic|loot|spawn>");
             authoringManager.markerPurpose(player, args[3], markerPurpose(args[4]));
             player.sendMessage(Component.text("Marker purpose updated. Save the template when finished.")); return true;
         }
@@ -296,26 +296,26 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
         return switch (value.toLowerCase(java.util.Locale.ROOT)) {
             case "generic" -> com.dungeonarchitect.domain.RoomMarker.Purpose.GENERIC;
             case "loot" -> com.dungeonarchitect.domain.RoomMarker.Purpose.LOOT;
-            case "player_spawn", "player_spawn_area" -> com.dungeonarchitect.domain.RoomMarker.Purpose.PLAYER_SPAWN;
-            default -> throw new IllegalArgumentException("Choose generic, loot, or player_spawn_area");
+            case "spawn", "player_spawn", "player_spawn_area" -> com.dungeonarchitect.domain.RoomMarker.Purpose.PLAYER_SPAWN;
+            default -> throw new IllegalArgumentException("Choose generic, loot, or spawn");
         };
     }
 
     private void marker(Player player, String[] args) {
         if (areaMarkerCommand(player, args)) return;
-        requireArgs(args, 4, "/da room marker <add|area|purpose|remove> <name> [type]");
+        requireArgs(args, 4, "/da room marker <add|area|purpose|remove> <name> [generic|loot|spawn]");
         if (args[2].equalsIgnoreCase("remove")) {
             boolean removed = authoringManager.removeComponent(player, "marker", args[3]);
             player.sendMessage(Component.text(removed ? "Removed marker " + args[3] + "." : "No matching marker named " + args[3] + "."));
             return;
         }
         if (!args[2].equalsIgnoreCase("add")) {
-            throw new IllegalArgumentException("Usage: /da room marker <add|area|purpose|remove> <name> [type]");
+            throw new IllegalArgumentException("Usage: /da room marker <add|area|purpose|remove> <name> [generic|loot|spawn]");
         }
         String type = args.length >= 5 ? args[4] : "generic";
-        if (type.equalsIgnoreCase("player_spawn")) {
-            authoringManager.addPlayerSpawn(player, args[3]);
-            player.sendMessage(Component.text("Added player spawn " + args[3] + " at your feet. Save the room when finished."));
+        if (type.equalsIgnoreCase("spawn") || type.equalsIgnoreCase("player_spawn_area") || type.equalsIgnoreCase("player_spawn")) {
+            authoringManager.addMarkerArea(player, args[3], "spawn");
+            player.sendMessage(Component.text("Added spawn area " + args[3] + " from your wand selection. Save the room when finished."));
             return;
         }
         var local = authoringManager.targetedLocalPosition(player)
@@ -384,13 +384,13 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
             case "delete" -> deleteFeature(sender, args);
             case "marker" -> {
                 if (areaMarkerCommand(player, args)) return;
-                requireArgs(args, 4, "/da feature marker <add|area|purpose|remove> <name> [type]");
+                requireArgs(args, 4, "/da feature marker <add|area|purpose|remove> <name> [generic|loot]");
                 if (args[2].equalsIgnoreCase("remove")) {
                     boolean removed = authoringManager.removeComponent(player, "marker", args[3]);
                     player.sendMessage(Component.text(removed ? "Removed feature marker " + args[3] + "." : "No matching marker named " + args[3] + "."));
                     return;
                 }
-                if (!args[2].equalsIgnoreCase("add")) throw new IllegalArgumentException("Usage: /da feature marker <add|area|purpose|remove> <name> [type]");
+                if (!args[2].equalsIgnoreCase("add")) throw new IllegalArgumentException("Usage: /da feature marker <add|area|purpose|remove> <name> [generic|loot]");
                 var local = authoringManager.targetedLocalPosition(player).orElseThrow(() -> new IllegalArgumentException("Look at a block inside selected bounds"));
                 authoringManager.addFeatureMarker(player, args[3], args.length >= 5 ? args[4] : "generic", local);
                 player.sendMessage(Component.text("Added feature marker " + args[3] + " at " + local + "."));
@@ -435,14 +435,15 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
                 }
             }
             case "marker" -> {
-                requireArgs(args, 4, "/da door marker <add|area|purpose|remove> <name> [type]");
+                if (areaMarkerCommand(player, args)) return;
+                requireArgs(args, 4, "/da door marker <add|area|purpose|remove> <name> [generic|loot]");
                 if (args[2].equalsIgnoreCase("remove")) {
                     boolean removed = authoringManager.removeComponent(player, "marker", args[3]);
                     player.sendMessage(Component.text(removed ? "Removed door marker " + args[3] + "." : "No matching marker named " + args[3] + "."));
                     return;
                 }
                 if (!args[2].equalsIgnoreCase("add")) {
-                    throw new IllegalArgumentException("Usage: /da door marker <add|area|purpose|remove> <name> [type]");
+                    throw new IllegalArgumentException("Usage: /da door marker <add|area|purpose|remove> <name> [generic|loot]");
                 }
                 var local = authoringManager.targetedLocalPosition(player)
                     .orElseThrow(() -> new IllegalArgumentException("Look at a block inside selected bounds"));
@@ -1115,170 +1116,99 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
         }
     }
 
+    private static final List<String> ROOT_COMMANDS = List.of("help", "version", "reload", "wand", "selector", "gui", "rooms", "features", "doors", "loot", "config", "dungeons", "minigame", "exit", "room", "feature", "door", "generate", "list", "diagnose", "debug", "teleport", "destroy");
+    private static final List<String> DIRECTIONS = List.of("N", "E", "S", "W", "up", "down", "north", "east", "south", "west");
+
     @Override
-    public @Nullable List<String> onTabComplete(@NotNull CommandSender sender, @NotNull Command command, @NotNull String label, @NotNull String[] args) {
-        if (args.length > 1 && args[0].equalsIgnoreCase("minigame") && minigames != null) return minigames.onTabComplete(sender, command, label, java.util.Arrays.copyOfRange(args, 1, args.length));
-        if (args.length == 1) {
-            return prefix(args[0], List.of("help", "version", "reload", "wand", "selector", "gui", "rooms", "features", "doors", "loot", "config", "dungeons", "minigame", "exit", "room", "feature", "door", "generate", "list", "diagnose", "debug", "teleport", "destroy"));
+    public @NotNull List<String> onTabComplete(@NotNull CommandSender sender, @NotNull Command command, @NotNull String label, @NotNull String[] args) {
+        if (sender != null && !sender.hasPermission("dungeonarchitect.admin")) return List.of();
+        if (args.length <= 1) return prefix(args.length == 0 ? "" : args[0], ROOT_COMMANDS);
+        String root = args[0].toLowerCase(Locale.ROOT);
+        if (root.equals("minigame")) return minigames == null ? List.of() : minigames.onTabComplete(sender, command, label, java.util.Arrays.copyOfRange(args, 1, args.length));
+        List<String> choices = switch (root) {
+            case "room", "door", "feature" -> templateCompletion(sender, root, args);
+            case "rooms" -> args.length == 2 ? List.of("edit") : args.length == 3 && args[1].equalsIgnoreCase("edit") ? templateIds("room", sender, true) : List.of();
+            case "diagnose" -> args.length == 2 ? List.of("all", "room", "door", "feature", "generation") : args.length == 3 && List.of("room", "door", "feature").contains(args[1].toLowerCase(Locale.ROOT)) ? withAll(templateIds(args[1].toLowerCase(Locale.ROOT), sender, false)) : List.of();
+            case "generate" -> args.length == 2 ? List.of("5", "6", "8", "10", "16", "32") : args.length == 3 ? List.of("0", "1", "42") : List.of();
+            case "debug" -> args.length == 2 ? List.of("instance", "room") : args.length == 3 && args[1].equalsIgnoreCase("instance") ? instanceOptions() : List.of();
+            case "teleport" -> args.length == 2 ? combined(instanceOptions(), roomIndexes(currentDungeonOrNull(sender))) : args.length == 3 && dungeonManager != null ? roomIndexes(dungeonManager.getDungeonByAliasOrId(args[1]).orElse(null)) : List.of();
+            case "destroy" -> args.length == 2 ? instanceOptions() : List.of();
+            default -> List.of(); // Commands with no arguments are complete.
+        };
+        return prefix(args[args.length - 1], choices);
+    }
+
+    private List<String> templateCompletion(CommandSender sender, String owner, String[] args) {
+        ComponentCommandContext context = componentContext(owner);
+        if (args.length == 2) {
+            List<String> actions = new ArrayList<>(List.of("create", "edit", "bounds", "marker", "feature", "component", "save", "inspect", "validate", "rename", "duplicate", "delete"));
+            if (owner.equals("room")) actions.addAll(List.of("cancel", "pos1", "pos2", "door"));
+            if (owner.equals("door")) actions.add("gateway");
+            return actions;
         }
-        if (args[0].equalsIgnoreCase("diagnose")) {
-            if (args.length == 2) {
-                return prefix(args[1], List.of("all", "room", "door", "feature", "generation"));
-            }
-            if (args.length == 3 && args[1].equalsIgnoreCase("room") && templateRegistry != null) {
-                List<String> ids = new ArrayList<>();
-                ids.add("all");
-                ids.addAll(templateRegistry.visible().stream().map(RoomTemplate::id).toList());
-                return prefix(args[2], ids);
-            }
-            if (args.length == 3 && args[1].equalsIgnoreCase("door") && doorRegistry != null) {
-                List<String> ids = new ArrayList<>();
-                ids.add("all");
-                ids.addAll(doorRegistry.visible().stream().map(DoorTemplate::id).toList());
-                return prefix(args[2], ids);
-            }
-            if (args.length == 3 && args[1].equalsIgnoreCase("feature") && featureRegistry != null) {
-                List<String> ids = new ArrayList<>();
-                ids.add("all");
-                ids.addAll(featureRegistry.visible().stream().map(FeatureTemplate::id).toList());
-                return prefix(args[2], ids);
-            }
+        String action = args[1].toLowerCase(Locale.ROOT);
+        if (action.equals("marker")) return markerCompletion(sender, owner, args);
+        if (action.equals("component")) {
+            if (args.length == 3) return context.actions();
+            String operation = args[2].toLowerCase(Locale.ROOT);
+            if (!context.actions().contains(operation)) return List.of();
+            if (List.of("rotate", "face").contains(operation)) return args.length == 4 ? DIRECTIONS : List.of();
+            if (args.length == 4) return context.types().stream().filter(type -> context.supportsAction(operation, type)).toList();
+            if (args.length == 5 && context.supportsAction(operation, args[3])) return componentIds(sender, owner, args[3]);
+            if (args.length == 6 && operation.equals("rename") && context.supportsAction(operation, args[3])) return CommandSuggestions.newId("new_id", componentIds(sender, owner, args[3]));
+            return List.of();
         }
-        if (args.length == 2 && args[0].equalsIgnoreCase("room")) {
-            return prefix(args[1], List.of("create", "edit", "cancel", "bounds", "pos1", "pos2", "door", "marker", "feature", "component", "save", "inspect", "validate", "rename", "duplicate", "delete"));
+        if (owner.equals("room") && action.equals("door")) {
+            int index = args.length > 2 && args[2].equalsIgnoreCase("add") ? 3 : 2;
+            if (args.length == index + 1) { var ids = CommandSuggestions.newId("door_1", componentIds(sender, owner, "door")); return index == 2 ? combined(List.of("add"), ids) : ids; }
+            if (args.length == index + 2) return enumOptions(SocketType.class);
+            if (args.length == index + 3) return combined(enumOptions(Direction3.class), DIRECTIONS);
+            return List.of();
         }
-        if (args[0].equalsIgnoreCase("rooms")) {
-            if (args.length == 2) {
-                return prefix(args[1], List.of("edit"));
-            }
-            if (args.length == 3 && args[1].equalsIgnoreCase("edit")) {
-                List<String> ids = new ArrayList<>(templateRegistry.visible().stream().map(RoomTemplate::id).toList());
-                if (sender instanceof Player player) {
-                    authoringManager.activeRoomId(player).ifPresent(ids::add);
-                }
-                return prefix(args[2], ids);
-            }
-        }
-        if (args.length == 3 && args[0].equalsIgnoreCase("room") && args[1].equalsIgnoreCase("edit")) {
-            return prefix(args[2], templateRegistry.visible().stream().map(RoomTemplate::id).toList());
-        }
-        if (args.length == 3 && args[0].equalsIgnoreCase("room") && args[1].equalsIgnoreCase("save")) {
-            return prefix(args[2], templateRegistry.visible().stream().map(RoomTemplate::id).toList());
-        }
-        if (args.length == 3 && args[0].equalsIgnoreCase("room") && args[1].equalsIgnoreCase("validate")) {
-            List<String> ids = new ArrayList<>();
-            ids.add("all");
-            ids.addAll(templateRegistry.visible().stream().map(RoomTemplate::id).toList());
-            return prefix(args[2], ids);
-        }
-        if (args.length == 3 && args[0].equalsIgnoreCase("room") && args[1].equalsIgnoreCase("inspect")) {
-            return prefix(args[2], templateRegistry.visible().stream().map(RoomTemplate::id).toList());
-        }
-        if (args.length == 3 && args[0].equalsIgnoreCase("room") && args[1].equalsIgnoreCase("delete")) {
-            return prefix(args[2], templateRegistry.visible().stream().map(RoomTemplate::id).toList());
-        }
-        if (args.length == 3 && args[0].equalsIgnoreCase("room") && List.of("rename", "duplicate").contains(args[1].toLowerCase(Locale.ROOT))) {
-            return prefix(args[2], templateRegistry.visible().stream().map(RoomTemplate::id).toList());
-        }
-        if (args.length == 4 && args[0].equalsIgnoreCase("room") && List.of("rename", "duplicate").contains(args[1].toLowerCase(Locale.ROOT))) {
-            return prefix(args[3], List.of("new_id"));
-        }
-        if (args[0].equalsIgnoreCase("room") && args.length == 3 && args[1].equalsIgnoreCase("door")) {
-            return prefix(args[2], List.of("door_1"));
-        }
-        if (args[0].equalsIgnoreCase("room") && args.length == 4 && args[1].equalsIgnoreCase("door")) {
-            return prefix(args[3], enumOptions(SocketType.class));
-        }
-        if (args[0].equalsIgnoreCase("room") && args.length == 5 && args[1].equalsIgnoreCase("door")) {
-            return prefix(args[4], enumOptions(Direction3.class));
-        }
-        if (args[0].equalsIgnoreCase("room") && args.length == 3 && args[1].equalsIgnoreCase("marker")) {
-            return prefix(args[2], List.of("add", "area", "purpose", "remove"));
-        }
-        if (args[0].equalsIgnoreCase("room") && args.length == 3 && args[1].equalsIgnoreCase("feature")) {
-            return prefix(args[2], List.of("feature_1"));
-        }
-        if (args.length == 2 && args[0].equalsIgnoreCase("feature")) {
-            return prefix(args[1], List.of("create", "bounds", "marker", "feature", "save", "edit", "inspect", "validate", "rename", "duplicate", "delete", "component"));
-        }
-        if (args.length == 2 && args[0].equalsIgnoreCase("door")) {
-            return prefix(args[1], List.of("create", "bounds", "gateway", "marker", "feature", "save", "edit", "inspect", "validate", "rename", "duplicate", "delete", "component"));
-        }
-        if (args.length == 3 && args[0].equalsIgnoreCase("door") && List.of("edit", "inspect", "delete", "rename", "duplicate").contains(args[1].toLowerCase(Locale.ROOT))) {
-            return prefix(args[2], doorRegistry.visible().stream().map(DoorTemplate::id).toList());
-        }
-        if (args.length == 4 && args[0].equalsIgnoreCase("door") && List.of("rename", "duplicate").contains(args[1].toLowerCase(Locale.ROOT))) {
-            return prefix(args[3], List.of("new_id"));
-        }
-        if (args.length == 3 && args[0].equalsIgnoreCase("door") && args[1].equalsIgnoreCase("validate")) {
-            List<String> ids = new ArrayList<>();
-            ids.add("all");
-            ids.addAll(doorRegistry.visible().stream().map(DoorTemplate::id).toList());
-            return prefix(args[2], ids);
-        }
-        if (args.length == 3 && args[0].equalsIgnoreCase("door") && args[1].equalsIgnoreCase("marker")) {
-            return prefix(args[2], List.of("add", "area", "purpose", "remove"));
-        }
-        if (args.length == 3 && args[0].equalsIgnoreCase("feature") && List.of("edit", "inspect", "delete", "rename", "duplicate").contains(args[1].toLowerCase(Locale.ROOT))) {
-            return prefix(args[2], featureRegistry.visible().stream().map(FeatureTemplate::id).toList());
-        }
-        if (args.length == 3 && args[0].equalsIgnoreCase("feature") && args[1].equalsIgnoreCase("marker")) {
-            return prefix(args[2], List.of("add", "area", "purpose", "remove"));
-        }
-        if (args.length == 3 && args[0].equalsIgnoreCase("feature") && args[1].equalsIgnoreCase("feature")) {
-            return prefix(args[2], List.of("feature_1"));
-        }
-        if (args.length == 4 && args[0].equalsIgnoreCase("feature") && List.of("rename", "duplicate").contains(args[1].toLowerCase(Locale.ROOT))) {
-            return prefix(args[3], List.of("new_id"));
-        }
-        if (args.length == 3 && args[0].equalsIgnoreCase("feature") && args[1].equalsIgnoreCase("validate")) {
-            List<String> ids = new ArrayList<>();
-            ids.add("all");
-            ids.addAll(featureRegistry.visible().stream().map(FeatureTemplate::id).toList());
-            return prefix(args[2], ids);
-        }
-        ComponentCommandContext componentContext = componentContext(args[0]);
-        if (componentContext != null && args[1].equalsIgnoreCase("component")) {
-            if (args.length == 3) {
-                return prefix(args[2], componentContext.actions());
-            }
-            if (args.length == 4 && List.of("rotate", "face").contains(args[2].toLowerCase(Locale.ROOT))) {
-                return prefix(args[3], List.of("N", "E", "S", "W", "up", "down", "north", "east", "south", "west"));
-            }
-            if (args.length == 4) {
-                return prefix(args[3], componentContext.types());
-            }
-            if (args.length == 5 && sender instanceof Player player) {
-                return prefix(args[4], authoringManager.componentIds(player, args[3]));
-            }
-            if (args.length == 6 && args[2].equalsIgnoreCase("rename")) {
-                return prefix(args[5], List.of("new_id"));
-            }
-        }
-        if (args.length == 2 && args[0].equalsIgnoreCase("generate")) {
-            return prefix(args[1], List.of("5", "6", "8", "10"));
-        }
-        if (args.length == 2 && args[0].equalsIgnoreCase("debug")) {
-            return prefix(args[1], List.of("instance", "room"));
-        }
-        if (args.length == 3 && args[0].equalsIgnoreCase("debug") && args[1].equalsIgnoreCase("instance")) {
-            return prefix(args[2], instanceOptions());
-        }
-        if (args[0].equalsIgnoreCase("teleport")) {
-            if (args.length == 2) {
-                List<String> values = new ArrayList<>(instanceOptions());
-                values.addAll(roomIndexes(currentDungeonOrNull(sender)));
-                return prefix(args[1], values);
-            }
-            if (args.length == 3) {
-                return prefix(args[2], roomIndexes(dungeonManager.getDungeonByAliasOrId(args[1]).orElse(null)));
-            }
-        }
-        if (args.length == 2 && args[0].equalsIgnoreCase("destroy")) {
-            return prefix(args[1], instanceOptions());
-        }
+        if (args.length == 3) return switch (action) {
+            case "create" -> CommandSuggestions.newId(owner + "_1", templateIds(owner, sender, true));
+            case "edit", "inspect", "delete", "rename", "duplicate" -> templateIds(owner, sender, false);
+            case "save" -> templateIds(owner, sender, true);
+            case "validate" -> withAll(templateIds(owner, sender, false));
+            case "feature" -> CommandSuggestions.newId("feature_1", componentIds(sender, owner, "feature"));
+            default -> List.of();
+        };
+        if (args.length == 4 && List.of("rename", "duplicate").contains(action)) return CommandSuggestions.newId("new_id", templateIds(owner, sender, true));
         return List.of();
     }
+
+    private List<String> markerCompletion(CommandSender sender, String owner, String[] args) {
+        if (args.length == 3) return List.of("add", "area", "purpose", "remove");
+        String operation = args[2].toLowerCase(Locale.ROOT);
+        if (args.length == 4) return switch (operation) {
+            case "purpose", "remove" -> componentIds(sender, owner, "marker");
+            case "add", "area" -> CommandSuggestions.newId("marker_1", componentIds(sender, owner, "marker"));
+            default -> List.of();
+        };
+        if (args.length == 5 && List.of("add", "area", "purpose").contains(operation)) return CommandSuggestions.markerPurposes(owner.equals("room"));
+        return List.of();
+    }
+
+    private List<String> templateIds(String owner, CommandSender sender, boolean includeActive) {
+        List<String> ids = new ArrayList<>(switch (owner) {
+            case "room" -> templateRegistry == null ? List.of() : templateRegistry.visible().stream().map(RoomTemplate::id).toList();
+            case "door" -> doorRegistry == null ? List.of() : doorRegistry.visible().stream().map(DoorTemplate::id).toList();
+            case "feature" -> featureRegistry == null ? List.of() : featureRegistry.visible().stream().map(FeatureTemplate::id).toList();
+            default -> List.of();
+        });
+        if (includeActive && sender instanceof Player player && authoringManager != null) authoringManager.activeSession(player).filter(session -> matchesOwner(session, owner)).map(AuthoringSession::roomId).ifPresent(ids::add);
+        return ids;
+    }
+    private List<String> componentIds(CommandSender sender, String owner, String type) {
+        if (!(sender instanceof Player player) || authoringManager == null) return List.of();
+        if (authoringManager.activeSession(player).filter(session -> matchesOwner(session, owner)).isEmpty()) return List.of();
+        return authoringManager.componentIds(player, type);
+    }
+    private static boolean matchesOwner(AuthoringSession session, String owner) {
+        return switch (owner) { case "room" -> session.roomSession(); case "door" -> session.doorSession(); case "feature" -> session.featureSession(); default -> false; };
+    }
+    private static List<String> withAll(List<String> values) { return combined(List.of("all"), values); }
+    private static List<String> combined(List<String> first, List<String> second) { List<String> values = new ArrayList<>(first); values.addAll(second); return values; }
 
     private ComponentCommandContext componentContext(String root) {
         return switch (root.toLowerCase(Locale.ROOT)) {
@@ -1290,13 +1220,14 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
     }
 
     private DungeonInstance currentDungeonOrNull(CommandSender sender) {
-        if (sender instanceof Player player) {
+        if (sender instanceof Player player && dungeonManager != null) {
             return dungeonManager.getDungeon(player).orElse(null);
         }
         return null;
     }
 
     private List<String> instanceOptions() {
+        if (dungeonManager == null) return List.of();
         List<String> options = new ArrayList<>(dungeonManager.instanceLabels());
         options.addAll(dungeonManager.instances().stream().map(instance -> instance.id().toString()).toList());
         return options;
@@ -1322,7 +1253,6 @@ public final class DungeonArchitectCommand implements CommandExecutor, TabComple
     }
 
     private List<String> prefix(String prefix, List<String> options) {
-        String lower = prefix.toLowerCase(Locale.ROOT);
-        return options.stream().filter(option -> option.toLowerCase(Locale.ROOT).startsWith(lower)).toList();
+        return CommandSuggestions.matching(prefix, options);
     }
 }

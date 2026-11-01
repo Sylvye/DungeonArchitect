@@ -5,6 +5,7 @@ import java.util.List;
 /** Immutable settings copied into each run; template lists are explicit pools. */
 public record MinigamePreset(String id, String rootId, List<String> ordinaryRooms, List<String> spawnRooms,
                              int roomCount, int minimumDistance, double maximumRatio, List<String> kits) {
+    public static final List<String> FIELDS = List.of("root", "rooms", "spawns", "count", "distance", "ratio", "kits");
     public MinigamePreset {
         if (id == null || !id.matches("[a-z0-9_-]+")) throw new IllegalArgumentException("Use lowercase letters, numbers, _ or - for the preset id");
         ordinaryRooms = List.copyOf(ordinaryRooms);

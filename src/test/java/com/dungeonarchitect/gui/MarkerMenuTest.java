@@ -40,7 +40,7 @@ class MarkerMenuTest {
     }
     @Test void wandAreaCreationUsesAutomaticNamesAndFullBoundsWithoutSaving() {
         var session=edit();list();click(46);click(12);
-        var marker=session.markers().getLast();assertEquals("spawn_area_1",marker.name());assertEquals(new IntVector3(4,1,3),marker.size());assertEquals(RoomMarker.Purpose.PLAYER_SPAWN,marker.purpose());assertEquals(1,rooms.getVisible("room").orElseThrow().markers().size());
+        var marker=session.markers().getLast();assertEquals("spawn_1",marker.name());assertEquals(new IntVector3(4,1,3),marker.size());assertEquals(RoomMarker.Purpose.PLAYER_SPAWN,marker.purpose());assertEquals(1,rooms.getVisible("room").orElseThrow().markers().size());
     }
     @Test void boundsReplacementAndRenamePreserveDimensionsAndBindings() {
         var session=edit();list();click(0);click(16);assertEquals(new IntVector3(4,1,3),session.markers().getFirst().size());
@@ -58,6 +58,9 @@ class MarkerMenuTest {
     @Test void bulkLootEditsStayInTheWorkspaceUntilSave() {
         var session=edit();list();click(44);click(0);click(53);click(0);click(53);
         assertTrue(session.lootBindings().isEmpty());assertTrue(rooms.getVisible("room").orElseThrow().lootBindings().containsKey("chest"));
+    }
+    @Test void retainedRoomWorkspaceReusesTheSameEntryResolver() {
+        edit();doNothing().when(authoring).teleportToRoomEdit(player);list();click(48);verify(authoring).teleportToRoomEdit(player);verify(authoring,never()).editSession(any(),any());
     }
     @Test void anotherActiveWorkspaceCannotBeReplaced() {
         var t=rooms.getVisible("room").orElseThrow();authoring.session(player).loadTemplateForEdit(new RoomTemplate("other",t.category(),1,t.tags(),t.size(),null,List.of(),List.of(),List.of(),Path.of("other.nbt")),world,new IntVector3(0,60,0));

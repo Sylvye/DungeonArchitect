@@ -1,0 +1,51 @@
+id: hallway
+category: GENERIC
+weight: 10
+minimumConnections: 0
+size:
+- 6
+- 5
+- 4
+tags: []
+doors:
+- id: door_1
+  position:
+  - 5
+  - 1
+  - 1
+  facing: EAST
+  socket: STANDARD
+  width: 2
+  height: 3
+  size:
+  - 1
+  - 3
+  - 2
+  tags: []
+  connection:
+    mustConnect: true
+  entries:
+  - door: basic
+    weight: 1
+- id: door_2
+  position:
+  - 0
+  - 1
+  - 1
+  facing: WEST
+  socket: STANDARD
+  width: 2
+  height: 3
+  size:
+  - 1
+  - 3
+  - 2
+  tags: []
+  connection:
+    mustConnect: true
+  entries:
+  - door: basic
+    weight: 1
+markers: []
+lootBindings: {}
+featureSlots: []

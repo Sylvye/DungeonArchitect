@@ -32,5 +32,13 @@ final class MinigamePluginTest {
         assertNotNull(player.nextMessage());
         assertTrue(player.performCommand("dplay kit"));
         assertTrue(plugin.api().minigames().runs().isEmpty());
+    }    @Test void registeredCommandsExposeMarkerAndAliasCompletions() {
+        var plugin = MockBukkit.load(DungeonArchitectPlugin.class);var admin = server.addPlayer();admin.setOp(true);var player = server.addPlayer();
+        assertTrue(plugin.getCommand("da").tabComplete(admin,"da",new String[]{"room","marker","area","floor",""}).contains("spawn"));
+        assertTrue(plugin.getCommand("da").tabComplete(admin,"da",new String[]{"MINIGAME","PRESET","SET","arena",""}).contains("kits"));
+        assertTrue(plugin.getCommand("dminigame").tabComplete(admin,"dmg",new String[]{"preset","set","arena",""}).contains("spawns"));
+        assertEquals(java.util.List.of("exit","kit"),plugin.getCommand("dplay").tabComplete(player,"dplay",new String[]{""}));
+        assertTrue(plugin.getCommand("dplay").tabComplete(player,"dplay",new String[]{"exit",""}).isEmpty());
     }
+
 }
